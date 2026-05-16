@@ -9,6 +9,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
+import se.afshin.yavari.kafka.operator.crd.StorageSpec;
 
 import java.util.List;
 
@@ -18,12 +19,15 @@ public class PvcFactory {
     @Inject
     KubernetesClient client;
 
-    public void ensure(PodEntry entry, String namespace, KafkaPodSet owner) {
+    public void ensure(PodEntry entry, String namespace, KafkaPodSet owner, StorageSpec storage) {
         String pvcName = "data-" + entry.getMetadata().getName();
         if (client.persistentVolumeClaims().inNamespace(namespace).withName(pvcName).get() != null) {
             return;
         }
-        PersistentVolumeClaim pvc = new PersistentVolumeClaimBuilder()
+        String size = (storage != null && storage.getSize() != null) ? storage.getSize() : "10Gi";
+        String storageClassName = storage != null ? storage.getStorageClassName() : null;
+
+        PersistentVolumeClaimBuilder builder = new PersistentVolumeClaimBuilder()
                 .withNewMetadata()
                     .withName(pvcName)
                     .withNamespace(namespace)
@@ -40,10 +44,14 @@ public class PvcFactory {
                 .withNewSpec()
                     .withAccessModes("ReadWriteOnce")
                     .withNewResources()
-                        .addToRequests("storage", new Quantity("10Gi"))
+                        .addToRequests("storage", new Quantity(size))
                     .endResources()
-                .endSpec()
-                .build();
-        client.persistentVolumeClaims().inNamespace(namespace).resource(pvc).create();
+                .endSpec();
+
+        if (storageClassName != null && !storageClassName.isBlank()) {
+            builder.editSpec().withStorageClassName(storageClassName).endSpec();
+        }
+
+        client.persistentVolumeClaims().inNamespace(namespace).resource(builder.build()).create();
     }
 }

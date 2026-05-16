@@ -25,6 +25,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaPodSetStatus;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
 import se.afshin.yavari.kafka.operator.crd.PodStatus;
+import se.afshin.yavari.kafka.operator.crd.StorageSpec;
 import se.afshin.yavari.kafka.operator.podset.PodSpecHasher;
 import se.afshin.yavari.kafka.operator.podset.PvcFactory;
 import se.afshin.yavari.kafka.operator.rolling.IsrChecker;
@@ -85,6 +86,7 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
         List<NodeRole> poolRoles = resolveRoles(podSet, namespace);
         boolean brokerPool = poolRoles.contains(NodeRole.BROKER);
         boolean controllerPool = poolRoles.contains(NodeRole.CONTROLLER);
+        StorageSpec storage = resolveStorage(podSet, namespace);
 
         // Scale down: ISR/quorum safety check before deleting each excess pod
         boolean pendingScaleDown = false;
@@ -127,7 +129,7 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
             if (actual == null) {
                 // Scale up: create pod + PVC
                 LOG.infof("Scale-up: creating pod %s", podName);
-                pvcFactory.ensure(entry, namespace, podSet);
+                pvcFactory.ensure(entry, namespace, podSet, storage);
                 annotateWithHash(entry, desiredHash);
                 client.pods().inNamespace(namespace).resource(buildPod(entry)).create();
                 ps.setCurrentSpecHash(desiredHash);
@@ -146,7 +148,7 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
                         LOG.infof("Rolling update: pod %s (hash %s → %s)", podName, currentHash, desiredHash);
                         status.setCurrentRollingPod(podName);
                         annotateWithHash(entry, desiredHash);
-                        pvcFactory.ensure(entry, namespace, podSet);
+                        pvcFactory.ensure(entry, namespace, podSet, storage);
 
                         String bootstrapAddr = bootstrapAddress(podSet, namespace);
                         int nodeId = resolveNodeId(actual);
@@ -221,6 +223,13 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
         if (poolName == null) return List.of(NodeRole.BROKER);
         KafkaNodePool pool = client.resources(KafkaNodePool.class).inNamespace(namespace).withName(poolName).get();
         return pool != null ? pool.getSpec().getRoles() : List.of(NodeRole.BROKER);
+    }
+
+    private StorageSpec resolveStorage(KafkaPodSet podSet, String namespace) {
+        String poolName = podSet.getMetadata().getLabels().get(KafkaPodSet.NODE_POOL_LABEL);
+        if (poolName == null) return new StorageSpec();
+        KafkaNodePool pool = client.resources(KafkaNodePool.class).inNamespace(namespace).withName(poolName).get();
+        return pool != null ? pool.getSpec().getStorage() : new StorageSpec();
     }
 
     private String bootstrapAddress(KafkaPodSet podSet, String namespace) {
