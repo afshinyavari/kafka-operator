@@ -9,8 +9,10 @@ import io.fabric8.kubernetes.client.WatcherException;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
+import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
+import se.afshin.yavari.kafka.operator.metrics.OperatorMetrics;
 
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
@@ -25,8 +27,8 @@ public class RollingUpdateController {
     private static final int POD_READY_TIMEOUT_MINUTES = 5;
     private static final int POD_GONE_TIMEOUT_MINUTES = 2;
 
-    @Inject
-    IsrChecker isrChecker;
+    @Inject IsrChecker isrChecker;
+    @Inject OperatorMetrics metrics;
 
     /**
      * Safely replaces one pod in a KafkaPodSet with the desired spec.
@@ -54,29 +56,39 @@ public class RollingUpdateController {
                         String namespace) {
 
         String podName = desired.getMetadata().getName();
+        String pool = desired.getMetadata().getLabels().getOrDefault(KafkaPodSet.NODE_POOL_LABEL, "unknown");
         LOG.infof("Rolling pod %s (node.id=%d)", podName, nodeId);
 
-        // Step 1: ISR / quorum safety check
-        waitForSafe(bootstrapAddress, nodeId, roles);
+        var timer = metrics.rollingUpdateTimer(namespace, pool);
+        long startNs = System.nanoTime();
+        boolean success = false;
+        try {
+            // Step 1: ISR / quorum safety check
+            waitForSafe(bootstrapAddress, nodeId, roles);
 
-        // Step 2: Delete existing pod
-        client.pods().inNamespace(namespace).withName(podName).delete();
-        LOG.infof("Deleted pod %s — waiting for it to disappear", podName);
+            // Step 2: Delete existing pod
+            client.pods().inNamespace(namespace).withName(podName).delete();
+            LOG.infof("Deleted pod %s — waiting for it to disappear", podName);
 
-        // Step 3: Wait for pod to be gone
-        waitForPodGone(client, namespace, podName);
+            // Step 3: Wait for pod to be gone
+            waitForPodGone(client, namespace, podName);
 
-        // Step 4: Create new pod
-        Pod newPod = buildPod(desired);
-        client.pods().inNamespace(namespace).resource(newPod).create();
-        LOG.infof("Created new pod %s — waiting for Ready", podName);
+            // Step 4: Create new pod
+            Pod newPod = buildPod(desired);
+            client.pods().inNamespace(namespace).resource(newPod).create();
+            LOG.infof("Created new pod %s — waiting for Ready", podName);
 
-        // Step 5: Wait for Ready
-        waitForPodReady(client, namespace, podName);
+            // Step 5: Wait for Ready
+            waitForPodReady(client, namespace, podName);
 
-        // Step 6: Verify ISR recovery
-        waitForSafe(bootstrapAddress, nodeId, roles);
-        LOG.infof("Pod %s rolled successfully", podName);
+            // Step 6: Verify ISR recovery
+            waitForSafe(bootstrapAddress, nodeId, roles);
+            LOG.infof("Pod %s rolled successfully", podName);
+            success = true;
+        } finally {
+            timer.record(System.nanoTime() - startNs, TimeUnit.NANOSECONDS);
+            metrics.recordRollingUpdate(namespace, pool, success);
+        }
     }
 
     private void waitForSafe(String bootstrapAddress, int nodeId, List<NodeRole> roles) {

@@ -26,6 +26,7 @@ import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
 import se.afshin.yavari.kafka.operator.crd.PodStatus;
 import se.afshin.yavari.kafka.operator.crd.StorageSpec;
+import se.afshin.yavari.kafka.operator.metrics.OperatorMetrics;
 import se.afshin.yavari.kafka.operator.podset.PodSpecHasher;
 import se.afshin.yavari.kafka.operator.podset.PvcFactory;
 import se.afshin.yavari.kafka.operator.rolling.IsrChecker;
@@ -46,6 +47,7 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
     @Inject IsrChecker isrChecker;
     @Inject PodSpecHasher podSpecHasher;
     @Inject PvcFactory pvcFactory;
+    @Inject OperatorMetrics metrics;
 
     @Override
     public Map<String, EventSource> prepareEventSources(EventSourceContext<KafkaPodSet> context) {
@@ -102,6 +104,8 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
                     safe = isrChecker.isControllerSafeToRestart(controllerBootstrapAddress(podSet, namespace), nodeId);
                 }
 
+                String poolName = podSet.getMetadata().getLabels().getOrDefault(KafkaPodSet.NODE_POOL_LABEL, "unknown");
+                metrics.recordScaleDown(namespace, poolName, safe);
                 if (safe) {
                     LOG.infof("Scale-down: deleting pod %s (node %d)", actual.getMetadata().getName(), nodeId);
                     client.pods().inNamespace(namespace).withName(actual.getMetadata().getName()).delete();

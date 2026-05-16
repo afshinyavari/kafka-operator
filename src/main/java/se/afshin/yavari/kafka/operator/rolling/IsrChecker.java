@@ -1,12 +1,14 @@
 package se.afshin.yavari.kafka.operator.rolling;
 
 import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
 import org.apache.kafka.clients.admin.AdminClient;
 import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.admin.QuorumInfo;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.common.TopicPartitionInfo;
 import org.jboss.logging.Logger;
+import se.afshin.yavari.kafka.operator.metrics.OperatorMetrics;
 
 import java.util.Collection;
 import java.util.Map;
@@ -19,6 +21,8 @@ public class IsrChecker {
 
     private static final Logger LOG = Logger.getLogger(IsrChecker.class);
     private static final int TIMEOUT_SECONDS = 30;
+
+    @Inject OperatorMetrics metrics;
 
     /**
      * Returns true if it is safe to restart the given broker node.
@@ -50,15 +54,18 @@ public class IsrChecker {
                     if (inIsr && tpi.isr().size() == 1) {
                         LOG.warnf("Node %d is the sole ISR member for %s-%d — not safe to restart yet",
                                 nodeId, td.name(), tpi.partition());
+                        metrics.recordIsrCheck("broker", false);
                         return false;
                     }
                 }
             }
+            metrics.recordIsrCheck("broker", true);
             return true;
 
         } catch (Exception e) {
             LOG.warnf("Cannot reach Kafka at %s to check ISR (node %d) — treating as safe: %s",
                     bootstrapAddress, nodeId, e.getMessage());
+            metrics.recordIsrCheck("broker", true);
             return true;
         }
     }
@@ -96,13 +103,16 @@ public class IsrChecker {
             if (laggedPeers > 0) {
                 LOG.warnf("Controller quorum has %d lagged peer(s) — not safe to restart node %d yet",
                         laggedPeers, nodeId);
+                metrics.recordIsrCheck("controller", false);
                 return false;
             }
+            metrics.recordIsrCheck("controller", true);
             return true;
 
         } catch (Exception e) {
             LOG.warnf("Cannot reach controller at %s to check quorum (node %d) — treating as safe: %s",
                     bootstrapControllerAddress, nodeId, e.getMessage());
+            metrics.recordIsrCheck("controller", true);
             return true;
         }
     }

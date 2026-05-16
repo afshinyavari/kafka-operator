@@ -60,6 +60,12 @@
       <artifactId>quarkus-smallrye-health</artifactId>
     </dependency>
 
+    <!-- Prometheus metrics (/q/metrics) — activates JOSDK's MicrometerMetricsProvider -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-micrometer-registry-prometheus</artifactId>
+    </dependency>
+
     <!-- Kafka Admin API for ISR-safe rolling updates -->
     <dependency>
       <groupId>org.apache.kafka</groupId>
