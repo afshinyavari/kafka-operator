@@ -1,5 +1,7 @@
 package se.afshin.yavari.kafka.operator.crd;
 
+import io.fabric8.generator.annotation.Min;
+import io.fabric8.generator.annotation.ValidationRule;
 import io.fabric8.kubernetes.api.model.ResourceRequirements;
 
 import java.util.ArrayList;
@@ -10,9 +12,15 @@ import java.util.Map;
 public class KafkaNodePoolSpec {
 
     /** Roles this pool's nodes fulfil. Any non-empty subset of [CONTROLLER, BROKER]. */
+    @ValidationRule(
+        value = "self.size() >= 1",
+        message = "at least one role must be specified (BROKER or CONTROLLER)"
+    )
     private List<NodeRole> roles = new ArrayList<>();
 
+    @Min(1)
     private int replicas = 1;
+
     private StorageSpec storage = new StorageSpec();
     private ResourceRequirements resources = new ResourceRequirements();
 

@@ -255,7 +255,7 @@ ok "Submariner ready on all clusters"
 
 # ── Step 10: Apply CRDs in parallel ──────────────────────────────────────────
 info "Applying CRDs to all clusters..."
-CRD_DIR="${OPERATOR_DIR}/target/classes/META-INF/fabric8"
+CRD_DIR="${OPERATOR_DIR}/target/kubernetes"
 PIDS=()
 for cluster in "${CLUSTERS[@]}"; do
   ctx="kind-${cluster}"

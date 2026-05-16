@@ -1,5 +1,7 @@
 package se.afshin.yavari.kafka.operator.crd;
 
+import io.fabric8.generator.annotation.ValidationRule;
+
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -12,6 +14,10 @@ public class KafkaClusterSpec {
 
     /** Ordered list of all clusters participating in the KRaft quorum.
         Index position determines the controller node ID (1000 + index). */
+    @ValidationRule(
+        value = "self.size() >= 1",
+        message = "spec.clusters must contain at least one entry"
+    )
     private List<ClusterEntry> clusters = new ArrayList<>();
 
     /** Shared Kafka config properties merged into all node pool configs. */

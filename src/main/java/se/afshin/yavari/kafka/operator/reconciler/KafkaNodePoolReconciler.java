@@ -90,6 +90,15 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         status.setPhase(KafkaNodePoolStatus.Phase.RECONCILING);
         status.setDesiredReplicas(pool.getSpec().getReplicas());
 
+        var validation = CrValidator.validateKafkaNodePool(pool);
+        if (!validation.valid()) {
+            LOG.errorf("KafkaNodePool %s/%s failed validation: %s", namespace, poolName, validation.message());
+            status.setPhase(KafkaNodePoolStatus.Phase.FAILED);
+            status.setMessage(validation.message());
+            pool.setStatus(status);
+            return UpdateControl.patchStatus(pool);
+        }
+
         KafkaCluster cluster = client.resources(KafkaCluster.class)
                 .inNamespace(namespace).withName(clusterName).get();
         if (cluster == null) {

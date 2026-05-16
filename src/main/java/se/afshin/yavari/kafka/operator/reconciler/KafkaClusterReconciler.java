@@ -55,19 +55,11 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
         status.setLastReconcileTime(Instant.now().toString());
         status.setObservedGeneration(cr.getMetadata().getGeneration());
 
-        try {
-            kraftConfig.clusterIndex(cr.getSpec(), localClusterId);
-        } catch (IllegalArgumentException e) {
-            LOG.errorf("KAFKA_CLUSTER_ID '%s' not in spec.clusters — operator misconfigured", localClusterId);
+        var validation = CrValidator.validateKafkaCluster(cr, localClusterId);
+        if (!validation.valid()) {
+            LOG.errorf("KafkaCluster %s/%s failed validation: %s", namespace, name, validation.message());
             status.setPhase(KafkaClusterStatus.Phase.FAILED);
-            status.setMessage(e.getMessage());
-            cr.setStatus(status);
-            return UpdateControl.patchStatus(cr);
-        }
-
-        if (cr.getSpec().getClusters().isEmpty()) {
-            status.setPhase(KafkaClusterStatus.Phase.FAILED);
-            status.setMessage("spec.clusters must not be empty");
+            status.setMessage(validation.message());
             cr.setStatus(status);
             return UpdateControl.patchStatus(cr);
         }
