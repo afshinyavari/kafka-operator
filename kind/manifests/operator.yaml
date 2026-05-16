@@ -4,7 +4,7 @@ metadata:
   name: kafka-operator
   namespace: kafka
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: kafka-operator
@@ -26,8 +26,8 @@ spec:
               value: "${KAFKA_CLUSTER_ID}"
             - name: KAFKA_NETWORKING_MCS_ENABLED
               value: "${KAFKA_NETWORKING_MCS_ENABLED}"
-            - name: QUARKUS_OPERATOR_SDK_ENABLE_LEADER_ELECTION
-              value: "false"
+            - name: QUARKUS_OPERATOR_SDK_ACTIVATE_LEADER_ELECTION_FOR_PROFILES
+              value: "prod"
           readinessProbe:
             httpGet:
               path: /healthz/ready
