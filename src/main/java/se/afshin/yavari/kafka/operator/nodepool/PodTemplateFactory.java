@@ -1,5 +1,7 @@
 package se.afshin.yavari.kafka.operator.nodepool;
 
+import io.fabric8.kubernetes.api.model.Affinity;
+import io.fabric8.kubernetes.api.model.AffinityBuilder;
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.ContainerBuilder;
 import io.fabric8.kubernetes.api.model.ContainerPort;
@@ -7,14 +9,18 @@ import io.fabric8.kubernetes.api.model.ContainerPortBuilder;
 import io.fabric8.kubernetes.api.model.EnvVar;
 import io.fabric8.kubernetes.api.model.EnvVarBuilder;
 import io.fabric8.kubernetes.api.model.IntOrString;
+import io.fabric8.kubernetes.api.model.NodeSelectorRequirementBuilder;
+import io.fabric8.kubernetes.api.model.NodeSelectorTermBuilder;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.PodSpecBuilder;
+import io.fabric8.kubernetes.api.model.PreferredSchedulingTermBuilder;
 import io.fabric8.kubernetes.api.model.ProbeBuilder;
 import io.fabric8.kubernetes.api.model.Volume;
 import io.fabric8.kubernetes.api.model.VolumeBuilder;
 import io.fabric8.kubernetes.api.model.VolumeMount;
 import io.fabric8.kubernetes.api.model.VolumeMountBuilder;
+import io.fabric8.kubernetes.client.KubernetesClient;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
@@ -27,6 +33,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 @ApplicationScoped
 public class PodTemplateFactory {
@@ -34,8 +41,8 @@ public class PodTemplateFactory {
     private static final int BROKER_PORT = 9092;
     private static final int CONTROLLER_PORT = 9093;
 
-    @Inject
-    KRaftConfigGenerator kraftConfig;
+    @Inject KRaftConfigGenerator kraftConfig;
+    @Inject KubernetesClient client;
 
     public List<PodEntry> build(KafkaNodePool pool, KafkaCluster cluster, String namespace,
                                 int clusterIndex, String kafkaClusterId, String configHash,
@@ -44,6 +51,12 @@ public class PodTemplateFactory {
         String poolName = pool.getMetadata().getName();
         String clusterName = cluster.getMetadata().getName();
         String kafkaImage = cluster.getSpec().getKafkaImage();
+
+        String rackTopologyKey = pool.getSpec().getRackTopologyKey();
+        boolean hasRack = isBroker && rackTopologyKey != null && !rackTopologyKey.isBlank();
+
+        // Resolve zones once per pool — sorted for deterministic assignment
+        List<String> zones = hasRack ? resolveZones(rackTopologyKey) : List.of();
 
         for (int i = 0; i < pool.getSpec().getReplicas(); i++) {
             String podName = poolName + "-" + i;
@@ -63,12 +76,11 @@ public class PodTemplateFactory {
                     .withLabels(labels)
                     .build();
 
-            String rackTopologyKey = pool.getSpec().getRackTopologyKey();
-            boolean hasRack = isBroker && rackTopologyKey != null && !rackTopologyKey.isBlank();
+            String zone = zones.isEmpty() ? "" : zones.get(i % zones.size());
 
-            List<Volume> volumes = buildVolumes(poolName, podName, hasRack);
-            List<EnvVar> env = buildEnv(kafkaClusterId, configHash, isController, isBroker);
-            List<VolumeMount> mounts = buildMounts(hasRack);
+            List<Volume> volumes = buildVolumes(poolName, podName);
+            List<EnvVar> env = buildEnv(kafkaClusterId, configHash, isController, isBroker, zone);
+            List<VolumeMount> mounts = buildMounts();
             List<ContainerPort> ports = buildContainerPorts(isController, isBroker);
 
             Container container = new ContainerBuilder()
@@ -89,37 +101,15 @@ public class PodTemplateFactory {
                             .build())
                     .build();
 
-            List<Container> initContainers = new ArrayList<>();
-            if (hasRack) {
-                String labelKey = rackTopologyKey.replace(".", "\\.").replace("/", "\\/");
-                String initScript = "kubectl get node \"$NODE_NAME\" "
-                        + "-o jsonpath=\"{.metadata.labels['" + labelKey + "']}\" "
-                        + "> /opt/kafka/init/rack.id";
-                initContainers.add(new ContainerBuilder()
-                        .withName("rack-init")
-                        .withImage("bitnami/kubectl:latest")
-                        .withCommand("/bin/sh", "-c", initScript)
-                        .withEnv(new EnvVarBuilder()
-                                .withName("NODE_NAME")
-                                .withNewValueFrom()
-                                    .withNewFieldRef().withFieldPath("spec.nodeName").endFieldRef()
-                                .endValueFrom()
-                                .build())
-                        .withVolumeMounts(new VolumeMountBuilder()
-                                .withName("rack-init").withMountPath("/opt/kafka/init").build())
-                        .build());
-            }
-
             PodSpecBuilder podSpecBuilder = new PodSpecBuilder()
                     .withContainers(container)
                     .withVolumes(volumes)
                     .withRestartPolicy("Always")
                     .withHostname(podName)
                     .withSubdomain(poolName + "-headless");
-            if (hasRack) {
-                podSpecBuilder
-                        .withInitContainers(initContainers)
-                        .withServiceAccountName("kafka-node");
+
+            if (hasRack && !zone.isEmpty()) {
+                podSpecBuilder.withAffinity(buildZoneAffinity(rackTopologyKey, zone));
             }
 
             PodEntry entry = new PodEntry();
@@ -130,32 +120,55 @@ public class PodTemplateFactory {
         return pods;
     }
 
-    private List<Volume> buildVolumes(String poolName, String podName, boolean hasRack) {
-        List<Volume> volumes = new ArrayList<>();
-        volumes.add(new VolumeBuilder()
-                .withName("config")
-                .withNewConfigMap()
-                    .withName(poolName + "-config")
-                    .withDefaultMode(0755)
-                .endConfigMap()
-                .build());
-        volumes.add(new VolumeBuilder()
-                .withName("data")
-                .withNewPersistentVolumeClaim()
-                    .withClaimName("data-" + podName)
-                .endPersistentVolumeClaim()
-                .build());
-        if (hasRack) {
-            volumes.add(new VolumeBuilder()
-                    .withName("rack-init")
-                    .withNewEmptyDir().endEmptyDir()
-                    .build());
-        }
-        return volumes;
+    private List<String> resolveZones(String rackTopologyKey) {
+        return client.nodes()
+                .withLabel(rackTopologyKey)
+                .list().getItems().stream()
+                .map(n -> n.getMetadata().getLabels().get(rackTopologyKey))
+                .filter(z -> z != null && !z.isBlank())
+                .distinct()
+                .sorted()
+                .collect(Collectors.toList());
+    }
+
+    private Affinity buildZoneAffinity(String rackTopologyKey, String zone) {
+        return new AffinityBuilder()
+                .withNewNodeAffinity()
+                    .addToPreferredDuringSchedulingIgnoredDuringExecution(
+                        new PreferredSchedulingTermBuilder()
+                            .withWeight(100)
+                            .withPreference(new NodeSelectorTermBuilder()
+                                .addToMatchExpressions(new NodeSelectorRequirementBuilder()
+                                    .withKey(rackTopologyKey)
+                                    .withOperator("In")
+                                    .withValues(zone)
+                                    .build())
+                                .build())
+                            .build())
+                .endNodeAffinity()
+                .build();
+    }
+
+    private List<Volume> buildVolumes(String poolName, String podName) {
+        return List.of(
+            new VolumeBuilder()
+                    .withName("config")
+                    .withNewConfigMap()
+                        .withName(poolName + "-config")
+                        .withDefaultMode(0755)
+                    .endConfigMap()
+                    .build(),
+            new VolumeBuilder()
+                    .withName("data")
+                    .withNewPersistentVolumeClaim()
+                        .withClaimName("data-" + podName)
+                    .endPersistentVolumeClaim()
+                    .build()
+        );
     }
 
     private List<EnvVar> buildEnv(String kafkaClusterId, String configHash,
-                                   boolean isController, boolean isBroker) {
+                                   boolean isController, boolean isBroker, String zone) {
         List<EnvVar> env = new ArrayList<>();
         env.add(new EnvVarBuilder().withName("KAFKA_HEAP_OPTS")
                 .withValue(isController ? "-Xmx512m -Xms512m" : "-Xmx1g -Xms1g").build());
@@ -168,18 +181,18 @@ public class PodTemplateFactory {
                         .withNewFieldRef().withFieldPath("metadata.name").endFieldRef()
                     .endValueFrom()
                     .build());
+            if (!zone.isEmpty()) {
+                env.add(new EnvVarBuilder().withName("BROKER_RACK").withValue(zone).build());
+            }
         }
         return env;
     }
 
-    private List<VolumeMount> buildMounts(boolean hasRack) {
-        List<VolumeMount> mounts = new ArrayList<>();
-        mounts.add(new VolumeMountBuilder().withName("config").withMountPath("/opt/kafka-config").build());
-        mounts.add(new VolumeMountBuilder().withName("data").withMountPath("/var/lib/kafka/data").build());
-        if (hasRack) {
-            mounts.add(new VolumeMountBuilder().withName("rack-init").withMountPath("/opt/kafka/init").build());
-        }
-        return mounts;
+    private List<VolumeMount> buildMounts() {
+        return List.of(
+            new VolumeMountBuilder().withName("config").withMountPath("/opt/kafka-config").build(),
+            new VolumeMountBuilder().withName("data").withMountPath("/var/lib/kafka/data").build()
+        );
     }
 
     private List<ContainerPort> buildContainerPorts(boolean isController, boolean isBroker) {

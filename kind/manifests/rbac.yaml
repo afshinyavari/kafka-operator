@@ -24,41 +24,15 @@ rules:
   - apiGroups: [""]
     resources: ["pods", "persistentvolumeclaims", "configmaps", "services", "namespaces", "events"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["multicluster.x-k8s.io"]
     resources: ["serviceexports"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
----
-# ServiceAccount for Kafka pods — used by the rack-init init container to read node labels
-apiVersion: v1
-kind: ServiceAccount
-metadata:
-  name: kafka-node
-  namespace: kafka
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: kafka-node
-rules:
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["get"]
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: kafka-node
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: kafka-node
-subjects:
-  - kind: ServiceAccount
-    name: kafka-node
-    namespace: kafka
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

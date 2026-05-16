@@ -30,9 +30,7 @@ public class StartupScriptBuilder {
                 : "${POD_NAME}." + poolName + "-headless." + namespace + ".svc.cluster.local";
         boolean hasRack = pool.getSpec().getRackTopologyKey() != null
                 && !pool.getSpec().getRackTopologyKey().isBlank();
-        String rackLine = hasRack
-                ? "BROKER_RACK=$(cat /opt/kafka/init/rack.id 2>/dev/null || true)\n"
-                : "";
+        // BROKER_RACK is injected as a pod env var by PodTemplateFactory — no file read needed
         String rackSed = hasRack
                 ? "    -e \"s|\\${BROKER_RACK}|${BROKER_RACK}|g\" \\\n"
                 : "";
@@ -42,7 +40,6 @@ public class StartupScriptBuilder {
                 + "ORDINAL=${POD_NAME##*-}\n"
                 + "NODE_ID=$(( " + clusterIndex + " * " + KRaftConfigGenerator.BROKER_MULTIPLIER + " + ORDINAL ))\n"
                 + "ADVERTISED_ADDR=" + advertisedAddr + ":9092\n"
-                + rackLine
                 + "sed -e \"s/\\${NODE_ID}/${NODE_ID}/g\" \\\n"
                 + "    -e \"s|\\${ADVERTISED_ADDR}|${ADVERTISED_ADDR}|g\" \\\n"
                 + rackSed
