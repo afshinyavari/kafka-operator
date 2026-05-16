@@ -3,8 +3,10 @@ package se.afshin.yavari.kafka.operator.reconciler;
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ConfigMapBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import io.javaoperatorsdk.operator.api.reconciler.Cleaner;
 import io.javaoperatorsdk.operator.api.reconciler.Context;
 import io.javaoperatorsdk.operator.api.reconciler.ControllerConfiguration;
+import io.javaoperatorsdk.operator.api.reconciler.DeleteControl;
 import io.javaoperatorsdk.operator.api.reconciler.Reconciler;
 import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
 import jakarta.enterprise.context.ApplicationScoped;
@@ -15,7 +17,9 @@ import se.afshin.yavari.kafka.operator.cluster.ClusterStatusAggregator;
 import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterStatus;
+import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
+import se.afshin.yavari.kafka.operator.crd.NodeRole;
 
 import java.time.Instant;
 import java.util.List;
@@ -23,7 +27,7 @@ import java.util.Map;
 
 @ControllerConfiguration
 @ApplicationScoped
-public class KafkaClusterReconciler implements Reconciler<KafkaCluster> {
+public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner<KafkaCluster> {
 
     private static final Logger LOG = Logger.getLogger(KafkaClusterReconciler.class);
 
@@ -94,6 +98,56 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster> {
             return UpdateControl.patchStatus(cr).rescheduleAfter(java.time.Duration.ofSeconds(15));
         }
         return UpdateControl.patchStatus(cr);
+    }
+
+    @Override
+    public DeleteControl cleanup(KafkaCluster cr, Context<KafkaCluster> context) {
+        String namespace = cr.getMetadata().getNamespace();
+        String name = cr.getMetadata().getName();
+        LOG.infof("KafkaCluster %s/%s deleted — ordered shutdown (brokers first, then controllers)", namespace, name);
+
+        List<KafkaNodePool> pools = client.resources(KafkaNodePool.class)
+                .inNamespace(namespace)
+                .withLabel(KafkaNodePool.CLUSTER_LABEL, name)
+                .list().getItems();
+
+        // Delete broker pools not yet scheduled for deletion
+        pools.stream()
+             .filter(p -> p.getSpec().getRoles().contains(NodeRole.BROKER))
+             .filter(p -> p.getMetadata().getDeletionTimestamp() == null)
+             .forEach(p -> {
+                 LOG.infof("Deleting broker pool %s", p.getMetadata().getName());
+                 client.resources(KafkaNodePool.class).inNamespace(namespace)
+                       .withName(p.getMetadata().getName()).delete();
+             });
+
+        // Wait until all broker pods are gone before touching controllers
+        boolean brokerPodsExist = client.pods().inNamespace(namespace)
+                .withLabel(KafkaPodSet.CLUSTER_LABEL, name)
+                .list().getItems().stream()
+                .anyMatch(p -> {
+                    String nodeIdStr = p.getMetadata().getLabels()
+                            .getOrDefault(KafkaPodSet.NODE_ID_LABEL, "-1");
+                    try { return Integer.parseInt(nodeIdStr) < 1000; }
+                    catch (NumberFormatException e) { return false; }
+                });
+
+        if (brokerPodsExist) {
+            LOG.infof("KafkaCluster %s — broker pods still terminating, will retry", name);
+            return DeleteControl.noFinalizerRemoval().rescheduleAfter(java.time.Duration.ofSeconds(15));
+        }
+
+        // Brokers gone — delete controller-only pools
+        pools.stream()
+             .filter(p -> !p.getSpec().getRoles().contains(NodeRole.BROKER))
+             .filter(p -> p.getMetadata().getDeletionTimestamp() == null)
+             .forEach(p -> {
+                 LOG.infof("Deleting controller pool %s", p.getMetadata().getName());
+                 client.resources(KafkaNodePool.class).inNamespace(namespace)
+                       .withName(p.getMetadata().getName()).delete();
+             });
+
+        return DeleteControl.defaultDelete();
     }
 
     private void applyQuorumConfigMap(KafkaCluster cr, String namespace, String quorumVoters, String clusterId) {

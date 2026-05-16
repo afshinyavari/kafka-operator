@@ -187,7 +187,9 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
         String namespace = podSet.getMetadata().getNamespace();
         Map<String, String> selector = podSet.getSpec().getSelector().getMatchLabels();
         LOG.infof("Cleaning up KafkaPodSet %s — deleting pods", podSet.getMetadata().getName());
-        client.pods().inNamespace(namespace).withLabels(selector).delete();
+        client.pods().inNamespace(namespace).withLabels(selector).list().getItems()
+              .forEach(pod -> client.pods().inNamespace(namespace)
+                                   .withName(pod.getMetadata().getName()).delete());
         return DeleteControl.defaultDelete();
     }
 
