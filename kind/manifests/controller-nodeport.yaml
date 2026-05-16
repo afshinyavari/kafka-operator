@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: controllers-nodeport
+  namespace: kafka
+  labels:
+    kafka.yavari.afshin.se/cluster: my-kafka
+    app.kubernetes.io/managed-by: kafka-operator
+spec:
+  type: NodePort
+  selector:
+    kafka.yavari.afshin.se/node-pool: controllers-${CLUSTER_SUFFIX}
+    kafka.yavari.afshin.se/cluster: my-kafka
+  ports:
+    - name: controller
+      port: 9093
+      targetPort: 9093
+      nodePort: 30093
+      protocol: TCP

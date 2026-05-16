@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-operator
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-operator
+  template:
+    metadata:
+      labels:
+        app: kafka-operator
+    spec:
+      serviceAccountName: kafka-operator
+      containers:
+        - name: operator
+          image: kafka-operator:dev
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: KAFKA_CLUSTER_ID
+              value: "${KAFKA_CLUSTER_ID}"
+            - name: KAFKA_NETWORKING_MCS_ENABLED
+              value: "${KAFKA_NETWORKING_MCS_ENABLED}"
+            - name: QUARKUS_OPERATOR_SDK_ENABLE_LEADER_ELECTION
+              value: "false"
+          readinessProbe:
+            httpGet:
+              path: /healthz/ready
+              port: 8080
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /healthz/live
+              port: 8080
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 200m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi

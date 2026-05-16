@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>se.afshin.yavari</groupId>
+  <artifactId>kafka-operator</artifactId>
+  <version>1.0-SNAPSHOT</version>
+  <packaging>jar</packaging>
+
+  <properties>
+    <maven.compiler.release>21</maven.compiler.release>
+    <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+    <quarkus.platform.version>3.15.1</quarkus.platform.version>
+    <quarkus-operator-sdk.version>6.8.2</quarkus-operator-sdk.version>
+    <kafka-clients.version>3.7.0</kafka-clients.version>
+    <!-- fabric8 version pinned by the Quarkus BOM — keep in sync if upgrading Quarkus -->
+    <fabric8.version>6.13.3</fabric8.version>
+  </properties>
+
+  <dependencyManagement>
+    <dependencies>
+      <!-- Quarkus platform BOM first — sets baseline for all Quarkus core artifacts -->
+      <dependency>
+        <groupId>io.quarkus.platform</groupId>
+        <artifactId>quarkus-bom</artifactId>
+        <version>${quarkus.platform.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+      <!-- JOSDK BOM second — overrides fabric8 and JOSDK core versions -->
+      <dependency>
+        <groupId>io.quarkiverse.operatorsdk</groupId>
+        <artifactId>quarkus-operator-sdk-bom</artifactId>
+        <version>${quarkus-operator-sdk.version}</version>
+        <type>pom</type>
+        <scope>import</scope>
+      </dependency>
+    </dependencies>
+  </dependencyManagement>
+
+  <dependencies>
+    <!-- JOSDK Quarkus extension (brings in JOSDK core + fabric8 client) -->
+    <dependency>
+      <groupId>io.quarkiverse.operatorsdk</groupId>
+      <artifactId>quarkus-operator-sdk</artifactId>
+    </dependency>
+
+    <!-- CRD YAML generation at compile time via annotation processor -->
+    <dependency>
+      <groupId>io.fabric8</groupId>
+      <artifactId>crd-generator-apt</artifactId>
+      <scope>provided</scope>
+    </dependency>
+
+    <!-- Health endpoints (/healthz) -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-smallrye-health</artifactId>
+    </dependency>
+
+    <!-- Kafka Admin API for ISR-safe rolling updates -->
+    <dependency>
+      <groupId>org.apache.kafka</groupId>
+      <artifactId>kafka-clients</artifactId>
+      <version>${kafka-clients.version}</version>
+    </dependency>
+
+    <!-- Test -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.assertj</groupId>
+      <artifactId>assertj-core</artifactId>
+      <version>3.25.3</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.mockito</groupId>
+      <artifactId>mockito-core</artifactId>
+      <version>5.11.0</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.fabric8</groupId>
+      <artifactId>kubernetes-server-mock</artifactId>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <plugins>
+      <plugin>
+        <groupId>io.quarkus.platform</groupId>
+        <artifactId>quarkus-maven-plugin</artifactId>
+        <version>${quarkus.platform.version}</version>
+        <extensions>true</extensions>
+        <executions>
+          <execution>
+            <goals>
+              <goal>build</goal>
+              <goal>generate-code</goal>
+            </goals>
+          </execution>
+        </executions>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-compiler-plugin</artifactId>
+        <version>3.13.0</version>
+        <configuration>
+          <annotationProcessorPaths>
+            <path>
+              <groupId>io.fabric8</groupId>
+              <artifactId>crd-generator-apt</artifactId>
+              <version>${fabric8.version}</version>
+            </path>
+          </annotationProcessorPaths>
+        </configuration>
+      </plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-surefire-plugin</artifactId>
+        <configuration>
+          <systemPropertyVariables>
+            <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+          </systemPropertyVariables>
+        </configuration>
+      </plugin>
+    </plugins>
+  </build>
+</project>

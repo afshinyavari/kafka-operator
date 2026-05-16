@@ -1,0 +1,216 @@
+package se.afshin.yavari.kafka.operator.reconciler;
+
+import io.fabric8.kubernetes.api.model.Pod;
+import io.fabric8.kubernetes.client.KubernetesClient;
+import io.javaoperatorsdk.operator.api.reconciler.Cleaner;
+import io.javaoperatorsdk.operator.api.reconciler.Context;
+import io.javaoperatorsdk.operator.api.reconciler.ControllerConfiguration;
+import io.javaoperatorsdk.operator.api.reconciler.DeleteControl;
+import io.javaoperatorsdk.operator.api.reconciler.EventSourceContext;
+import io.javaoperatorsdk.operator.api.reconciler.EventSourceInitializer;
+import io.javaoperatorsdk.operator.api.reconciler.Reconciler;
+import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
+import io.javaoperatorsdk.operator.processing.event.ResourceID;
+import io.javaoperatorsdk.operator.processing.event.source.EventSource;
+import io.javaoperatorsdk.operator.api.config.informer.InformerConfiguration;
+import io.javaoperatorsdk.operator.processing.event.source.informer.InformerEventSource;
+
+import java.time.Duration;
+import jakarta.enterprise.context.ApplicationScoped;
+import jakarta.inject.Inject;
+import org.jboss.logging.Logger;
+import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
+import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
+import se.afshin.yavari.kafka.operator.crd.KafkaPodSetStatus;
+import se.afshin.yavari.kafka.operator.crd.NodeRole;
+import se.afshin.yavari.kafka.operator.crd.PodEntry;
+import se.afshin.yavari.kafka.operator.crd.PodStatus;
+import se.afshin.yavari.kafka.operator.podset.PodSpecHasher;
+import se.afshin.yavari.kafka.operator.podset.PvcFactory;
+import se.afshin.yavari.kafka.operator.rolling.RollingUpdateController;
+
+import java.util.*;
+import java.util.stream.Collectors;
+
+@ControllerConfiguration
+@ApplicationScoped
+public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<KafkaPodSet>,
+        EventSourceInitializer<KafkaPodSet> {
+
+    private static final Logger LOG = Logger.getLogger(KafkaPodSetReconciler.class);
+
+    @Inject KubernetesClient client;
+    @Inject RollingUpdateController rollingController;
+    @Inject PodSpecHasher podSpecHasher;
+    @Inject PvcFactory pvcFactory;
+
+    @Override
+    public Map<String, EventSource> prepareEventSources(EventSourceContext<KafkaPodSet> context) {
+        var podEventSource = new InformerEventSource<>(
+            InformerConfiguration.from(Pod.class, context)
+                .withSecondaryToPrimaryMapper(pod -> {
+                    Map<String, String> labels = pod.getMetadata().getLabels();
+                    if (labels == null) return Set.of();
+                    String poolName = labels.get(KafkaPodSet.NODE_POOL_LABEL);
+                    if (poolName == null) return Set.of();
+                    return Set.of(new ResourceID(poolName + "-podset",
+                            pod.getMetadata().getNamespace()));
+                })
+                .build(),
+            context);
+        return EventSourceInitializer.nameEventSources(podEventSource);
+    }
+
+    @Override
+    public UpdateControl<KafkaPodSet> reconcile(KafkaPodSet podSet, Context<KafkaPodSet> context) {
+        String name = podSet.getMetadata().getName();
+        String namespace = podSet.getMetadata().getNamespace();
+        LOG.infof("Reconciling KafkaPodSet %s/%s", namespace, name);
+
+        KafkaPodSetStatus status = podSet.getStatus() != null ? podSet.getStatus() : new KafkaPodSetStatus();
+        status.setReplicas(podSet.getSpec().getPods().size());
+
+        Map<String, String> selector = podSet.getSpec().getSelector().getMatchLabels();
+        List<Pod> actualPods = client.pods().inNamespace(namespace).withLabels(selector).list().getItems();
+        Map<String, Pod> actualByName = actualPods.stream()
+                .collect(Collectors.toMap(p -> p.getMetadata().getName(), p -> p));
+
+        List<PodEntry> desired = podSet.getSpec().getPods();
+        Set<String> desiredNames = desired.stream()
+                .map(e -> e.getMetadata().getName())
+                .collect(Collectors.toSet());
+
+        // Scale down: delete pods not in desired list
+        for (Pod actual : actualPods) {
+            if (!desiredNames.contains(actual.getMetadata().getName())) {
+                LOG.infof("Scale-down: deleting pod %s", actual.getMetadata().getName());
+                client.pods().inNamespace(namespace).withName(actual.getMetadata().getName()).delete();
+                // PVC is intentionally NOT deleted to preserve data
+            }
+        }
+
+        List<NodeRole> poolRoles = resolveRoles(podSet, namespace);
+
+        String currentRolling = status.getCurrentRollingPod();
+        List<PodStatus> podStatuses = new ArrayList<>();
+
+        for (PodEntry entry : desired) {
+            String podName = entry.getMetadata().getName();
+            String desiredHash = podSpecHasher.hash(entry.getSpec());
+            Pod actual = actualByName.get(podName);
+
+            PodStatus ps = new PodStatus();
+            ps.setName(podName);
+            ps.setSpecHash(desiredHash);
+
+            if (actual == null) {
+                // Scale up: create pod + PVC
+                LOG.infof("Scale-up: creating pod %s", podName);
+                pvcFactory.ensure(entry, namespace, podSet);
+                annotateWithHash(entry, desiredHash);
+                client.pods().inNamespace(namespace).resource(buildPod(entry)).create();
+                ps.setCurrentSpecHash(desiredHash);
+                ps.setReady(false);
+            } else {
+                String currentHash = actual.getMetadata().getAnnotations() != null
+                        ? actual.getMetadata().getAnnotations().getOrDefault(KafkaPodSet.SPEC_HASH_ANNOTATION, "")
+                        : "";
+                ps.setCurrentSpecHash(currentHash);
+                ps.setReady(isPodReady(actual));
+
+                if (!desiredHash.equals(currentHash)) {
+                    if (!currentRolling.isEmpty() && !currentRolling.equals(podName)) {
+                        LOG.infof("Pod %s needs update but %s is currently rolling — skipping this cycle", podName, currentRolling);
+                    } else {
+                        LOG.infof("Rolling update: pod %s (hash %s → %s)", podName, currentHash, desiredHash);
+                        status.setCurrentRollingPod(podName);
+                        annotateWithHash(entry, desiredHash);
+                        pvcFactory.ensure(entry, namespace, podSet);
+
+                        String bootstrapAddr = bootstrapAddress(podSet, namespace);
+                        int nodeId = resolveNodeId(actual);
+
+                        try {
+                            rollingController.rollPod(entry, poolRoles, bootstrapAddr, nodeId, client, namespace);
+                            ps.setCurrentSpecHash(desiredHash);
+                            ps.setReady(true);
+                            status.setCurrentRollingPod("");
+                        } catch (Exception e) {
+                            LOG.errorf("Rolling update of pod %s failed: %s", podName, e.getMessage());
+                            status.setCurrentRollingPod(podName);
+                        }
+                    }
+                }
+            }
+
+            Pod refreshed = client.pods().inNamespace(namespace).withName(podName).get();
+            if (refreshed != null) ps.setReady(isPodReady(refreshed));
+
+            podStatuses.add(ps);
+        }
+
+        status.setPods(podStatuses);
+        int readyCount = (int) podStatuses.stream().filter(PodStatus::isReady).count();
+        status.setReadyReplicas(readyCount);
+
+        podSet.setStatus(status);
+        boolean needsRecheck = readyCount < status.getReplicas() || !status.getCurrentRollingPod().isEmpty();
+        if (needsRecheck) {
+            return UpdateControl.patchStatus(podSet).rescheduleAfter(Duration.ofSeconds(15));
+        }
+        return UpdateControl.patchStatus(podSet);
+    }
+
+    @Override
+    public DeleteControl cleanup(KafkaPodSet podSet, Context<KafkaPodSet> context) {
+        String namespace = podSet.getMetadata().getNamespace();
+        Map<String, String> selector = podSet.getSpec().getSelector().getMatchLabels();
+        LOG.infof("Cleaning up KafkaPodSet %s — deleting pods", podSet.getMetadata().getName());
+        client.pods().inNamespace(namespace).withLabels(selector).delete();
+        return DeleteControl.defaultDelete();
+    }
+
+    private Pod buildPod(PodEntry entry) {
+        Pod pod = new Pod();
+        pod.setMetadata(entry.getMetadata());
+        pod.setSpec(entry.getSpec());
+        return pod;
+    }
+
+    private void annotateWithHash(PodEntry entry, String hash) {
+        Map<String, String> annotations = entry.getMetadata().getAnnotations();
+        if (annotations == null) {
+            annotations = new HashMap<>();
+            entry.getMetadata().setAnnotations(annotations);
+        }
+        annotations.put(KafkaPodSet.SPEC_HASH_ANNOTATION, hash);
+    }
+
+    private boolean isPodReady(Pod pod) {
+        if (pod == null || pod.getStatus() == null || pod.getStatus().getConditions() == null) return false;
+        return pod.getStatus().getConditions().stream()
+                .filter(c -> "Ready".equals(c.getType()))
+                .anyMatch(c -> "True".equals(c.getStatus()));
+    }
+
+    private List<NodeRole> resolveRoles(KafkaPodSet podSet, String namespace) {
+        String poolName = podSet.getMetadata().getLabels().get(KafkaPodSet.NODE_POOL_LABEL);
+        if (poolName == null) return List.of(NodeRole.BROKER);
+        KafkaNodePool pool = client.resources(KafkaNodePool.class).inNamespace(namespace).withName(poolName).get();
+        return pool != null ? pool.getSpec().getRoles() : List.of(NodeRole.BROKER);
+    }
+
+    private String bootstrapAddress(KafkaPodSet podSet, String namespace) {
+        String poolName = podSet.getMetadata().getLabels().getOrDefault(KafkaPodSet.NODE_POOL_LABEL, "kafka");
+        return poolName + "-headless." + namespace + ".svc.cluster.local:9092";
+    }
+
+    private int resolveNodeId(Pod pod) {
+        String nodeIdStr = pod.getMetadata().getLabels().get(KafkaPodSet.NODE_ID_LABEL);
+        try {
+            return nodeIdStr != null ? Integer.parseInt(nodeIdStr) : -1;
+        } catch (NumberFormatException e) {
+            return -1;
+        }
+    }
+}
