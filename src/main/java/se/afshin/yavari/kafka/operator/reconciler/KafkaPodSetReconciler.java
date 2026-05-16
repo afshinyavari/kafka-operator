@@ -27,6 +27,7 @@ import se.afshin.yavari.kafka.operator.crd.PodEntry;
 import se.afshin.yavari.kafka.operator.crd.PodStatus;
 import se.afshin.yavari.kafka.operator.podset.PodSpecHasher;
 import se.afshin.yavari.kafka.operator.podset.PvcFactory;
+import se.afshin.yavari.kafka.operator.rolling.IsrChecker;
 import se.afshin.yavari.kafka.operator.rolling.RollingUpdateController;
 
 import java.util.*;
@@ -41,6 +42,7 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
 
     @Inject KubernetesClient client;
     @Inject RollingUpdateController rollingController;
+    @Inject IsrChecker isrChecker;
     @Inject PodSpecHasher podSpecHasher;
     @Inject PvcFactory pvcFactory;
 
@@ -80,16 +82,35 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
                 .map(e -> e.getMetadata().getName())
                 .collect(Collectors.toSet());
 
-        // Scale down: delete pods not in desired list
+        List<NodeRole> poolRoles = resolveRoles(podSet, namespace);
+        boolean brokerPool = poolRoles.contains(NodeRole.BROKER);
+        boolean controllerPool = poolRoles.contains(NodeRole.CONTROLLER);
+
+        // Scale down: ISR/quorum safety check before deleting each excess pod
+        boolean pendingScaleDown = false;
         for (Pod actual : actualPods) {
             if (!desiredNames.contains(actual.getMetadata().getName())) {
-                LOG.infof("Scale-down: deleting pod %s", actual.getMetadata().getName());
-                client.pods().inNamespace(namespace).withName(actual.getMetadata().getName()).delete();
-                // PVC is intentionally NOT deleted to preserve data
+                int nodeId = resolveNodeId(actual);
+                boolean safe = true;
+
+                if (brokerPool && nodeId >= 0) {
+                    safe = isrChecker.isBrokerSafeToRestart(bootstrapAddress(podSet, namespace), nodeId);
+                }
+                if (controllerPool && nodeId >= 0 && safe) {
+                    safe = isrChecker.isControllerSafeToRestart(controllerBootstrapAddress(podSet, namespace), nodeId);
+                }
+
+                if (safe) {
+                    LOG.infof("Scale-down: deleting pod %s (node %d)", actual.getMetadata().getName(), nodeId);
+                    client.pods().inNamespace(namespace).withName(actual.getMetadata().getName()).delete();
+                    // PVC is intentionally NOT deleted to preserve data
+                } else {
+                    LOG.warnf("Scale-down: pod %s (node %d) not yet safe to remove — will retry",
+                            actual.getMetadata().getName(), nodeId);
+                    pendingScaleDown = true;
+                }
             }
         }
-
-        List<NodeRole> poolRoles = resolveRoles(podSet, namespace);
 
         String currentRolling = status.getCurrentRollingPod();
         List<PodStatus> podStatuses = new ArrayList<>();
@@ -154,7 +175,7 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
         status.setReadyReplicas(readyCount);
 
         podSet.setStatus(status);
-        boolean needsRecheck = readyCount < status.getReplicas() || !status.getCurrentRollingPod().isEmpty();
+        boolean needsRecheck = readyCount < status.getReplicas() || !status.getCurrentRollingPod().isEmpty() || pendingScaleDown;
         if (needsRecheck) {
             return UpdateControl.patchStatus(podSet).rescheduleAfter(Duration.ofSeconds(15));
         }
@@ -203,6 +224,11 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
     private String bootstrapAddress(KafkaPodSet podSet, String namespace) {
         String poolName = podSet.getMetadata().getLabels().getOrDefault(KafkaPodSet.NODE_POOL_LABEL, "kafka");
         return poolName + "-headless." + namespace + ".svc.cluster.local:9092";
+    }
+
+    private String controllerBootstrapAddress(KafkaPodSet podSet, String namespace) {
+        String poolName = podSet.getMetadata().getLabels().getOrDefault(KafkaPodSet.NODE_POOL_LABEL, "kafka");
+        return poolName + "-headless." + namespace + ".svc.cluster.local:9093";
     }
 
     private int resolveNodeId(Pod pod) {
