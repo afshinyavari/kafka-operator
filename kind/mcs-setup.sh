@@ -47,16 +47,19 @@ else
   ok "subctl found: $(subctl version 2>/dev/null | head -1)"
 fi
 
-# ── Step 1: Build operator ──────────────────────────────────────────────────
-info "Building kafka-operator (Quarkus fast-jar)..."
-cd "${OPERATOR_DIR}"
-mvn package -DskipTests -q
-ok "Build complete"
+# ── Step 1 & 2: Build operator + Docker image (skip if image already exists) ─
+if docker inspect "${IMAGE_NAME}" &>/dev/null && [ "${FORCE_BUILD:-0}" != "1" ]; then
+  ok "Image ${IMAGE_NAME} already exists — skipping build (set FORCE_BUILD=1 to override)"
+else
+  info "Building kafka-operator (Quarkus fast-jar)..."
+  cd "${OPERATOR_DIR}"
+  mvn package -DskipTests -q
+  ok "Build complete"
 
-# ── Step 2: Build Docker image ──────────────────────────────────────────────
-info "Building Docker image ${IMAGE_NAME}..."
-docker build -t "${IMAGE_NAME}" "${OPERATOR_DIR}" -q
-ok "Image ${IMAGE_NAME} built"
+  info "Building Docker image ${IMAGE_NAME}..."
+  docker build -t "${IMAGE_NAME}" "${OPERATOR_DIR}" -q
+  ok "Image ${IMAGE_NAME} built"
+fi
 
 # ── Step 3: Create Kind clusters (per-cluster CNI configs) ──────────────────
 for i in "${!CLUSTERS[@]}"; do
@@ -147,18 +150,35 @@ subctl deploy-broker --context kind-kafka-a
 [ -f "${PWD}/broker-info.subm" ] && mv "${PWD}/broker-info.subm" "${BROKER_INFO}" || true
 ok "Broker deployed (broker-info.subm: ${BROKER_INFO})"
 
-# ── Step 8: Join all clusters to Submariner ─────────────────────────────────
-info "Joining clusters to Submariner (VXLAN cable driver, no NAT)..."
+# ── Step 8: Join all clusters to Submariner (in parallel) ───────────────────
+info "Joining clusters to Submariner (VXLAN cable driver, no NAT) in parallel..."
+SUBCTL_PIDS=()
+SUBCTL_LOGS=()
 for i in "${!CLUSTERS[@]}"; do
   cluster="${CLUSTERS[$i]}"
-  info "  Joining ${cluster}..."
+  log="/tmp/subctl-join-${cluster}.log"
+  SUBCTL_LOGS+=("${log}")
   subctl join "${BROKER_INFO}" \
     --context "kind-${cluster}" \
     --clusterid "${cluster}" \
     --natt=false \
-    --cable-driver vxlan
-  ok "  ${cluster} joined"
+    --cable-driver vxlan >"${log}" 2>&1 &
+  SUBCTL_PIDS+=($!)
+  info "  Joining ${cluster} (pid $!)..."
 done
+
+SUBCTL_FAILED=0
+for i in "${!CLUSTERS[@]}"; do
+  cluster="${CLUSTERS[$i]}"
+  if wait "${SUBCTL_PIDS[$i]}"; then
+    ok "  ${cluster} joined"
+  else
+    echo "  ✗ ${cluster} join FAILED — output:"
+    cat "${SUBCTL_LOGS[$i]}"
+    SUBCTL_FAILED=1
+  fi
+done
+[ "${SUBCTL_FAILED}" -eq 0 ] || { echo "Submariner join failed on one or more clusters"; exit 1; }
 
 # ── Step 8b: Patch broker API server address (127.0.0.1 in broker-info.subm
 #            is the local kubeconfig port — pods inside clusters can't reach it.
@@ -247,6 +267,15 @@ for i in "${!CLUSTERS[@]}"; do
 done
 ok "KafkaNodePools applied"
 
+# ── Step 15: Wait for Kafka pods Ready ──────────────────────────────────────
+info "Waiting for Kafka pods to be Ready on all clusters..."
+for cluster in "${CLUSTERS[@]}"; do
+  ctx="kind-${cluster}"
+  until kubectl --context "${ctx}" -n "${NAMESPACE}" get pods --no-headers 2>/dev/null | grep -q .; do sleep 3; done
+  kubectl --context "${ctx}" -n "${NAMESPACE}" wait --for=condition=Ready pod --all --timeout=180s
+  ok "Kafka pods ready on ${cluster}"
+done
+
 echo ""
 echo "────────────────────────────────────────────────────────────────────────"
 echo -e "${GREEN}MCS setup complete!${NC} Submariner is routing cross-cluster traffic."
@@ -255,6 +284,8 @@ echo "Useful commands:"
 echo "  make -C kind status        # check all clusters"
 echo "  make -C kind quorum        # verify KRaft quorum"
 echo "  make -C kind teardown      # destroy all clusters"
+echo "  make -C kind reload-image  # hot-swap operator only (~30s, no cluster rebuild)"
+echo "  FORCE_BUILD=1 make -C kind mcs-setup  # force rebuild even if image exists"
 echo ""
 echo "Verification:"
 echo "  kubectl --context kind-kafka-a get serviceexport -n ${NAMESPACE}"
