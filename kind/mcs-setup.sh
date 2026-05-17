@@ -9,6 +9,8 @@ OPERATOR_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 MANIFESTS_DIR="${SCRIPT_DIR}/manifests"
 
 IMAGE_NAME="kafka-operator:dev"
+KAFKA_IMAGE_NAME="kafka-ubi:4.0.0"
+KAFKA_VERSION="4.0.0"
 CLUSTERS=(kafka-a kafka-b kafka-c)
 CLUSTER_IDS=(A B C)
 CLUSTER_CONFIGS=(cluster-a.yaml cluster-b.yaml cluster-c.yaml)
@@ -86,6 +88,16 @@ else
   ok "Image ${IMAGE_NAME} built"
 fi
 
+# ── Step 2b: Build Kafka image (skip if already exists) ──────────────────────
+if docker inspect "${KAFKA_IMAGE_NAME}" &>/dev/null && [ "${FORCE_BUILD:-0}" != "1" ]; then
+  ok "Image ${KAFKA_IMAGE_NAME} already exists — skipping Docker build (set FORCE_BUILD=1 to rebuild)"
+else
+  info "Building Kafka image ${KAFKA_IMAGE_NAME}..."
+  docker build --build-arg KAFKA_VERSION="${KAFKA_VERSION}" \
+    -t "${KAFKA_IMAGE_NAME}" "${SCRIPT_DIR}/../kafka-image" -q
+  ok "Image ${KAFKA_IMAGE_NAME} built"
+fi
+
 # ── Step 3: Create Kind clusters in parallel ─────────────────────────────────
 info "Creating Kind clusters in parallel..."
 PIDS=(); LOGS=(); NAMES=()
@@ -119,15 +131,18 @@ done
 wait_pids "Node labeling" "${PIDS[@]}"
 ok "Nodes labeled"
 
-# ── Step 4: Load image in parallel ───────────────────────────────────────────
-info "Loading ${IMAGE_NAME} into all clusters..."
+# ── Step 4: Load images in parallel ──────────────────────────────────────────
+info "Loading ${IMAGE_NAME} and ${KAFKA_IMAGE_NAME} into all clusters..."
 PIDS=()
 for cluster in "${CLUSTERS[@]}"; do
-  kind load docker-image "${IMAGE_NAME}" --name "${cluster}" &>/dev/null &
+  (
+    kind load docker-image "${IMAGE_NAME}" --name "${cluster}" &>/dev/null
+    kind load docker-image "${KAFKA_IMAGE_NAME}" --name "${cluster}" &>/dev/null
+  ) &
   PIDS+=($!)
 done
 wait_pids "Image load" "${PIDS[@]}"
-ok "Image loaded into all clusters"
+ok "Images loaded into all clusters"
 
 # ── Step 5a: Install CNI plugins in parallel ──────────────────────────────────
 # Kind nodes with disableDefaultCNI only ship flannel/host-local/loopback/portmap/ptp.

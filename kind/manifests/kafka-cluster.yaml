@@ -4,8 +4,8 @@ metadata:
   name: my-kafka
   namespace: kafka
 spec:
-  kafkaImage: apache/kafka:3.7.0
-  kafkaVersion: "3.7"
+  kafkaImage: kafka-ubi:4.0.0
+  kafkaVersion: "4.0"
   clusterRollOrder: ["A", "B", "C"]
   clusters:
     - id: A

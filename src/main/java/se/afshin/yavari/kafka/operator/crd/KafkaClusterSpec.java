@@ -9,8 +9,8 @@ import java.util.Map;
 
 public class KafkaClusterSpec {
 
-    private String kafkaImage = "apache/kafka:3.7.0";
-    private String kafkaVersion = "3.7";
+    private String kafkaImage = "kafka-ubi:4.0.0";
+    private String kafkaVersion = "4.0";
     private Integer targetMetadataVersion;
 
     /** Ordered list of all clusters participating in the KRaft quorum.

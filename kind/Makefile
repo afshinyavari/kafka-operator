@@ -3,6 +3,8 @@ export PATH   := $(HOME)/.local/bin:$(PATH)
 CLUSTERS      := kafka-a kafka-b kafka-c
 NAMESPACE     := kafka
 IMAGE         := kafka-operator:dev
+KAFKA_IMAGE   := kafka-ubi:4.0.0
+KAFKA_VERSION := 4.0.0
 OPERATOR_DIR  := ..
 
 .PHONY: all setup mcs-setup teardown status quorum logs-a logs-b logs-c build image help
@@ -55,6 +57,16 @@ cr-status:  ## Show KafkaCluster CR status on all clusters
 	  echo "=== $$cluster ==="; \
 	  kubectl --context kind-$$cluster -n $(NAMESPACE) get kafkacluster my-kafka -o jsonpath='{.status}' 2>/dev/null | python3 -m json.tool 2>/dev/null || echo "(not found)"; \
 	  echo ""; \
+	done
+
+kafka-image:  ## Build the UBI9-based Kafka image
+	docker build --build-arg KAFKA_VERSION=$(KAFKA_VERSION) \
+	  -t $(KAFKA_IMAGE) $(OPERATOR_DIR)/kafka-image
+
+reload-kafka-image:  ## Rebuild + reload Kafka image into Kind clusters
+	$(MAKE) kafka-image
+	@for cluster in $(CLUSTERS); do \
+	  kind load docker-image $(KAFKA_IMAGE) --name $$cluster; \
 	done
 
 reload-image:  ## Rebuild + reload image without recreating clusters

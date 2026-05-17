@@ -222,7 +222,7 @@ class KafkaClusterReconcilerTest {
         cr.setMetadata(meta);
         KafkaClusterSpec spec = new KafkaClusterSpec();
         spec.setClusters(clusters);
-        spec.setKafkaImage("apache/kafka:3.7.0");
+        spec.setKafkaImage("kafka-ubi:4.0.0");
         cr.setSpec(spec);
         return cr;
     }

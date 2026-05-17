@@ -29,7 +29,7 @@ class PodTemplateFactoryTest {
     private static final String NS = "kafka";
     private static final String CLUSTER_NAME = "my-cluster";
     private static final String POOL_NAME = "brokers-a";
-    private static final String IMAGE = "apache/kafka:3.7.0";
+    private static final String IMAGE = "kafka-ubi:4.0.0";
     private static final String RACK_KEY = "topology.kubernetes.io/zone";
 
     private PodTemplateFactory factory;
