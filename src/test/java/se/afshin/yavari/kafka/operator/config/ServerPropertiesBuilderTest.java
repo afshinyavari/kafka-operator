@@ -37,13 +37,13 @@ class ServerPropertiesBuilderTest {
 
         Map<String, String> props = builder.buildProperties(
                 cr, poolSpec, 0, 0,
-                "1000@ctrl-a:9093,1001@ctrl-b:9093,1002@ctrl-c:9093",
+                "10000@ctrl-a:9093,10001@ctrl-b:9093,10002@ctrl-c:9093",
                 "ctrl-a.example.com:9093",
                 null);
 
         assertThat(props.get("process.roles")).isEqualTo("controller");
-        assertThat(props.get("node.id")).isEqualTo("1000");
-        assertThat(props.get("controller.quorum.voters")).contains("1000@ctrl-a:9093");
+        assertThat(props.get("node.id")).isEqualTo("10000");
+        assertThat(props.get("controller.quorum.voters")).contains("10000@ctrl-a:9093");
         assertThat(props.get("listeners")).isEqualTo("CONTROLLER://0.0.0.0:9093");
         assertThat(props).doesNotContainKey("advertised.listeners");
         assertThat(props).doesNotContainKey("inter.broker.listener.name");
@@ -58,12 +58,12 @@ class ServerPropertiesBuilderTest {
 
         Map<String, String> props = builder.buildProperties(
                 cr, poolSpec, 1, 2,
-                "1000@ctrl-a:9093,1001@ctrl-b:9093",
+                "10000@ctrl-a:9093,10001@ctrl-b:9093",
                 null,
                 "broker-b-2.example.com:9092");
 
         assertThat(props.get("process.roles")).isEqualTo("broker");
-        assertThat(props.get("node.id")).isEqualTo("102");  // clusterIndex=1, poolLocalIndex=2
+        assertThat(props.get("node.id")).isEqualTo("1002");  // clusterIndex=1, poolLocalIndex=2
         assertThat(props.get("inter.broker.listener.name")).isEqualTo("PLAINTEXT");
         assertThat(props.get("listeners")).isEqualTo("PLAINTEXT://0.0.0.0:9092");
         assertThat(props.get("listener.security.protocol.map")).isEqualTo("CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT");
@@ -78,7 +78,7 @@ class ServerPropertiesBuilderTest {
 
         Map<String, String> props = builder.buildProperties(
                 cr, poolSpec, 0, 0,
-                "1000@ctrl-a:9093",
+                "10000@ctrl-a:9093",
                 "ctrl-a.example.com:9093",
                 "broker-a.example.com:9092");
 
@@ -96,7 +96,7 @@ class ServerPropertiesBuilderTest {
         poolSpec.setConfig(Map.of("log.retention.hours", "24"));
 
         Map<String, String> props = builder.buildProperties(
-                cr, poolSpec, 0, 0, "1000@x:9093", null, "b:9092");
+                cr, poolSpec, 0, 0, "10000@x:9093", null, "b:9092");
 
         assertThat(props.get("log.retention.hours")).isEqualTo("24");
         assertThat(props.get("num.partitions")).isEqualTo("3");

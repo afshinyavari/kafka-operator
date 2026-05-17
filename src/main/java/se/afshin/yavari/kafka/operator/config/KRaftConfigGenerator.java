@@ -15,16 +15,17 @@ import java.util.List;
 public class KRaftConfigGenerator {
 
     /**
-     * Controller node IDs start at 1000 to avoid collision with broker IDs.
+     * Controller node IDs start at 10000 to avoid collision with broker IDs.
      * Cluster at index i gets controller nodeId = CONTROLLER_BASE + i.
+     * Supports up to 10 clusters with 1000 brokers each before collision.
      */
-    public static final int CONTROLLER_BASE = 1000;
+    public static final int CONTROLLER_BASE = 10000;
 
     /**
      * Broker node IDs: clusterIndex * BROKER_MULTIPLIER + poolLocalIndex.
-     * Supports up to 100 brokers per cluster before colliding with the next cluster's range.
+     * Supports up to 1000 brokers per cluster before colliding with the next cluster's range.
      */
-    public static final int BROKER_MULTIPLIER = 100;
+    public static final int BROKER_MULTIPLIER = 1000;
 
     public int controllerNodeId(int clusterIndex) {
         return CONTROLLER_BASE + clusterIndex;

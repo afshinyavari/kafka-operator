@@ -116,7 +116,7 @@ class KafkaClusterReconcilerTest {
         stubBrokerPods(List.of());
 
         // KRaftConfigGenerator stubs
-        when(kraftConfig.buildQuorumVoters(any())).thenReturn("1000@ctrl-a:9093");
+        when(kraftConfig.buildQuorumVoters(any())).thenReturn("10000@ctrl-a:9093");
         when(kraftConfig.clusterIdFrom(any())).thenReturn("cluster-id-abc");
 
         reconciler = new KafkaClusterReconciler();
@@ -174,7 +174,7 @@ class KafkaClusterReconcilerTest {
                 nodePool("broker-pool", NodeRole.BROKER),
                 nodePool("ctrl-pool", NodeRole.CONTROLLER)
         ));
-        stubBrokerPods(List.of(podWithNodeId(0))); // broker pod (nodeId < 1000) still running
+        stubBrokerPods(List.of(podWithNodeId(0))); // broker pod (nodeId < CONTROLLER_BASE) still running
 
         reconciler.cleanup(cr, context);
 

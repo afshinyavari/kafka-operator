@@ -120,7 +120,7 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
                 .anyMatch(p -> {
                     String nodeIdStr = p.getMetadata().getLabels()
                             .getOrDefault(KafkaPodSet.NODE_ID_LABEL, "-1");
-                    try { return Integer.parseInt(nodeIdStr) < 1000; }
+                    try { return Integer.parseInt(nodeIdStr) < KRaftConfigGenerator.CONTROLLER_BASE; }
                     catch (NumberFormatException e) { return false; }
                 });
 

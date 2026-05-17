@@ -249,7 +249,7 @@ class KafkaNodePoolReconcilerTest {
         meta.setName(QUORUM_CM_NAME);
         cm.setMetadata(meta);
         cm.setData(Map.of(
-                "controller.quorum.voters", "1000@ctrl-a:9093",
+                "controller.quorum.voters", "10000@ctrl-a:9093",
                 "cluster.id", "test-cluster-id"
         ));
         return cm;

@@ -22,17 +22,17 @@ class KRaftConfigGeneratorTest {
 
     @Test
     void controllerNodeId() {
-        assertThat(gen.controllerNodeId(0)).isEqualTo(1000);
-        assertThat(gen.controllerNodeId(1)).isEqualTo(1001);
-        assertThat(gen.controllerNodeId(2)).isEqualTo(1002);
+        assertThat(gen.controllerNodeId(0)).isEqualTo(10000);
+        assertThat(gen.controllerNodeId(1)).isEqualTo(10001);
+        assertThat(gen.controllerNodeId(2)).isEqualTo(10002);
     }
 
     @Test
     void brokerNodeId() {
         assertThat(gen.brokerNodeId(0, 0)).isEqualTo(0);
         assertThat(gen.brokerNodeId(0, 2)).isEqualTo(2);
-        assertThat(gen.brokerNodeId(1, 0)).isEqualTo(100);
-        assertThat(gen.brokerNodeId(2, 1)).isEqualTo(201);
+        assertThat(gen.brokerNodeId(1, 0)).isEqualTo(1000);
+        assertThat(gen.brokerNodeId(2, 1)).isEqualTo(2001);
     }
 
     @Test
@@ -43,7 +43,7 @@ class KRaftConfigGeneratorTest {
                 cluster("C", "ctrl-c.example.com:9093")
         );
         assertThat(gen.buildQuorumVoters(spec))
-                .isEqualTo("1000@ctrl-a.example.com:9093,1001@ctrl-b.example.com:9093,1002@ctrl-c.example.com:9093");
+                .isEqualTo("10000@ctrl-a.example.com:9093,10001@ctrl-b.example.com:9093,10002@ctrl-c.example.com:9093");
     }
 
     @Test
