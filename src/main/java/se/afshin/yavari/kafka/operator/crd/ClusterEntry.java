@@ -15,6 +15,12 @@ public class ClusterEntry {
     @ValidationRule(value = "self.size() > 0", message = "controllerAdvertisedAddress must not be blank")
     private String controllerAdvertisedAddress;
 
+    /** HTTP address of the operator management server on this cluster.
+     *  Format: "host:8080". Required when spec.clusterRollOrder is used for cross-cluster
+     *  roll sequencing. Each cluster must export its operator service uniquely
+     *  (e.g. "kafka-operator-a.kafka.svc.clusterset.local:8080"). */
+    private String operatorAddress;
+
     public String getId() { return id; }
     public void setId(String id) { this.id = id; }
 
@@ -22,4 +28,7 @@ public class ClusterEntry {
     public void setControllerAdvertisedAddress(String controllerAdvertisedAddress) {
         this.controllerAdvertisedAddress = controllerAdvertisedAddress;
     }
+
+    public String getOperatorAddress() { return operatorAddress; }
+    public void setOperatorAddress(String operatorAddress) { this.operatorAddress = operatorAddress; }
 }

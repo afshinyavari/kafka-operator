@@ -24,6 +24,12 @@ public class KafkaClusterSpec {
     /** Shared Kafka config properties merged into all node pool configs. */
     private Map<String, String> config = new HashMap<>();
 
+    /** Optional ordered list of cluster IDs for sequenced rolling updates.
+     *  The first cluster in the list rolls first; each subsequent cluster waits until
+     *  all preceding clusters report upgradePhase=IDLE. If absent, no cross-cluster
+     *  coordination is performed (existing behaviour). */
+    private List<String> clusterRollOrder;
+
     public String getKafkaImage() { return kafkaImage; }
     public void setKafkaImage(String kafkaImage) { this.kafkaImage = kafkaImage; }
 
@@ -38,4 +44,7 @@ public class KafkaClusterSpec {
 
     public Map<String, String> getConfig() { return config; }
     public void setConfig(Map<String, String> config) { this.config = config; }
+
+    public List<String> getClusterRollOrder() { return clusterRollOrder; }
+    public void setClusterRollOrder(List<String> clusterRollOrder) { this.clusterRollOrder = clusterRollOrder; }
 }

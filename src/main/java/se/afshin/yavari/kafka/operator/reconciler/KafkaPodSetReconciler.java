@@ -19,6 +19,7 @@ import java.time.Duration;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
+import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSetStatus;
@@ -31,6 +32,8 @@ import se.afshin.yavari.kafka.operator.podset.PodSpecHasher;
 import se.afshin.yavari.kafka.operator.podset.PvcFactory;
 import se.afshin.yavari.kafka.operator.rolling.IsrChecker;
 import se.afshin.yavari.kafka.operator.rolling.RollingUpdateController;
+
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 
 import java.util.*;
 import java.util.stream.Collectors;
@@ -48,6 +51,8 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
     @Inject PodSpecHasher podSpecHasher;
     @Inject PvcFactory pvcFactory;
     @Inject OperatorMetrics metrics;
+    @Inject se.afshin.yavari.kafka.operator.rolling.CrossClusterRollCoordinator rollCoordinator;
+    @ConfigProperty(name = "kafka.cluster.id") String localClusterId;
 
     @Override
     public Map<String, EventSource> prepareEventSources(EventSourceContext<KafkaPodSet> context) {
@@ -115,6 +120,19 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
                             actual.getMetadata().getName(), nodeId);
                     pendingScaleDown = true;
                 }
+            }
+        }
+
+        // Cross-cluster roll order gate: for controller pools, check that all preceding clusters
+        // in spec.clusterRollOrder have finished rolling before we begin rolling our controllers.
+        if (controllerPool) {
+            KafkaCluster parentCluster = lookupParentCluster(podSet, namespace);
+            if (parentCluster != null
+                    && !rollCoordinator.isMyTurnToRoll(parentCluster.getSpec(), localClusterId)) {
+                LOG.infof("KafkaPodSet %s/%s: cross-cluster roll gate — not my turn yet, deferring 15s",
+                        namespace, name);
+                podSet.setStatus(status);
+                return UpdateControl.patchStatus(podSet).rescheduleAfter(Duration.ofSeconds(15));
             }
         }
 
@@ -220,6 +238,12 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
         return pod.getStatus().getConditions().stream()
                 .filter(c -> "Ready".equals(c.getType()))
                 .anyMatch(c -> "True".equals(c.getStatus()));
+    }
+
+    private KafkaCluster lookupParentCluster(KafkaPodSet podSet, String namespace) {
+        String clusterName = podSet.getMetadata().getLabels().get(KafkaPodSet.CLUSTER_LABEL);
+        if (clusterName == null) return null;
+        return client.resources(KafkaCluster.class).inNamespace(namespace).withName(clusterName).get();
     }
 
     private List<NodeRole> resolveRoles(KafkaPodSet podSet, String namespace) {

@@ -6,13 +6,17 @@ metadata:
 spec:
   kafkaImage: apache/kafka:3.7.0
   kafkaVersion: "3.7"
+  clusterRollOrder: ["A", "B", "C"]
   clusters:
     - id: A
       controllerAdvertisedAddress: "${CTRL_A_ADDR}"
+      operatorAddress: "kafka-operator-a.kafka.svc.clusterset.local:8080"
     - id: B
       controllerAdvertisedAddress: "${CTRL_B_ADDR}"
+      operatorAddress: "kafka-operator-b.kafka.svc.clusterset.local:8080"
     - id: C
       controllerAdvertisedAddress: "${CTRL_C_ADDR}"
+      operatorAddress: "kafka-operator-c.kafka.svc.clusterset.local:8080"
   config:
     log.retention.hours: "168"
     num.partitions: "1"

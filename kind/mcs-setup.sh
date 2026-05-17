@@ -298,6 +298,19 @@ done
 wait_pids "Operator deploy" "${PIDS[@]}"
 ok "Operator deployed with MCS enabled"
 
+# ── Step 12b: Export per-cluster operator service for cross-cluster roll coordination ──
+info "Exporting operator HTTP service for cross-cluster roll order checks..."
+PIDS=()
+for i in "${!CLUSTERS[@]}"; do
+  cluster="${CLUSTERS[$i]}"
+  cluster_id="${CLUSTER_IDS[$i]}"
+  CLUSTER_ID_LOWER="${cluster_id,,}" envsubst < "${MANIFESTS_DIR}/operator-service-export.yaml" | \
+    kubectl --context "kind-${cluster}" apply --server-side -f - &>/dev/null &
+  PIDS+=($!)
+done
+wait_pids "Operator ServiceExport" "${PIDS[@]}"
+ok "Operator services exported (kafka-operator-{a,b,c}.kafka.svc.clusterset.local:8080)"
+
 # ── Step 13: Apply KafkaCluster CR in parallel ────────────────────────────────
 info "Applying KafkaCluster CR (controllers via svc.clusterset.local)..."
 export CTRL_A_ADDR="controllers-a-headless.${NAMESPACE}.svc.clusterset.local:9093"

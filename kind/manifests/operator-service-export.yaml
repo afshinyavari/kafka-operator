@@ -1,0 +1,23 @@
+# Per-cluster uniquely-named Service + ServiceExport for the operator management HTTP endpoint.
+# Applied with envsubst: CLUSTER_ID_LOWER=a envsubst < operator-service-export.yaml | kubectl apply -f -
+#
+# Each cluster exports its own service under a unique name so cross-cluster MCS DNS
+# (kafka-operator-a/b/c.kafka.svc.clusterset.local) resolves deterministically to the
+# correct cluster's operator, without Submariner round-robin ambiguity.
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-operator-${CLUSTER_ID_LOWER}
+  namespace: kafka
+spec:
+  selector:
+    app: kafka-operator
+  ports:
+    - port: 8080
+      targetPort: 8080
+---
+apiVersion: multicluster.x-k8s.io/v1alpha1
+kind: ServiceExport
+metadata:
+  name: kafka-operator-${CLUSTER_ID_LOWER}
+  namespace: kafka

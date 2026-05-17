@@ -54,6 +54,12 @@
       <scope>provided</scope>
     </dependency>
 
+    <!-- REST endpoint (upgrade-phase, used by cross-cluster roll coordinator) -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-rest</artifactId>
+    </dependency>
+
     <!-- Health endpoints (/healthz) -->
     <dependency>
       <groupId>io.quarkus</groupId>

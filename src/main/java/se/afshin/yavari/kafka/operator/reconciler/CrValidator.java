@@ -1,5 +1,6 @@
 package se.afshin.yavari.kafka.operator.reconciler;
 
+import se.afshin.yavari.kafka.operator.crd.ClusterEntry;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
@@ -60,6 +61,18 @@ class CrValidator {
             return ValidationResult.fail(
                     "KAFKA_CLUSTER_ID '" + localClusterId + "' is not in spec.clusters "
                     + knownIds + "; update the operator's KAFKA_CLUSTER_ID or add this cluster to spec.clusters");
+        }
+
+        List<String> rollOrder = spec.getClusterRollOrder();
+        if (rollOrder != null && !rollOrder.isEmpty()) {
+            Set<String> knownIds = spec.getClusters().stream()
+                    .map(ClusterEntry::getId).collect(Collectors.toSet());
+            for (String id : rollOrder) {
+                if (!knownIds.contains(id)) {
+                    return ValidationResult.fail(
+                            "spec.clusterRollOrder contains unknown cluster id '" + id + "'");
+                }
+            }
         }
 
         if (spec.getKafkaImage() == null || spec.getKafkaImage().isBlank()) {
