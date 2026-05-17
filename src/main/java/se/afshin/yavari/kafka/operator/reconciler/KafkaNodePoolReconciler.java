@@ -2,12 +2,14 @@ package se.afshin.yavari.kafka.operator.reconciler;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
+import io.fabric8.kubernetes.api.model.GenericKubernetesResourceBuilder;
 import io.fabric8.kubernetes.api.model.IntOrString;
 import io.fabric8.kubernetes.api.model.LabelSelectorBuilder;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.Service;
+import io.fabric8.kubernetes.api.model.ServiceBuilder;
 import io.fabric8.kubernetes.api.model.policy.v1.PodDisruptionBudget;
 import io.fabric8.kubernetes.api.model.policy.v1.PodDisruptionBudgetBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -31,6 +33,7 @@ import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePoolStatus;
+import se.afshin.yavari.kafka.operator.crd.MetricsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSetSpec;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
@@ -129,7 +132,9 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
 
         // Build and apply per-pool ConfigMap (server.properties + start script)
         ConfigMap poolCm = poolConfigMapBuilder.build(pool, cluster, namespace, clusterIndex, quorumVoters, controllerAddr);
-        String configHash = Integer.toHexString(poolCm.getData().get("server.properties.template").hashCode());
+        String configHash = Integer.toHexString(
+                (poolCm.getData().get("server.properties.template")
+                 + poolCm.getData().get("start.sh")).hashCode());
         client.configMaps().inNamespace(namespace).resource(poolCm).serverSideApply();
 
         // Build and apply headless Service (+ optional ServiceExport for MCS)
@@ -140,6 +145,13 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
 
         // Apply PodDisruptionBudget — maxUnavailable=1, no user config needed
         applyPdb(pool, namespace, clusterName);
+
+        // Apply metrics Service + ServiceMonitor when metricsConfig is enabled
+        MetricsConfig metrics = cluster.getSpec().getMetricsConfig();
+        if (metrics != null && metrics.getConfigMapRef() != null) {
+            applyMetricsService(pool, namespace, clusterName);
+            applyServiceMonitor(pool, namespace, clusterName);
+        }
 
         // Build desired pod list and apply KafkaPodSet
         List<PodEntry> desiredPods = podTemplateFactory.build(
@@ -171,6 +183,13 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         client.services().inNamespace(namespace).withName(pool.getMetadata().getName() + "-headless").delete();
         client.policy().v1().podDisruptionBudget().inNamespace(namespace)
               .withName(pool.getMetadata().getName() + "-pdb").delete();
+        client.services().inNamespace(namespace)
+              .withName(pool.getMetadata().getName() + "-metrics").delete();
+        try {
+            client.genericKubernetesResources("monitoring.coreos.com/v1", "ServiceMonitor")
+                  .inNamespace(namespace)
+                  .withName(pool.getMetadata().getName() + "-metrics").delete();
+        } catch (Exception ignored) {}
         if (mcsEnabled) {
             client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
                   .inNamespace(namespace)
@@ -203,6 +222,63 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
                 .endSpec()
                 .build();
         client.policy().v1().podDisruptionBudget().inNamespace(namespace).resource(pdb).serverSideApply();
+    }
+
+    private void applyMetricsService(KafkaNodePool pool, String namespace, String clusterName) {
+        Service svc = new ServiceBuilder()
+                .withNewMetadata()
+                    .withName(pool.getMetadata().getName() + "-metrics")
+                    .withNamespace(namespace)
+                    .withLabels(Map.of(
+                        KafkaPodSet.CLUSTER_LABEL,    clusterName,
+                        KafkaPodSet.NODE_POOL_LABEL,  pool.getMetadata().getName(),
+                        KafkaPodSet.MANAGED_BY_LABEL, KafkaPodSet.MANAGED_BY_VALUE
+                    ))
+                    .withOwnerReferences(poolOwnerRef(pool))
+                .endMetadata()
+                .withNewSpec()
+                    .withSelector(Map.of(
+                        KafkaPodSet.NODE_POOL_LABEL, pool.getMetadata().getName(),
+                        KafkaPodSet.CLUSTER_LABEL,   clusterName))
+                    .addNewPort()
+                        .withName("jmx")
+                        .withPort(9101)
+                        .withTargetPort(new IntOrString(9101))
+                    .endPort()
+                .endSpec()
+                .build();
+        client.services().inNamespace(namespace).resource(svc).serverSideApply();
+    }
+
+    private void applyServiceMonitor(KafkaNodePool pool, String namespace, String clusterName) {
+        Map<String, Object> spec = Map.of(
+            "selector", Map.of("matchLabels", Map.of(
+                KafkaPodSet.NODE_POOL_LABEL,  pool.getMetadata().getName(),
+                KafkaPodSet.CLUSTER_LABEL,    clusterName,
+                KafkaPodSet.MANAGED_BY_LABEL, KafkaPodSet.MANAGED_BY_VALUE)),
+            "endpoints", List.of(Map.of("port", "jmx", "interval", "30s")));
+        GenericKubernetesResource sm = new GenericKubernetesResourceBuilder()
+                .withApiVersion("monitoring.coreos.com/v1")
+                .withKind("ServiceMonitor")
+                .withNewMetadata()
+                    .withName(pool.getMetadata().getName() + "-metrics")
+                    .withNamespace(namespace)
+                    .withLabels(Map.of(
+                        KafkaPodSet.CLUSTER_LABEL,    clusterName,
+                        KafkaPodSet.NODE_POOL_LABEL,  pool.getMetadata().getName(),
+                        KafkaPodSet.MANAGED_BY_LABEL, KafkaPodSet.MANAGED_BY_VALUE
+                    ))
+                    .withOwnerReferences(poolOwnerRef(pool))
+                .endMetadata()
+                .addToAdditionalProperties("spec", spec)
+                .build();
+        try {
+            client.genericKubernetesResources("monitoring.coreos.com/v1", "ServiceMonitor")
+                  .inNamespace(namespace).resource(sm).serverSideApply();
+        } catch (Exception e) {
+            LOG.warnf("ServiceMonitor CRD not available — metrics monitoring skipped for %s: %s",
+                    pool.getMetadata().getName() + "-metrics", e.getMessage());
+        }
     }
 
     private void applyServiceExport(GenericKubernetesResource export, String namespace, String poolName) {

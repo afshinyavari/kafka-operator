@@ -9,6 +9,7 @@ import se.afshin.yavari.kafka.operator.config.ServerPropertiesBuilder;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
+import se.afshin.yavari.kafka.operator.crd.MetricsConfig;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 
 import java.util.List;
@@ -40,7 +41,9 @@ public class PoolConfigMapBuilder {
         }
 
         String content = propsBuilder.toPropertiesString(props);
-        String startScript = scriptBuilder.build(pool, clusterIndex, namespace);
+        MetricsConfig metrics = cluster.getSpec().getMetricsConfig();
+        boolean hasMetrics = metrics != null && metrics.getConfigMapRef() != null;
+        String startScript = scriptBuilder.build(pool, clusterIndex, namespace, hasMetrics);
 
         return new ConfigMapBuilder()
                 .withNewMetadata()

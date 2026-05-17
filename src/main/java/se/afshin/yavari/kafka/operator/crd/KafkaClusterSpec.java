@@ -24,6 +24,10 @@ public class KafkaClusterSpec {
     /** Shared Kafka config properties merged into all node pool configs. */
     private Map<String, String> config = new HashMap<>();
 
+    /** When set, enables JMX metrics via the bundled jmx_prometheus_javaagent.
+     *  configMapRef must name a ConfigMap in the same namespace with a jmx-config.yaml key. */
+    private MetricsConfig metricsConfig;
+
     /** Optional ordered list of cluster IDs for sequenced rolling updates.
      *  The first cluster in the list rolls first; each subsequent cluster waits until
      *  all preceding clusters report upgradePhase=IDLE. If absent, no cross-cluster
@@ -47,4 +51,7 @@ public class KafkaClusterSpec {
 
     public List<String> getClusterRollOrder() { return clusterRollOrder; }
     public void setClusterRollOrder(List<String> clusterRollOrder) { this.clusterRollOrder = clusterRollOrder; }
+
+    public MetricsConfig getMetricsConfig() { return metricsConfig; }
+    public void setMetricsConfig(MetricsConfig metricsConfig) { this.metricsConfig = metricsConfig; }
 }

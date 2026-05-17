@@ -12,9 +12,14 @@ public class StartupScriptBuilder {
     @ConfigProperty(name = "kafka.networking.mcs-enabled")
     boolean mcsEnabled;
 
-    public String build(KafkaNodePool pool, int clusterIndex, String namespace) {
+    public String build(KafkaNodePool pool, int clusterIndex, String namespace, boolean hasMetrics) {
         boolean isBroker = pool.getSpec().getRoles().contains(NodeRole.BROKER);
         String poolName = pool.getMetadata().getName();
+        // Set javaagent inline in start.sh so kubectl exec commands don't inherit it
+        String jmxExport = hasMetrics
+                ? "export KAFKA_OPTS=\"${KAFKA_OPTS:+${KAFKA_OPTS} }"
+                  + "-javaagent:/opt/jmx-exporter/jmx-exporter.jar=9101:/opt/jmx-exporter-config/jmx-config.yaml\"\n"
+                : "";
 
         if (!isBroker) {
             return "#!/bin/bash\nset -euo pipefail\n"
@@ -24,6 +29,7 @@ public class StartupScriptBuilder {
                     + "-t \"${KAFKA_CLUSTER_ID}\" "
                     + "-c /tmp/server.properties "
                     + "--ignore-formatted\n"
+                    + jmxExport
                     + "exec /opt/kafka/bin/kafka-server-start.sh /tmp/server.properties\n";
         }
 
@@ -50,6 +56,7 @@ public class StartupScriptBuilder {
                 + "-t \"${KAFKA_CLUSTER_ID}\" "
                 + "-c /tmp/server.properties "
                 + "--ignore-formatted\n"
+                + jmxExport
                 + "exec /opt/kafka/bin/kafka-server-start.sh /tmp/server.properties\n";
     }
 }

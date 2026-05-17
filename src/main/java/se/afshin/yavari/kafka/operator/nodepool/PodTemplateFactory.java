@@ -30,6 +30,7 @@ import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
+import se.afshin.yavari.kafka.operator.crd.MetricsConfig;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
 
 import java.util.ArrayList;
@@ -58,6 +59,8 @@ public class PodTemplateFactory {
 
         String rackTopologyKey = pool.getSpec().getRackTopologyKey();
         boolean hasRack = isBroker && rackTopologyKey != null && !rackTopologyKey.isBlank();
+        MetricsConfig metrics = cluster.getSpec().getMetricsConfig();
+        boolean hasMetrics = metrics != null && metrics.getConfigMapRef() != null;
 
         // Resolve zones once per pool — sorted for deterministic assignment
         List<String> zones = hasRack ? resolveZones(rackTopologyKey) : List.of();
@@ -83,10 +86,10 @@ public class PodTemplateFactory {
 
             String zone = zones.isEmpty() ? "" : zones.get(i % zones.size());
 
-            List<Volume> volumes = buildVolumes(poolName, podName);
-            List<EnvVar> env = buildEnv(kafkaClusterId, kafkaVersion, configHash, isController, isBroker, zone);
-            List<VolumeMount> mounts = buildMounts();
-            List<ContainerPort> ports = buildContainerPorts(isController, isBroker);
+            List<Volume> volumes = buildVolumes(poolName, podName, hasMetrics, metrics);
+            List<EnvVar> env = buildEnv(kafkaClusterId, kafkaVersion, configHash, isController, isBroker, zone, hasMetrics);
+            List<VolumeMount> mounts = buildMounts(hasMetrics);
+            List<ContainerPort> ports = buildContainerPorts(isController, isBroker, hasMetrics);
 
             Container container = new ContainerBuilder()
                     .withName("kafka")
@@ -190,26 +193,36 @@ public class PodTemplateFactory {
                 .build();
     }
 
-    private List<Volume> buildVolumes(String poolName, String podName) {
-        return List.of(
-            new VolumeBuilder()
-                    .withName("config")
+    private List<Volume> buildVolumes(String poolName, String podName,
+                                      boolean hasMetrics, MetricsConfig metrics) {
+        List<Volume> volumes = new ArrayList<>();
+        volumes.add(new VolumeBuilder()
+                .withName("config")
+                .withNewConfigMap()
+                    .withName(poolName + "-config")
+                    .withDefaultMode(0755)
+                .endConfigMap()
+                .build());
+        volumes.add(new VolumeBuilder()
+                .withName("data")
+                .withNewPersistentVolumeClaim()
+                    .withClaimName("data-" + podName)
+                .endPersistentVolumeClaim()
+                .build());
+        if (hasMetrics) {
+            volumes.add(new VolumeBuilder()
+                    .withName("jmx-config")
                     .withNewConfigMap()
-                        .withName(poolName + "-config")
-                        .withDefaultMode(0755)
+                        .withName(metrics.getConfigMapRef())
                     .endConfigMap()
-                    .build(),
-            new VolumeBuilder()
-                    .withName("data")
-                    .withNewPersistentVolumeClaim()
-                        .withClaimName("data-" + podName)
-                    .endPersistentVolumeClaim()
-                    .build()
-        );
+                    .build());
+        }
+        return volumes;
     }
 
     private List<EnvVar> buildEnv(String kafkaClusterId, String kafkaVersion, String configHash,
-                                   boolean isController, boolean isBroker, String zone) {
+                                   boolean isController, boolean isBroker, String zone,
+                                   boolean hasMetrics) {
         List<EnvVar> env = new ArrayList<>();
         env.add(new EnvVarBuilder().withName("KAFKA_HEAP_OPTS")
                 .withValue(isController ? "-Xmx512m -Xms512m" : "-Xmx1g -Xms1g").build());
@@ -238,20 +251,27 @@ public class PodTemplateFactory {
         return env;
     }
 
-    private List<VolumeMount> buildMounts() {
-        return List.of(
-            new VolumeMountBuilder().withName("config").withMountPath("/opt/kafka-config").build(),
-            new VolumeMountBuilder().withName("data").withMountPath("/var/lib/kafka/data").build()
-        );
+    private List<VolumeMount> buildMounts(boolean hasMetrics) {
+        List<VolumeMount> mounts = new ArrayList<>();
+        mounts.add(new VolumeMountBuilder().withName("config").withMountPath("/opt/kafka-config").build());
+        mounts.add(new VolumeMountBuilder().withName("data").withMountPath("/var/lib/kafka/data").build());
+        if (hasMetrics) {
+            mounts.add(new VolumeMountBuilder().withName("jmx-config").withMountPath("/opt/jmx-exporter-config").build());
+        }
+        return mounts;
     }
 
-    private List<ContainerPort> buildContainerPorts(boolean isController, boolean isBroker) {
+    private List<ContainerPort> buildContainerPorts(boolean isController, boolean isBroker,
+                                                    boolean hasMetrics) {
         List<ContainerPort> ports = new ArrayList<>();
         if (isBroker) {
             ports.add(new ContainerPortBuilder().withName("kafka").withContainerPort(BROKER_PORT).build());
         }
         if (isController) {
             ports.add(new ContainerPortBuilder().withName("controller").withContainerPort(CONTROLLER_PORT).build());
+        }
+        if (hasMetrics) {
+            ports.add(new ContainerPortBuilder().withName("jmx").withContainerPort(9101).build());
         }
         return ports;
     }
