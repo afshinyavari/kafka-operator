@@ -16,10 +16,13 @@ import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.PodSpecBuilder;
 import io.fabric8.kubernetes.api.model.PreferredSchedulingTermBuilder;
 import io.fabric8.kubernetes.api.model.ProbeBuilder;
+import io.fabric8.kubernetes.api.model.TopologySpreadConstraint;
+import io.fabric8.kubernetes.api.model.TopologySpreadConstraintBuilder;
 import io.fabric8.kubernetes.api.model.Volume;
 import io.fabric8.kubernetes.api.model.VolumeBuilder;
 import io.fabric8.kubernetes.api.model.VolumeMount;
 import io.fabric8.kubernetes.api.model.VolumeMountBuilder;
+import io.fabric8.kubernetes.api.model.WeightedPodAffinityTermBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
@@ -110,8 +113,9 @@ public class PodTemplateFactory {
                     .withHostname(podName)
                     .withSubdomain(poolName + "-headless");
 
-            if (hasRack && !zone.isEmpty()) {
-                podSpecBuilder.withAffinity(buildZoneAffinity(rackTopologyKey, zone));
+            podSpecBuilder.withAffinity(buildAffinity(rackTopologyKey, hasRack ? zone : "", poolName, clusterName));
+            if (hasRack) {
+                podSpecBuilder.withTopologySpreadConstraints(buildTopologySpread(rackTopologyKey, poolName, clusterName));
             }
 
             PodEntry entry = new PodEntry();
@@ -133,9 +137,11 @@ public class PodTemplateFactory {
                 .collect(Collectors.toList());
     }
 
-    private Affinity buildZoneAffinity(String rackTopologyKey, String zone) {
-        return new AffinityBuilder()
-                .withNewNodeAffinity()
+    private Affinity buildAffinity(String rackTopologyKey, String zone, String poolName, String clusterName) {
+        AffinityBuilder builder = new AffinityBuilder();
+
+        if (rackTopologyKey != null && !zone.isEmpty()) {
+            builder.withNewNodeAffinity()
                     .addToPreferredDuringSchedulingIgnoredDuringExecution(
                         new PreferredSchedulingTermBuilder()
                             .withWeight(100)
@@ -147,7 +153,40 @@ public class PodTemplateFactory {
                                     .build())
                                 .build())
                             .build())
-                .endNodeAffinity()
+                    .endNodeAffinity();
+        }
+
+        // Prefer not to co-schedule pods from the same pool on the same node
+        builder.withNewPodAntiAffinity()
+                .addToPreferredDuringSchedulingIgnoredDuringExecution(
+                    new WeightedPodAffinityTermBuilder()
+                        .withWeight(100)
+                        .withNewPodAffinityTerm()
+                            .withTopologyKey("kubernetes.io/hostname")
+                            .withNewLabelSelector()
+                                .withMatchLabels(Map.of(
+                                    KafkaPodSet.NODE_POOL_LABEL, poolName,
+                                    KafkaPodSet.CLUSTER_LABEL,   clusterName
+                                ))
+                            .endLabelSelector()
+                        .endPodAffinityTerm()
+                        .build())
+                .endPodAntiAffinity();
+
+        return builder.build();
+    }
+
+    private TopologySpreadConstraint buildTopologySpread(String topologyKey, String poolName, String clusterName) {
+        return new TopologySpreadConstraintBuilder()
+                .withMaxSkew(1)
+                .withTopologyKey(topologyKey)
+                .withWhenUnsatisfiable("ScheduleAnyway")
+                .withNewLabelSelector()
+                    .withMatchLabels(Map.of(
+                        KafkaPodSet.NODE_POOL_LABEL, poolName,
+                        KafkaPodSet.CLUSTER_LABEL,   clusterName
+                    ))
+                .endLabelSelector()
                 .build();
     }
 
