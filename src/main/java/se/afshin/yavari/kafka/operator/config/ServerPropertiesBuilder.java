@@ -66,7 +66,9 @@ public class ServerPropertiesBuilder {
         StringBuilder protocolMap = new StringBuilder();
 
         if (isController) {
-            listeners.append("CONTROLLER://0.0.0.0:9093");
+            // Use pod IP placeholder; sed-substituted at startup. Kafka 3.9 rejects 0.0.0.0
+            // in both listeners and derived advertised.listeners.
+            listeners.append("CONTROLLER://${MY_POD_IP}:9093");
         }
         if (isBroker) {
             if (listeners.length() > 0) {
@@ -101,6 +103,11 @@ public class ServerPropertiesBuilder {
         props.put("listeners",                   listeners.toString());
         if (isBroker) {
             props.put("advertised.listeners", advertisedListeners.toString());
+        }
+        if (isController && !isBroker) {
+            // Kafka 3.9+ rejects 0.0.0.0 as an advertised listener; set the controller's
+            // actual pod IP, substituted at startup time via the MY_POD_IP env var.
+            props.put("controller.advertised.listeners", "CONTROLLER://${MY_POD_IP}:9093");
         }
         props.put("listener.security.protocol.map", protocolMap.toString());
         props.put("controller.listener.names",   "CONTROLLER");

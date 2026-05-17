@@ -18,11 +18,13 @@ public class StartupScriptBuilder {
 
         if (!isBroker) {
             return "#!/bin/bash\nset -euo pipefail\n"
+                    + "sed -e \"s|\\${MY_POD_IP}|${MY_POD_IP}|g\" "
+                    + "/opt/kafka-config/server.properties.template > /tmp/server.properties\n"
                     + "/opt/kafka/bin/kafka-storage.sh format "
                     + "-t \"${KAFKA_CLUSTER_ID}\" "
-                    + "-c /opt/kafka-config/server.properties.template "
+                    + "-c /tmp/server.properties "
                     + "--ignore-formatted\n"
-                    + "exec /opt/kafka/bin/kafka-server-start.sh /opt/kafka-config/server.properties.template\n";
+                    + "exec /opt/kafka/bin/kafka-server-start.sh /tmp/server.properties\n";
         }
 
         String advertisedAddr = mcsEnabled

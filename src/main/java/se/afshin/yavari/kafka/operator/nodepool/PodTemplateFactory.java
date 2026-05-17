@@ -188,6 +188,14 @@ public class PodTemplateFactory {
                 env.add(new EnvVarBuilder().withName("BROKER_RACK").withValue(zone).build());
             }
         }
+        if (isController) {
+            env.add(new EnvVarBuilder()
+                    .withName("MY_POD_IP")
+                    .withNewValueFrom()
+                        .withNewFieldRef().withFieldPath("status.podIP").endFieldRef()
+                    .endValueFrom()
+                    .build());
+        }
         return env;
     }
 
