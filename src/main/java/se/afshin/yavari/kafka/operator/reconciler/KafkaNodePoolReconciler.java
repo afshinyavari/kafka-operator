@@ -2,11 +2,14 @@ package se.afshin.yavari.kafka.operator.reconciler;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
+import io.fabric8.kubernetes.api.model.IntOrString;
 import io.fabric8.kubernetes.api.model.LabelSelectorBuilder;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.Service;
+import io.fabric8.kubernetes.api.model.policy.v1.PodDisruptionBudget;
+import io.fabric8.kubernetes.api.model.policy.v1.PodDisruptionBudgetBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.javaoperatorsdk.operator.api.config.informer.InformerConfiguration;
 import io.javaoperatorsdk.operator.api.reconciler.Cleaner;
@@ -135,6 +138,9 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         headlessServiceBuilder.buildServiceExport(poolName + "-headless", namespace, pool)
                 .ifPresent(export -> applyServiceExport(export, namespace, poolName));
 
+        // Apply PodDisruptionBudget — maxUnavailable=1, no user config needed
+        applyPdb(pool, namespace, clusterName);
+
         // Build desired pod list and apply KafkaPodSet
         List<PodEntry> desiredPods = podTemplateFactory.build(
                 pool, cluster, namespace, clusterIndex, kafkaClusterId, configHash, isBroker, isController);
@@ -163,6 +169,8 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         LOG.infof("KafkaNodePool %s deleted — KafkaPodSet will be garbage collected", pool.getMetadata().getName());
         client.configMaps().inNamespace(namespace).withName(pool.getMetadata().getName() + "-config").delete();
         client.services().inNamespace(namespace).withName(pool.getMetadata().getName() + "-headless").delete();
+        client.policy().v1().podDisruptionBudget().inNamespace(namespace)
+              .withName(pool.getMetadata().getName() + "-pdb").delete();
         if (mcsEnabled) {
             client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
                   .inNamespace(namespace)
@@ -170,6 +178,31 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
                   .delete();
         }
         return DeleteControl.defaultDelete();
+    }
+
+    private void applyPdb(KafkaNodePool pool, String namespace, String clusterName) {
+        PodDisruptionBudget pdb = new PodDisruptionBudgetBuilder()
+                .withNewMetadata()
+                    .withName(pool.getMetadata().getName() + "-pdb")
+                    .withNamespace(namespace)
+                    .withLabels(Map.of(
+                        KafkaPodSet.CLUSTER_LABEL,    clusterName,
+                        KafkaPodSet.NODE_POOL_LABEL,  pool.getMetadata().getName(),
+                        KafkaPodSet.MANAGED_BY_LABEL, KafkaPodSet.MANAGED_BY_VALUE
+                    ))
+                    .withOwnerReferences(poolOwnerRef(pool))
+                .endMetadata()
+                .withNewSpec()
+                    .withMaxUnavailable(new IntOrString(1))
+                    .withNewSelector()
+                        .withMatchLabels(Map.of(
+                            KafkaPodSet.NODE_POOL_LABEL, pool.getMetadata().getName(),
+                            KafkaPodSet.CLUSTER_LABEL,   clusterName
+                        ))
+                    .endSelector()
+                .endSpec()
+                .build();
+        client.policy().v1().podDisruptionBudget().inNamespace(namespace).resource(pdb).serverSideApply();
     }
 
     private void applyServiceExport(GenericKubernetesResource export, String namespace, String poolName) {
