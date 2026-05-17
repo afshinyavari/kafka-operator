@@ -71,15 +71,16 @@ else
   ok "subctl found: $(subctl version 2>/dev/null | head -1)"
 fi
 
-# ── Step 1 & 2: Build operator + Docker image (skip if image already exists) ─
-if docker inspect "${IMAGE_NAME}" &>/dev/null && [ "${FORCE_BUILD:-0}" != "1" ]; then
-  ok "Image ${IMAGE_NAME} already exists — skipping build (set FORCE_BUILD=1 to override)"
-else
-  info "Building kafka-operator (Quarkus fast-jar)..."
-  cd "${OPERATOR_DIR}"
-  mvn package -DskipTests -q
-  ok "Build complete"
+# ── Step 1: Build operator (always — regenerates CRD YAMLs in target/kubernetes/) ─
+info "Building kafka-operator (Quarkus fast-jar + CRD generation)..."
+cd "${OPERATOR_DIR}"
+mvn package -DskipTests -q
+ok "Build complete"
 
+# ── Step 2: Build Docker image (skip if image already exists) ─────────────────
+if docker inspect "${IMAGE_NAME}" &>/dev/null && [ "${FORCE_BUILD:-0}" != "1" ]; then
+  ok "Image ${IMAGE_NAME} already exists — skipping Docker build (set FORCE_BUILD=1 to rebuild)"
+else
   info "Building Docker image ${IMAGE_NAME}..."
   docker build -t "${IMAGE_NAME}" "${OPERATOR_DIR}" -q
   ok "Image ${IMAGE_NAME} built"
