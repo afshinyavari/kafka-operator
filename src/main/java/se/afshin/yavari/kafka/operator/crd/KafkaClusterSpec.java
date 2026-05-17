@@ -11,6 +11,7 @@ public class KafkaClusterSpec {
 
     private String kafkaImage = "apache/kafka:3.7.0";
     private String kafkaVersion = "3.7";
+    private Integer targetMetadataVersion;
 
     /** Ordered list of all clusters participating in the KRaft quorum.
         Index position determines the controller node ID (1000 + index). */
@@ -31,6 +32,9 @@ public class KafkaClusterSpec {
 
     public List<ClusterEntry> getClusters() { return clusters; }
     public void setClusters(List<ClusterEntry> clusters) { this.clusters = clusters; }
+
+    public Integer getTargetMetadataVersion() { return targetMetadataVersion; }
+    public void setTargetMetadataVersion(Integer targetMetadataVersion) { this.targetMetadataVersion = targetMetadataVersion; }
 
     public Map<String, String> getConfig() { return config; }
     public void setConfig(Map<String, String> config) { this.config = config; }

@@ -51,6 +51,7 @@ public class PodTemplateFactory {
         String poolName = pool.getMetadata().getName();
         String clusterName = cluster.getMetadata().getName();
         String kafkaImage = cluster.getSpec().getKafkaImage();
+        String kafkaVersion = cluster.getSpec().getKafkaVersion();
 
         String rackTopologyKey = pool.getSpec().getRackTopologyKey();
         boolean hasRack = isBroker && rackTopologyKey != null && !rackTopologyKey.isBlank();
@@ -74,12 +75,13 @@ public class PodTemplateFactory {
                     .withName(podName)
                     .withNamespace(namespace)
                     .withLabels(labels)
+                    .withAnnotations(Map.of(KafkaPodSet.KAFKA_VERSION_ANNOTATION, kafkaVersion))
                     .build();
 
             String zone = zones.isEmpty() ? "" : zones.get(i % zones.size());
 
             List<Volume> volumes = buildVolumes(poolName, podName);
-            List<EnvVar> env = buildEnv(kafkaClusterId, configHash, isController, isBroker, zone);
+            List<EnvVar> env = buildEnv(kafkaClusterId, kafkaVersion, configHash, isController, isBroker, zone);
             List<VolumeMount> mounts = buildMounts();
             List<ContainerPort> ports = buildContainerPorts(isController, isBroker);
 
@@ -167,12 +169,13 @@ public class PodTemplateFactory {
         );
     }
 
-    private List<EnvVar> buildEnv(String kafkaClusterId, String configHash,
+    private List<EnvVar> buildEnv(String kafkaClusterId, String kafkaVersion, String configHash,
                                    boolean isController, boolean isBroker, String zone) {
         List<EnvVar> env = new ArrayList<>();
         env.add(new EnvVarBuilder().withName("KAFKA_HEAP_OPTS")
                 .withValue(isController ? "-Xmx512m -Xms512m" : "-Xmx1g -Xms1g").build());
         env.add(new EnvVarBuilder().withName("KAFKA_CLUSTER_ID").withValue(kafkaClusterId).build());
+        env.add(new EnvVarBuilder().withName("KAFKA_VERSION").withValue(kafkaVersion).build());
         env.add(new EnvVarBuilder().withName("KAFKA_CONFIG_HASH").withValue(configHash).build());
         if (isBroker) {
             env.add(new EnvVarBuilder()

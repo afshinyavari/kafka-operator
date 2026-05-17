@@ -66,7 +66,44 @@ class CrValidator {
             return ValidationResult.fail("spec.kafkaImage must not be blank");
         }
 
+        var status = cr.getStatus();
+        if (status != null && status.getCurrentKafkaVersion() != null) {
+            if (compareVersions(spec.getKafkaVersion(), status.getCurrentKafkaVersion()) < 0) {
+                return ValidationResult.fail(
+                        "downgrade not allowed: cluster is on " + status.getCurrentKafkaVersion()
+                        + ", cannot set kafkaVersion to " + spec.getKafkaVersion());
+            }
+        }
+
+        if (status != null && status.getCurrentMetadataVersion() != null
+                && spec.getTargetMetadataVersion() != null
+                && spec.getTargetMetadataVersion() < status.getCurrentMetadataVersion()) {
+            return ValidationResult.fail(
+                    "metadata.version downgrade not allowed: current is "
+                    + status.getCurrentMetadataVersion()
+                    + ", cannot set targetMetadataVersion to " + spec.getTargetMetadataVersion());
+        }
+
         return ValidationResult.ok();
+    }
+
+    private static int compareVersions(String a, String b) {
+        int[] partsA = parseVersion(a);
+        int[] partsB = parseVersion(b);
+        int cmp = Integer.compare(partsA[0], partsB[0]);
+        return cmp != 0 ? cmp : Integer.compare(partsA[1], partsB[1]);
+    }
+
+    private static int[] parseVersion(String version) {
+        if (version == null || version.isBlank()) return new int[]{0, 0};
+        try {
+            String[] parts = version.split("\\.", 2);
+            int major = Integer.parseInt(parts[0]);
+            int minor = parts.length > 1 ? Integer.parseInt(parts[1]) : 0;
+            return new int[]{major, minor};
+        } catch (NumberFormatException e) {
+            return new int[]{0, 0};
+        }
     }
 
     static ValidationResult validateKafkaNodePool(KafkaNodePool pool) {

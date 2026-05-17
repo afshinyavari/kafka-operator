@@ -13,6 +13,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import se.afshin.yavari.kafka.operator.cluster.ClusterStatusAggregator;
 import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
+import se.afshin.yavari.kafka.operator.upgrade.VersionUpgradeController;
 import se.afshin.yavari.kafka.operator.crd.ClusterEntry;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterSpec;
@@ -45,6 +46,7 @@ class KafkaClusterReconcilerTest {
     private KubernetesClient client;
     private KRaftConfigGenerator kraftConfig;
     private ClusterStatusAggregator statusAggregator;
+    private VersionUpgradeController versionUpgradeController;
     private Context<KafkaCluster> context;
     private KafkaClusterReconciler reconciler;
 
@@ -74,6 +76,7 @@ class KafkaClusterReconcilerTest {
     void setup() throws Exception {
         kraftConfig = mock(KRaftConfigGenerator.class);
         statusAggregator = mock(ClusterStatusAggregator.class);
+        versionUpgradeController = mock(VersionUpgradeController.class);
         context = mock(Context.class);
         client = mock(KubernetesClient.class);
 
@@ -123,6 +126,7 @@ class KafkaClusterReconcilerTest {
         injectField(reconciler, "client", client);
         injectField(reconciler, "kraftConfig", kraftConfig);
         injectField(reconciler, "statusAggregator", statusAggregator);
+        injectField(reconciler, "versionUpgradeController", versionUpgradeController);
         injectField(reconciler, "localClusterId", LOCAL_CLUSTER_ID);
     }
 

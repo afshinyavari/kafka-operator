@@ -15,6 +15,10 @@ public class KafkaClusterStatus {
     /** Per-pool readiness summary, keyed by pool name. */
     private Map<String, String> poolPhases = new LinkedHashMap<>();
 
+    private String currentKafkaVersion;
+    private String upgradePhase;
+    private Integer currentMetadataVersion;
+
     public Phase getPhase() { return phase; }
     public void setPhase(Phase phase) { this.phase = phase; }
 
@@ -29,4 +33,13 @@ public class KafkaClusterStatus {
 
     public Map<String, String> getPoolPhases() { return poolPhases; }
     public void setPoolPhases(Map<String, String> poolPhases) { this.poolPhases = poolPhases; }
+
+    public String getCurrentKafkaVersion() { return currentKafkaVersion; }
+    public void setCurrentKafkaVersion(String currentKafkaVersion) { this.currentKafkaVersion = currentKafkaVersion; }
+
+    public String getUpgradePhase() { return upgradePhase; }
+    public void setUpgradePhase(String upgradePhase) { this.upgradePhase = upgradePhase; }
+
+    public Integer getCurrentMetadataVersion() { return currentMetadataVersion; }
+    public void setCurrentMetadataVersion(Integer currentMetadataVersion) { this.currentMetadataVersion = currentMetadataVersion; }
 }

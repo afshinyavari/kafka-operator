@@ -3,12 +3,18 @@ package se.afshin.yavari.kafka.operator.reconciler;
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ConfigMapBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import io.javaoperatorsdk.operator.api.config.informer.InformerConfiguration;
 import io.javaoperatorsdk.operator.api.reconciler.Cleaner;
 import io.javaoperatorsdk.operator.api.reconciler.Context;
 import io.javaoperatorsdk.operator.api.reconciler.ControllerConfiguration;
 import io.javaoperatorsdk.operator.api.reconciler.DeleteControl;
+import io.javaoperatorsdk.operator.api.reconciler.EventSourceContext;
+import io.javaoperatorsdk.operator.api.reconciler.EventSourceInitializer;
 import io.javaoperatorsdk.operator.api.reconciler.Reconciler;
 import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
+import io.javaoperatorsdk.operator.processing.event.ResourceID;
+import io.javaoperatorsdk.operator.processing.event.source.EventSource;
+import io.javaoperatorsdk.operator.processing.event.source.informer.InformerEventSource;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -20,14 +26,17 @@ import se.afshin.yavari.kafka.operator.crd.KafkaClusterStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
+import se.afshin.yavari.kafka.operator.upgrade.VersionUpgradeController;
 
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @ControllerConfiguration
 @ApplicationScoped
-public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner<KafkaCluster> {
+public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner<KafkaCluster>,
+        EventSourceInitializer<KafkaCluster> {
 
     private static final Logger LOG = Logger.getLogger(KafkaClusterReconciler.class);
 
@@ -42,8 +51,27 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
     @Inject
     ClusterStatusAggregator statusAggregator;
 
+    @Inject
+    VersionUpgradeController versionUpgradeController;
+
     @ConfigProperty(name = "kafka.cluster.id")
     String localClusterId;
+
+    @Override
+    public Map<String, EventSource> prepareEventSources(EventSourceContext<KafkaCluster> context) {
+        var podSetEventSource = new InformerEventSource<>(
+            InformerConfiguration.from(KafkaPodSet.class, context)
+                .withSecondaryToPrimaryMapper(podSet -> {
+                    String ns = podSet.getMetadata().getNamespace();
+                    String clusterName = podSet.getMetadata().getLabels()
+                            .get(KafkaPodSet.CLUSTER_LABEL);
+                    if (clusterName == null) return Set.of();
+                    return Set.of(new ResourceID(clusterName, ns));
+                })
+                .build(),
+            context);
+        return EventSourceInitializer.nameEventSources(podSetEventSource);
+    }
 
     @Override
     public UpdateControl<KafkaCluster> reconcile(KafkaCluster cr, Context<KafkaCluster> context) {
@@ -84,6 +112,10 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
                 .getItems();
 
         statusAggregator.aggregate(status, podSets);
+
+        var allPods = client.pods().inNamespace(namespace)
+                .withLabel(KafkaPodSet.CLUSTER_LABEL, name).list().getItems();
+        versionUpgradeController.reconcile(cr, allPods, namespace, status);
 
         cr.setStatus(status);
         if (status.getPhase() != KafkaClusterStatus.Phase.READY) {
