@@ -27,6 +27,12 @@ spec:
         operations:
           - PRODUCE
           - FETCH
+      schemaRegistry:
+        artifacts:
+          - invoices
+        actions:
+          - READ
+          - WRITE
     - name: schema-admin
       schemaRegistry:
         artifacts:

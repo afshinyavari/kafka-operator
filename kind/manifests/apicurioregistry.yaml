@@ -11,6 +11,6 @@ spec:
   storage:
     type: mem
   oidc:
-    issuerUrl: http://keycloak.kafka.svc.cluster.local:8080/realms/kafka
+    issuerUrl: http://keycloak.kafka.svc.cluster.local:8080/realms/demo
     groupsClaim: realm_access.roles
   exportService: false

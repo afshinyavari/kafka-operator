@@ -12,7 +12,7 @@ MANIFESTS_DIR      := manifests
 
 .PHONY: all setup mcs-setup teardown status quorum logs-a logs-b logs-c build image \
         kroxy-image reload-kroxy-image apicurio-proxy-image reload-apicurio-proxy-image \
-        keycloak-setup proxy-setup rbac-test help
+        keycloak-setup proxy-setup rbac-test apicurio-setup apicurio-rbac-test help
 
 all: setup  ## Full setup: build → image → clusters → deploy
 
@@ -118,6 +118,18 @@ proxy-setup:  ## Apply KafkaProxy + KafkaRbac CRs to cluster-a, wait for READY
 
 rbac-test:  ## Run end-to-end RBAC test via SASL/OAUTHBEARER
 	@chmod +x rbac-test.sh && ./rbac-test.sh
+
+apicurio-setup:  ## Build + deploy Apicurio Registry + RBAC proxy to cluster-a
+	$(MAKE) reload-apicurio-proxy-image
+	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafkarbac.yaml
+	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/apicurioregistry.yaml
+	@echo "Waiting for ApicurioRegistry to be Ready..."
+	@until kubectl --context kind-kafka-a -n $(NAMESPACE) get apicurioregistry apicurio \
+	    -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
+	@echo "ApicurioRegistry READY."
+
+apicurio-rbac-test:  ## Run end-to-end schema registry RBAC test
+	@chmod +x apicurio-rbac-test.sh && ./apicurio-rbac-test.sh
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \

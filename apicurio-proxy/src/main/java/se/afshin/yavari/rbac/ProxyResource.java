@@ -104,7 +104,8 @@ public class ProxyResource {
 
             Response.ResponseBuilder rb = Response.status(upstream.statusCode());
             upstream.headers().map().forEach((name, values) -> {
-                if (HOP_BY_HOP.contains(name.toLowerCase())) return;
+                // Skip HTTP/2 pseudo-headers (:status, :path, etc.) — invalid in HTTP/1 responses
+                if (name.startsWith(":") || HOP_BY_HOP.contains(name.toLowerCase())) return;
                 values.forEach(v -> rb.header(name, v));
             });
 
