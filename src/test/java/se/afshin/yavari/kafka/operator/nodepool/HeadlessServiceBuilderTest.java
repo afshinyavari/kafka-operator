@@ -27,7 +27,7 @@ class HeadlessServiceBuilderTest {
 
     @Test
     void broker_addsBrokerPort() {
-        Service svc = builder.build(pool(), NS, CLUSTER, false, true);
+        Service svc = builder.build(pool(), NS, CLUSTER, false, true, null);
 
         assertThat(svc.getSpec().getPorts())
                 .anyMatch(p -> "kafka".equals(p.getName()) && p.getPort() == 9092);
@@ -37,7 +37,7 @@ class HeadlessServiceBuilderTest {
 
     @Test
     void controller_addsControllerPort() {
-        Service svc = builder.build(pool(), NS, CLUSTER, true, false);
+        Service svc = builder.build(pool(), NS, CLUSTER, true, false, null);
 
         assertThat(svc.getSpec().getPorts())
                 .anyMatch(p -> "controller".equals(p.getName()) && p.getPort() == 9093);
@@ -47,7 +47,7 @@ class HeadlessServiceBuilderTest {
 
     @Test
     void combined_addsBothPorts() {
-        Service svc = builder.build(pool(), NS, CLUSTER, true, true);
+        Service svc = builder.build(pool(), NS, CLUSTER, true, true, null);
 
         assertThat(svc.getSpec().getPorts()).hasSize(2);
         assertThat(svc.getSpec().getPorts()).anyMatch(p -> p.getPort() == 9092);
@@ -56,14 +56,14 @@ class HeadlessServiceBuilderTest {
 
     @Test
     void service_isHeadless() {
-        Service svc = builder.build(pool(), NS, CLUSTER, false, true);
+        Service svc = builder.build(pool(), NS, CLUSTER, false, true, null);
 
         assertThat(svc.getSpec().getClusterIP()).isEqualTo("None");
     }
 
     @Test
     void service_nameIsPoolNameHeadless() {
-        Service svc = builder.build(pool(), NS, CLUSTER, false, true);
+        Service svc = builder.build(pool(), NS, CLUSTER, false, true, null);
 
         assertThat(svc.getMetadata().getName()).isEqualTo(POOL_NAME + "-headless");
         assertThat(svc.getMetadata().getNamespace()).isEqualTo(NS);

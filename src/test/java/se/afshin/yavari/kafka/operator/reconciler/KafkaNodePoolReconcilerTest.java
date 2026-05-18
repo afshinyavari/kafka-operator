@@ -119,7 +119,20 @@ class KafkaNodePoolReconcilerTest {
         when(client.services()).thenReturn(svcOp);
         when(svcOp.inNamespace(NS)).thenReturn(nsSvcOp);
         when(nsSvcOp.resource(any(Service.class))).thenReturn(svcResourceOp);
-        when(nsSvcOp.withName(POOL_NAME + "-headless")).thenReturn(namedSvcOp);
+        when(nsSvcOp.withName(anyString())).thenReturn(namedSvcOp);
+
+        // Policy chain (PDB) — mock chain to avoid NPE; behaviour not verified in these tests
+        var policyApi = mock(io.fabric8.kubernetes.client.dsl.PolicyAPIGroupDSL.class);
+        var policyV1 = mock(io.fabric8.kubernetes.client.dsl.V1PolicyAPIGroupDSL.class);
+        var pdbOp = mock(MixedOperation.class);
+        var nsPdbOp = mock(NonNamespaceOperation.class);
+        var pdbResourceOp = mock(Resource.class);
+        when(client.policy()).thenReturn(policyApi);
+        when(policyApi.v1()).thenReturn(policyV1);
+        when(policyV1.podDisruptionBudget()).thenReturn(pdbOp);
+        when(pdbOp.inNamespace(anyString())).thenReturn(nsPdbOp);
+        when(nsPdbOp.resource(any())).thenReturn(pdbResourceOp);
+        when(nsPdbOp.withName(anyString())).thenReturn(pdbResourceOp);
 
         // KafkaPodSet: resource() for apply, withName() for status read
         podSetMixedOp = mock(MixedOperation.class);
@@ -138,7 +151,7 @@ class KafkaNodePoolReconcilerTest {
         poolCm.setData(Map.of("server.properties.template", "node.id=0\n"));
         when(poolConfigMapBuilder.build(any(), any(), anyString(), anyInt(), anyString(), anyString()))
                 .thenReturn(poolCm);
-        when(headlessServiceBuilder.build(any(), anyString(), anyString(), anyBoolean(), anyBoolean()))
+        when(headlessServiceBuilder.build(any(), anyString(), anyString(), anyBoolean(), anyBoolean(), any()))
                 .thenReturn(mock(Service.class));
         when(headlessServiceBuilder.buildServiceExport(anyString(), anyString(), any()))
                 .thenReturn(Optional.empty());
@@ -210,7 +223,8 @@ class KafkaNodePoolReconcilerTest {
         reconciler.cleanup(pool, context);
 
         verify(namedCmOp).delete();
-        verify(namedSvcOp).delete();
+        // headless service + metrics service are both deleted
+        verify(namedSvcOp, org.mockito.Mockito.times(2)).delete();
     }
 
     // --- Helpers ---

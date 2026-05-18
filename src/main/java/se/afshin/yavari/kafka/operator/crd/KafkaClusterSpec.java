@@ -34,6 +34,15 @@ public class KafkaClusterSpec {
      *  coordination is performed (existing behaviour). */
     private List<String> clusterRollOrder;
 
+    /** Additional client-facing listeners beyond the always-present INTERNAL:9092 listener.
+     *  When non-empty, INTERNAL binds to 127.0.0.1 only and inter.broker.listener.name
+     *  is set to the first entry. */
+    private List<KafkaListenerSpec> listeners = new ArrayList<>();
+
+    /** Optional TLS for the KRaft CONTROLLER listener (port 9093).
+     *  When set, CONTROLLER:SSL replaces CONTROLLER:PLAINTEXT. */
+    private KafkaListenerTlsConfig controllerTls;
+
     public String getKafkaImage() { return kafkaImage; }
     public void setKafkaImage(String kafkaImage) { this.kafkaImage = kafkaImage; }
 
@@ -54,4 +63,10 @@ public class KafkaClusterSpec {
 
     public MetricsConfig getMetricsConfig() { return metricsConfig; }
     public void setMetricsConfig(MetricsConfig metricsConfig) { this.metricsConfig = metricsConfig; }
+
+    public List<KafkaListenerSpec> getListeners() { return listeners; }
+    public void setListeners(List<KafkaListenerSpec> listeners) { this.listeners = listeners; }
+
+    public KafkaListenerTlsConfig getControllerTls() { return controllerTls; }
+    public void setControllerTls(KafkaListenerTlsConfig controllerTls) { this.controllerTls = controllerTls; }
 }

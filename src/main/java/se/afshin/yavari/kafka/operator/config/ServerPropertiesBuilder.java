@@ -4,6 +4,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterSpec;
+import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
+import se.afshin.yavari.kafka.operator.crd.KafkaListenerTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePoolSpec;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 
@@ -65,6 +67,10 @@ public class ServerPropertiesBuilder {
         StringBuilder advertisedListeners = new StringBuilder();
         StringBuilder protocolMap = new StringBuilder();
 
+        KafkaListenerTlsConfig ctrlTls = clusterSpec.getControllerTls();
+        List<KafkaListenerSpec> extraListeners = clusterSpec.getListeners();
+        boolean hasExtraListeners = extraListeners != null && !extraListeners.isEmpty();
+
         if (isController) {
             // Use pod IP placeholder; sed-substituted at startup. Kafka 3.9 rejects 0.0.0.0
             // in both listeners and derived advertised.listeners.
@@ -74,13 +80,30 @@ public class ServerPropertiesBuilder {
             if (listeners.length() > 0) {
                 listeners.append(',');
             }
-            listeners.append("PLAINTEXT://0.0.0.0:9092");
-            advertisedListeners.append("PLAINTEXT://").append(brokerAdvertisedAddress);
+            // Bind INTERNAL to localhost when TLS listeners exist — prevents plaintext network access
+            String plaintextBind = hasExtraListeners ? "127.0.0.1" : "0.0.0.0";
+            listeners.append("INTERNAL://").append(plaintextBind).append(":9092");
+            if (!hasExtraListeners) {
+                // No TLS listeners: INTERNAL is the only advertised listener
+                advertisedListeners.append("INTERNAL://").append(brokerAdvertisedAddress);
+            } else {
+                // TLS listeners present: INTERNAL is localhost-only (admin tools within the pod)
+                // Advertise it as 127.0.0.1 so kubectl-exec admin tools can stay on plaintext
+                advertisedListeners.append("INTERNAL://127.0.0.1:9092");
+            }
         }
         // CONTROLLER must always be in the protocol map — brokers use it to talk to controllers
-        protocolMap.append("CONTROLLER:PLAINTEXT");
+        protocolMap.append("CONTROLLER:").append(ctrlTls != null ? "SSL" : "PLAINTEXT");
         if (isBroker) {
-            protocolMap.append(",PLAINTEXT:PLAINTEXT");
+            protocolMap.append(",INTERNAL:PLAINTEXT");
+            if (hasExtraListeners) {
+                for (KafkaListenerSpec l : extraListeners) {
+                    listeners.append(',').append(l.getName()).append("://0.0.0.0:").append(l.getPort());
+                    advertisedListeners.append(advertisedListeners.length() > 0 ? "," : "")
+                                       .append(l.getName()).append("://${").append(l.getName()).append("_ADDR}");
+                    protocolMap.append(',').append(l.getName()).append(":SSL");
+                }
+            }
         }
 
         // Merged config: cluster defaults → pool overrides → computed fields
@@ -114,7 +137,14 @@ public class ServerPropertiesBuilder {
         props.put("log.dirs",                    "/var/lib/kafka/data");
 
         if (isBroker) {
-            props.put("inter.broker.listener.name", "PLAINTEXT");
+            String interBrokerListener = hasExtraListeners ? extraListeners.get(0).getName() : "INTERNAL";
+            props.put("inter.broker.listener.name", interBrokerListener);
+            // Per-listener SSL properties for each TLS listener
+            for (KafkaListenerSpec l : extraListeners) {
+                if (l.getTls() != null) {
+                    addSslProps(props, l.getName(), l.getTls().isMutualTls());
+                }
+            }
             if (poolSpec.getRackTopologyKey() != null && !poolSpec.getRackTopologyKey().isBlank()) {
                 props.put("broker.rack", "${BROKER_RACK}");
             }
@@ -126,6 +156,11 @@ public class ServerPropertiesBuilder {
             props.putIfAbsent("transaction.state.log.replication.factor",          String.valueOf(rf));
             props.putIfAbsent("transaction.state.log.min.isr",                     "2");
             props.putIfAbsent("default.replication.factor",                        String.valueOf(rf));
+        }
+
+        // Controller TLS SSL properties — applied to all roles (brokers also connect to controllers)
+        if (ctrlTls != null) {
+            addSslProps(props, "CONTROLLER", ctrlTls.isMutualTls());
         }
 
         props.putIfAbsent("num.network.threads",                 "3");
@@ -143,6 +178,20 @@ public class ServerPropertiesBuilder {
         StringWriter sw = new StringWriter();
         props.forEach((k, v) -> sw.write(k + "=" + v + "\n"));
         return sw.toString();
+    }
+
+    private void addSslProps(Map<String, String> props, String listenerName, boolean mutualTls) {
+        String pfx = "listener.name." + listenerName.toLowerCase() + ".ssl.";
+        props.put(pfx + "keystore.location",   "/tmp/tls/" + listenerName + "/keystore.p12");
+        props.put(pfx + "keystore.type",       "PKCS12");
+        props.put(pfx + "keystore.password",   "changeit");
+        props.put(pfx + "key.password",        "changeit");
+        props.put(pfx + "truststore.location", "/tmp/tls/" + listenerName + "/truststore.p12");
+        props.put(pfx + "truststore.type",     "PKCS12");
+        props.put(pfx + "truststore.password", "changeit");
+        if (mutualTls) {
+            props.put(pfx + "client.auth", "required");
+        }
     }
 
     /**

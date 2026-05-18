@@ -103,7 +103,8 @@ class PodTemplateFactoryTest {
 
         var env = pods.get(0).getSpec().getContainers().get(0).getEnv();
         assertThat(env).noneMatch(e -> "BROKER_RACK".equals(e.getName()));
-        assertThat(pods.get(0).getSpec().getAffinity()).isNull();
+        // Anti-affinity is always applied; only rack-specific node affinity is absent
+        assertThat(pods.get(0).getSpec().getAffinity().getNodeAffinity()).isNull();
     }
 
     @Test

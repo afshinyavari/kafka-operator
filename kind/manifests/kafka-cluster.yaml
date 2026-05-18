@@ -24,3 +24,12 @@ spec:
     transaction.state.log.replication.factor: "1"
     transaction.state.log.min.isr: "1"
     default.replication.factor: "1"
+# Uncomment to enable TLS listeners. Requires per-pod secrets named {podName}-tls
+# with keys tls.crt, tls.key, ca.crt (cert-manager convention).
+#  listeners:
+#    - name: CLIENT_TLS
+#      port: 9094
+#      tls:
+#        mutualTls: false   # set true to require client certificates
+#  controllerTls:
+#    mutualTls: false        # set true to require mutual TLS on controller channel

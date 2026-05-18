@@ -28,6 +28,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
+import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
+import se.afshin.yavari.kafka.operator.crd.KafkaListenerTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.MetricsConfig;
@@ -61,6 +63,9 @@ public class PodTemplateFactory {
         boolean hasRack = isBroker && rackTopologyKey != null && !rackTopologyKey.isBlank();
         MetricsConfig metrics = cluster.getSpec().getMetricsConfig();
         boolean hasMetrics = metrics != null && metrics.getConfigMapRef() != null;
+        List<KafkaListenerSpec> listeners = cluster.getSpec().getListeners();
+        KafkaListenerTlsConfig controllerTls = cluster.getSpec().getControllerTls();
+        boolean needsTls = (controllerTls != null) || (isBroker && hasTlsListeners(listeners));
 
         // Resolve zones once per pool — sorted for deterministic assignment
         List<String> zones = hasRack ? resolveZones(rackTopologyKey) : List.of();
@@ -86,10 +91,10 @@ public class PodTemplateFactory {
 
             String zone = zones.isEmpty() ? "" : zones.get(i % zones.size());
 
-            List<Volume> volumes = buildVolumes(poolName, podName, hasMetrics, metrics);
+            List<Volume> volumes = buildVolumes(poolName, podName, hasMetrics, metrics, needsTls);
             List<EnvVar> env = buildEnv(kafkaClusterId, kafkaVersion, configHash, isController, isBroker, zone, hasMetrics);
-            List<VolumeMount> mounts = buildMounts(hasMetrics);
-            List<ContainerPort> ports = buildContainerPorts(isController, isBroker, hasMetrics);
+            List<VolumeMount> mounts = buildMounts(hasMetrics, needsTls);
+            List<ContainerPort> ports = buildContainerPorts(isController, isBroker, hasMetrics, listeners);
 
             Container container = new ContainerBuilder()
                     .withName("kafka")
@@ -101,7 +106,7 @@ public class PodTemplateFactory {
                     .withResources(pool.getSpec().getResources())
                     .withReadinessProbe(new ProbeBuilder()
                             .withNewTcpSocket()
-                                .withPort(new IntOrString(isBroker ? BROKER_PORT : CONTROLLER_PORT))
+                                .withPort(new IntOrString(brokerReadinessPort(isBroker, listeners)))
                             .endTcpSocket()
                             .withInitialDelaySeconds(isBroker ? 45 : 30)
                             .withPeriodSeconds(15)
@@ -194,7 +199,7 @@ public class PodTemplateFactory {
     }
 
     private List<Volume> buildVolumes(String poolName, String podName,
-                                      boolean hasMetrics, MetricsConfig metrics) {
+                                      boolean hasMetrics, MetricsConfig metrics, boolean needsTls) {
         List<Volume> volumes = new ArrayList<>();
         volumes.add(new VolumeBuilder()
                 .withName("config")
@@ -215,6 +220,15 @@ public class PodTemplateFactory {
                     .withNewConfigMap()
                         .withName(metrics.getConfigMapRef())
                     .endConfigMap()
+                    .build());
+        }
+        if (needsTls) {
+            volumes.add(new VolumeBuilder()
+                    .withName("tls")
+                    .withNewSecret()
+                        .withSecretName(podName + "-tls")
+                        .withDefaultMode(0440)
+                    .endSecret()
                     .build());
         }
         return volumes;
@@ -251,18 +265,21 @@ public class PodTemplateFactory {
         return env;
     }
 
-    private List<VolumeMount> buildMounts(boolean hasMetrics) {
+    private List<VolumeMount> buildMounts(boolean hasMetrics, boolean needsTls) {
         List<VolumeMount> mounts = new ArrayList<>();
         mounts.add(new VolumeMountBuilder().withName("config").withMountPath("/opt/kafka-config").build());
         mounts.add(new VolumeMountBuilder().withName("data").withMountPath("/var/lib/kafka/data").build());
         if (hasMetrics) {
             mounts.add(new VolumeMountBuilder().withName("jmx-config").withMountPath("/opt/jmx-exporter-config").build());
         }
+        if (needsTls) {
+            mounts.add(new VolumeMountBuilder().withName("tls").withMountPath("/etc/kafka/tls").withReadOnly(true).build());
+        }
         return mounts;
     }
 
     private List<ContainerPort> buildContainerPorts(boolean isController, boolean isBroker,
-                                                    boolean hasMetrics) {
+                                                    boolean hasMetrics, List<KafkaListenerSpec> listeners) {
         List<ContainerPort> ports = new ArrayList<>();
         if (isBroker) {
             ports.add(new ContainerPortBuilder().withName("kafka").withContainerPort(BROKER_PORT).build());
@@ -273,6 +290,23 @@ public class PodTemplateFactory {
         if (hasMetrics) {
             ports.add(new ContainerPortBuilder().withName("jmx").withContainerPort(9101).build());
         }
+        if (isBroker && listeners != null) {
+            for (KafkaListenerSpec l : listeners) {
+                String portName = l.getName().toLowerCase().replace('_', '-');
+                ports.add(new ContainerPortBuilder().withName(portName).withContainerPort(l.getPort()).build());
+            }
+        }
         return ports;
+    }
+
+    private boolean hasTlsListeners(List<KafkaListenerSpec> listeners) {
+        return listeners != null && listeners.stream().anyMatch(l -> l.getTls() != null);
+    }
+
+    private int brokerReadinessPort(boolean isBroker, List<KafkaListenerSpec> listeners) {
+        if (!isBroker) return CONTROLLER_PORT;
+        // When TLS listeners exist, INTERNAL is localhost-only so use the first TLS listener port
+        if (listeners != null && !listeners.isEmpty()) return listeners.get(0).getPort();
+        return BROKER_PORT;
     }
 }

@@ -44,7 +44,7 @@ class ServerPropertiesBuilderTest {
         assertThat(props.get("process.roles")).isEqualTo("controller");
         assertThat(props.get("node.id")).isEqualTo("10000");
         assertThat(props.get("controller.quorum.voters")).contains("10000@ctrl-a:9093");
-        assertThat(props.get("listeners")).isEqualTo("CONTROLLER://0.0.0.0:9093");
+        assertThat(props.get("listeners")).isEqualTo("CONTROLLER://${MY_POD_IP}:9093");
         assertThat(props).doesNotContainKey("advertised.listeners");
         assertThat(props).doesNotContainKey("inter.broker.listener.name");
     }
@@ -64,9 +64,9 @@ class ServerPropertiesBuilderTest {
 
         assertThat(props.get("process.roles")).isEqualTo("broker");
         assertThat(props.get("node.id")).isEqualTo("1002");  // clusterIndex=1, poolLocalIndex=2
-        assertThat(props.get("inter.broker.listener.name")).isEqualTo("PLAINTEXT");
-        assertThat(props.get("listeners")).isEqualTo("PLAINTEXT://0.0.0.0:9092");
-        assertThat(props.get("listener.security.protocol.map")).isEqualTo("CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT");
+        assertThat(props.get("inter.broker.listener.name")).isEqualTo("INTERNAL");
+        assertThat(props.get("listeners")).isEqualTo("INTERNAL://0.0.0.0:9092");
+        assertThat(props.get("listener.security.protocol.map")).isEqualTo("CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT");
     }
 
     @Test
@@ -83,7 +83,7 @@ class ServerPropertiesBuilderTest {
                 "broker-a.example.com:9092");
 
         assertThat(props.get("process.roles")).isEqualTo("controller,broker");
-        assertThat(props.get("listeners")).contains("CONTROLLER://").contains("PLAINTEXT://");
+        assertThat(props.get("listeners")).contains("CONTROLLER://").contains("INTERNAL://");
     }
 
     @Test

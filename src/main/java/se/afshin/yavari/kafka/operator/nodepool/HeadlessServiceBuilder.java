@@ -10,6 +10,7 @@ import io.fabric8.kubernetes.api.model.ServicePort;
 import io.fabric8.kubernetes.api.model.ServicePortBuilder;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 
@@ -28,7 +29,7 @@ public class HeadlessServiceBuilder {
     boolean mcsEnabled;
 
     public Service build(KafkaNodePool pool, String namespace, String clusterName,
-                         boolean isController, boolean isBroker) {
+                         boolean isController, boolean isBroker, List<KafkaListenerSpec> listeners) {
         List<ServicePort> ports = new ArrayList<>();
         if (isBroker) {
             ports.add(new ServicePortBuilder()
@@ -37,6 +38,13 @@ public class HeadlessServiceBuilder {
         if (isController) {
             ports.add(new ServicePortBuilder()
                     .withName("controller").withPort(CONTROLLER_PORT).withTargetPort(new IntOrString(CONTROLLER_PORT)).build());
+        }
+        if (isBroker && listeners != null) {
+            for (KafkaListenerSpec l : listeners) {
+                String portName = l.getName().toLowerCase().replace('_', '-');
+                ports.add(new ServicePortBuilder()
+                        .withName(portName).withPort(l.getPort()).withTargetPort(new IntOrString(l.getPort())).build());
+            }
         }
 
         return new ServiceBuilder()

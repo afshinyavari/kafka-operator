@@ -7,6 +7,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import se.afshin.yavari.kafka.operator.config.ServerPropertiesBuilder;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
+import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
+import se.afshin.yavari.kafka.operator.crd.KafkaListenerTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.MetricsConfig;
@@ -27,23 +29,26 @@ public class PoolConfigMapBuilder {
     public ConfigMap build(KafkaNodePool pool, KafkaCluster cluster, String namespace,
                            int clusterIndex, String quorumVoters, String controllerAddr) {
         boolean isBroker = pool.getSpec().getRoles().contains(NodeRole.BROKER);
-        String brokerAddr = isBroker
-                ? pool.getMetadata().getName() + "-0." + pool.getMetadata().getName()
-                  + "-headless." + namespace + ".svc.cluster.local:9092"
-                : null;
+        List<KafkaListenerSpec> listeners = cluster.getSpec().getListeners();
+        KafkaListenerTlsConfig controllerTls = cluster.getSpec().getControllerTls();
+        boolean hasExtraListeners = listeners != null && !listeners.isEmpty();
 
         Map<String, String> props = propsBuilder.buildProperties(
-                cluster, pool.getSpec(), clusterIndex, 0, quorumVoters, controllerAddr, brokerAddr);
+                cluster, pool.getSpec(), clusterIndex, 0, quorumVoters, controllerAddr, null);
 
         if (isBroker) {
             props.put("node.id", "${NODE_ID}");
-            props.put("advertised.listeners", "PLAINTEXT://${ADVERTISED_ADDR}");
+            if (!hasExtraListeners) {
+                // No TLS listeners: INTERNAL is the only advertised listener, substitute at startup
+                props.put("advertised.listeners", "INTERNAL://${ADVERTISED_ADDR}");
+            }
+            // When hasExtraListeners: buildProperties already set ${NAME_ADDR} template vars
         }
 
         String content = propsBuilder.toPropertiesString(props);
         MetricsConfig metrics = cluster.getSpec().getMetricsConfig();
         boolean hasMetrics = metrics != null && metrics.getConfigMapRef() != null;
-        String startScript = scriptBuilder.build(pool, clusterIndex, namespace, hasMetrics);
+        String startScript = scriptBuilder.build(pool, clusterIndex, namespace, hasMetrics, listeners, controllerTls);
 
         return new ConfigMapBuilder()
                 .withNewMetadata()

@@ -9,6 +9,8 @@ ARG JMX_EXPORTER_VERSION
 
 USER root
 
+RUN microdnf install -y openssl && microdnf clean all
+
 RUN mkdir -p /opt/jmx-exporter /var/lib/kafka/data && \
     useradd -u 1000 -r -g 0 -s /sbin/nologin kafka
 

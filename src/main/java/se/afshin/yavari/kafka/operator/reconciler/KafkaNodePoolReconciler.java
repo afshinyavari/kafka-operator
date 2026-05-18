@@ -138,7 +138,8 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         client.configMaps().inNamespace(namespace).resource(poolCm).serverSideApply();
 
         // Build and apply headless Service (+ optional ServiceExport for MCS)
-        Service svc = headlessServiceBuilder.build(pool, namespace, clusterName, isController, isBroker);
+        Service svc = headlessServiceBuilder.build(pool, namespace, clusterName, isController, isBroker,
+                cluster.getSpec().getListeners());
         client.services().inNamespace(namespace).resource(svc).serverSideApply();
         headlessServiceBuilder.buildServiceExport(poolName + "-headless", namespace, pool)
                 .ifPresent(export -> applyServiceExport(export, namespace, poolName));
