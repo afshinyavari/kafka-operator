@@ -21,6 +21,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaNodePoolStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSetStatus;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
+import se.afshin.yavari.kafka.operator.nodepool.ExternalAccessServiceBuilder;
 import se.afshin.yavari.kafka.operator.nodepool.HeadlessServiceBuilder;
 import se.afshin.yavari.kafka.operator.nodepool.PodTemplateFactory;
 import se.afshin.yavari.kafka.operator.nodepool.PoolConfigMapBuilder;
@@ -54,6 +55,7 @@ class KafkaNodePoolReconcilerTest {
     private KRaftConfigGenerator kraftConfig;
     private PoolConfigMapBuilder poolConfigMapBuilder;
     private HeadlessServiceBuilder headlessServiceBuilder;
+    private ExternalAccessServiceBuilder externalServiceBuilder;
     private PodTemplateFactory podTemplateFactory;
     private Context<KafkaNodePool> context;
     private KafkaNodePoolReconciler reconciler;
@@ -86,6 +88,7 @@ class KafkaNodePoolReconcilerTest {
         kraftConfig = mock(KRaftConfigGenerator.class);
         poolConfigMapBuilder = mock(PoolConfigMapBuilder.class);
         headlessServiceBuilder = mock(HeadlessServiceBuilder.class);
+        externalServiceBuilder = mock(ExternalAccessServiceBuilder.class);
         podTemplateFactory = mock(PodTemplateFactory.class);
         context = mock(Context.class);
         client = mock(KubernetesClient.class);
@@ -163,6 +166,7 @@ class KafkaNodePoolReconcilerTest {
         injectField(reconciler, "kraftConfig", kraftConfig);
         injectField(reconciler, "poolConfigMapBuilder", poolConfigMapBuilder);
         injectField(reconciler, "headlessServiceBuilder", headlessServiceBuilder);
+        injectField(reconciler, "externalServiceBuilder", externalServiceBuilder);
         injectField(reconciler, "podTemplateFactory", podTemplateFactory);
         injectField(reconciler, "localClusterId", LOCAL_CLUSTER_ID);
         injectField(reconciler, "mcsEnabled", false);

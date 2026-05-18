@@ -33,16 +33,13 @@ public class PoolConfigMapBuilder {
         KafkaListenerTlsConfig controllerTls = cluster.getSpec().getControllerTls();
         boolean hasExtraListeners = listeners != null && !listeners.isEmpty();
 
+        // Pass the startup-time placeholder so buildProperties can compose advertised.listeners
+        // correctly for all three cases: no extra listeners, external-only, and internal TLS.
         Map<String, String> props = propsBuilder.buildProperties(
-                cluster, pool.getSpec(), clusterIndex, 0, quorumVoters, controllerAddr, null);
+                cluster, pool.getSpec(), clusterIndex, 0, quorumVoters, controllerAddr, "${ADVERTISED_ADDR}");
 
         if (isBroker) {
             props.put("node.id", "${NODE_ID}");
-            if (!hasExtraListeners) {
-                // No TLS listeners: INTERNAL is the only advertised listener, substitute at startup
-                props.put("advertised.listeners", "INTERNAL://${ADVERTISED_ADDR}");
-            }
-            // When hasExtraListeners: buildProperties already set ${NAME_ADDR} template vars
         }
 
         String content = propsBuilder.toPropertiesString(props);

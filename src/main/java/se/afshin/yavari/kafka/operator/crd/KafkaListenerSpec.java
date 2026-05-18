@@ -8,8 +8,14 @@ public class KafkaListenerSpec {
     /** Port number. Must not conflict with 9092 (INTERNAL) or 9093 (CONTROLLER). */
     private int port;
 
-    /** TLS configuration. null = plain listener (unusual but allowed). */
+    /** TLS configuration. null = plain listener. */
     private KafkaListenerTlsConfig tls;
+
+    /** null = internal listener only. NODEPORT = create per-broker NodePort services. */
+    private ExternalAccessType externalAccess;
+
+    /** Base nodePort for NODEPORT type. Pod at ordinal N gets nodePortBase+N. Default 31000. */
+    private int nodePortBase = 31000;
 
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
@@ -19,4 +25,10 @@ public class KafkaListenerSpec {
 
     public KafkaListenerTlsConfig getTls() { return tls; }
     public void setTls(KafkaListenerTlsConfig tls) { this.tls = tls; }
+
+    public ExternalAccessType getExternalAccess() { return externalAccess; }
+    public void setExternalAccess(ExternalAccessType externalAccess) { this.externalAccess = externalAccess; }
+
+    public int getNodePortBase() { return nodePortBase; }
+    public void setNodePortBase(int nodePortBase) { this.nodePortBase = nodePortBase; }
 }

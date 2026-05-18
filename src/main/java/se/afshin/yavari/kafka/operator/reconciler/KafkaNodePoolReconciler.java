@@ -31,6 +31,7 @@ import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
+import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePoolStatus;
 import se.afshin.yavari.kafka.operator.crd.MetricsConfig;
@@ -38,6 +39,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSetSpec;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
+import se.afshin.yavari.kafka.operator.nodepool.ExternalAccessServiceBuilder;
 import se.afshin.yavari.kafka.operator.nodepool.HeadlessServiceBuilder;
 import se.afshin.yavari.kafka.operator.nodepool.PodTemplateFactory;
 import se.afshin.yavari.kafka.operator.nodepool.PoolConfigMapBuilder;
@@ -57,6 +59,7 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
     @Inject KRaftConfigGenerator kraftConfig;
     @Inject PoolConfigMapBuilder poolConfigMapBuilder;
     @Inject HeadlessServiceBuilder headlessServiceBuilder;
+    @Inject ExternalAccessServiceBuilder externalServiceBuilder;
     @Inject PodTemplateFactory podTemplateFactory;
 
     @ConfigProperty(name = "kafka.cluster.id")
@@ -144,6 +147,18 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         headlessServiceBuilder.buildServiceExport(poolName + "-headless", namespace, pool)
                 .ifPresent(export -> applyServiceExport(export, namespace, poolName));
 
+        // Apply per-broker NodePort services for external listeners
+        if (isBroker) {
+            List<KafkaListenerSpec> externalListeners =
+                    cluster.getSpec().getListeners().stream()
+                        .filter(l -> l.getExternalAccess() != null)
+                        .toList();
+            if (!externalListeners.isEmpty()) {
+                externalServiceBuilder.applyExternalServices(
+                        pool, namespace, clusterName, externalListeners, clusterIndex, client);
+            }
+        }
+
         // Apply PodDisruptionBudget — maxUnavailable=1, no user config needed
         applyPdb(pool, namespace, clusterName);
 
@@ -182,6 +197,7 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         LOG.infof("KafkaNodePool %s deleted — KafkaPodSet will be garbage collected", pool.getMetadata().getName());
         client.configMaps().inNamespace(namespace).withName(pool.getMetadata().getName() + "-config").delete();
         client.services().inNamespace(namespace).withName(pool.getMetadata().getName() + "-headless").delete();
+        externalServiceBuilder.deleteExternalServices(pool, namespace, client);
         client.policy().v1().podDisruptionBudget().inNamespace(namespace)
               .withName(pool.getMetadata().getName() + "-pdb").delete();
         client.services().inNamespace(namespace)

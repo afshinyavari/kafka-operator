@@ -27,6 +27,7 @@ import io.fabric8.kubernetes.client.KubernetesClient;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
+import se.afshin.yavari.kafka.operator.crd.ExternalAccessType;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerTlsConfig;
@@ -92,7 +93,8 @@ public class PodTemplateFactory {
             String zone = zones.isEmpty() ? "" : zones.get(i % zones.size());
 
             List<Volume> volumes = buildVolumes(poolName, podName, hasMetrics, metrics, needsTls);
-            List<EnvVar> env = buildEnv(kafkaClusterId, kafkaVersion, configHash, isController, isBroker, zone, hasMetrics);
+            List<EnvVar> env = buildEnv(kafkaClusterId, kafkaVersion, configHash,
+                    isController, isBroker, zone, hasMetrics, listeners, i);
             List<VolumeMount> mounts = buildMounts(hasMetrics, needsTls);
             List<ContainerPort> ports = buildContainerPorts(isController, isBroker, hasMetrics, listeners);
 
@@ -236,7 +238,7 @@ public class PodTemplateFactory {
 
     private List<EnvVar> buildEnv(String kafkaClusterId, String kafkaVersion, String configHash,
                                    boolean isController, boolean isBroker, String zone,
-                                   boolean hasMetrics) {
+                                   boolean hasMetrics, List<KafkaListenerSpec> listeners, int ordinal) {
         List<EnvVar> env = new ArrayList<>();
         env.add(new EnvVarBuilder().withName("KAFKA_HEAP_OPTS")
                 .withValue(isController ? "-Xmx512m -Xms512m" : "-Xmx1g -Xms1g").build());
@@ -252,6 +254,24 @@ public class PodTemplateFactory {
                     .build());
             if (!zone.isEmpty()) {
                 env.add(new EnvVarBuilder().withName("BROKER_RACK").withValue(zone).build());
+            }
+            boolean hasExternalListeners = listeners != null && listeners.stream()
+                    .anyMatch(l -> l.getExternalAccess() != null);
+            if (hasExternalListeners) {
+                env.add(new EnvVarBuilder()
+                        .withName("HOST_IP")
+                        .withNewValueFrom()
+                            .withNewFieldRef().withFieldPath("status.hostIP").endFieldRef()
+                        .endValueFrom()
+                        .build());
+                for (KafkaListenerSpec l : listeners) {
+                    if (l.getExternalAccess() == ExternalAccessType.NODEPORT) {
+                        env.add(new EnvVarBuilder()
+                                .withName("EXTERNAL_" + l.getName() + "_NODEPORT")
+                                .withValue(String.valueOf(l.getNodePortBase() + ordinal))
+                                .build());
+                    }
+                }
             }
         }
         if (isController) {
@@ -305,8 +325,14 @@ public class PodTemplateFactory {
 
     private int brokerReadinessPort(boolean isBroker, List<KafkaListenerSpec> listeners) {
         if (!isBroker) return CONTROLLER_PORT;
-        // When TLS listeners exist, INTERNAL is localhost-only so use the first TLS listener port
-        if (listeners != null && !listeners.isEmpty()) return listeners.get(0).getPort();
+        // Use the first internal TLS listener for readiness (INTERNAL is localhost-only when TLS is active)
+        if (listeners != null) {
+            return listeners.stream()
+                    .filter(l -> l.getExternalAccess() == null && l.getTls() != null)
+                    .findFirst()
+                    .map(KafkaListenerSpec::getPort)
+                    .orElse(BROKER_PORT);
+        }
         return BROKER_PORT;
     }
 }

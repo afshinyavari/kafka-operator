@@ -3,6 +3,7 @@ package se.afshin.yavari.kafka.operator.nodepool;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
+import se.afshin.yavari.kafka.operator.crd.ExternalAccessType;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
@@ -59,9 +60,15 @@ public class StartupScriptBuilder {
         if (hasListeners) {
             for (KafkaListenerSpec l : listeners) {
                 String n = l.getName();
-                // Derive TLS listener address from base hostname + listener port
-                tlsAddrVars.append(n).append("_ADDR=\"${ADVERTISED_ADDR%:*}:")
-                           .append(l.getPort()).append("\"\n");
+                if (l.getExternalAccess() == ExternalAccessType.NODEPORT) {
+                    // External NodePort: advertise the node IP (HOST_IP env var) + assigned nodePort
+                    tlsAddrVars.append(n).append("_ADDR=\"${HOST_IP}:${EXTERNAL_")
+                               .append(n).append("_NODEPORT}\"\n");
+                } else {
+                    // Internal listener: derive address from base hostname + listener port
+                    tlsAddrVars.append(n).append("_ADDR=\"${ADVERTISED_ADDR%:*}:")
+                               .append(l.getPort()).append("\"\n");
+                }
                 tlsSed.append("    -e \"s|\\${").append(n).append("_ADDR}|${")
                       .append(n).append("_ADDR}|g\" \\\n");
                 if (l.getTls() != null) {

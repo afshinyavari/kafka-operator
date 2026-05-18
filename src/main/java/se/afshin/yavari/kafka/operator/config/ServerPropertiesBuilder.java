@@ -2,6 +2,7 @@ package se.afshin.yavari.kafka.operator.config;
 
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import se.afshin.yavari.kafka.operator.crd.ExternalAccessType;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
@@ -70,6 +71,8 @@ public class ServerPropertiesBuilder {
         KafkaListenerTlsConfig ctrlTls = clusterSpec.getControllerTls();
         List<KafkaListenerSpec> extraListeners = clusterSpec.getListeners();
         boolean hasExtraListeners = extraListeners != null && !extraListeners.isEmpty();
+        boolean hasInternalTlsListener = hasExtraListeners && extraListeners.stream()
+                .anyMatch(l -> l.getExternalAccess() == null && l.getTls() != null);
 
         if (isController) {
             // Use pod IP placeholder; sed-substituted at startup. Kafka 3.9 rejects 0.0.0.0
@@ -80,16 +83,15 @@ public class ServerPropertiesBuilder {
             if (listeners.length() > 0) {
                 listeners.append(',');
             }
-            // Bind INTERNAL to localhost when TLS listeners exist — prevents plaintext network access
-            String plaintextBind = hasExtraListeners ? "127.0.0.1" : "0.0.0.0";
+            // Bind INTERNAL to localhost only when an internal TLS listener handles inter-broker traffic
+            String plaintextBind = hasInternalTlsListener ? "127.0.0.1" : "0.0.0.0";
             listeners.append("INTERNAL://").append(plaintextBind).append(":9092");
-            if (!hasExtraListeners) {
-                // No TLS listeners: INTERNAL is the only advertised listener
-                advertisedListeners.append("INTERNAL://").append(brokerAdvertisedAddress);
-            } else {
-                // TLS listeners present: INTERNAL is localhost-only (admin tools within the pod)
-                // Advertise it as 127.0.0.1 so kubectl-exec admin tools can stay on plaintext
+            if (hasInternalTlsListener) {
+                // Inter-broker uses a TLS listener: INTERNAL is localhost-only for admin tools
                 advertisedListeners.append("INTERNAL://127.0.0.1:9092");
+            } else {
+                // No internal TLS listener: INTERNAL is the inter-broker listener
+                advertisedListeners.append("INTERNAL://").append(brokerAdvertisedAddress);
             }
         }
         // CONTROLLER must always be in the protocol map — brokers use it to talk to controllers
@@ -101,7 +103,8 @@ public class ServerPropertiesBuilder {
                     listeners.append(',').append(l.getName()).append("://0.0.0.0:").append(l.getPort());
                     advertisedListeners.append(advertisedListeners.length() > 0 ? "," : "")
                                        .append(l.getName()).append("://${").append(l.getName()).append("_ADDR}");
-                    protocolMap.append(',').append(l.getName()).append(":SSL");
+                    protocolMap.append(',').append(l.getName())
+                               .append(l.getTls() != null ? ":SSL" : ":PLAINTEXT");
                 }
             }
         }
@@ -137,7 +140,9 @@ public class ServerPropertiesBuilder {
         props.put("log.dirs",                    "/var/lib/kafka/data");
 
         if (isBroker) {
-            String interBrokerListener = hasExtraListeners ? extraListeners.get(0).getName() : "INTERNAL";
+            String interBrokerListener = extraListeners.stream()
+                    .filter(l -> l.getExternalAccess() == null)
+                    .findFirst().map(KafkaListenerSpec::getName).orElse("INTERNAL");
             props.put("inter.broker.listener.name", interBrokerListener);
             // Per-listener SSL properties for each TLS listener
             for (KafkaListenerSpec l : extraListeners) {
