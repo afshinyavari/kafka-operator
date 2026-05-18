@@ -25,13 +25,15 @@ public class IsrChecker {
     @Inject OperatorMetrics metrics;
 
     /**
-     * Returns true if it is safe to restart the given broker node.
-     * A node is safe to restart when it is not the sole ISR member for any partition.
-     * If Kafka is unreachable (cluster bootstrapping), logs a warning and returns true
-     * so the operator does not get stuck on a fresh install.
+     * Returns {@code true} if the given broker can be safely restarted.
+     * A broker is safe when it is not the sole in-sync replica (ISR) for any partition —
+     * restarting a sole ISR member would make that partition temporarily unavailable.
+     * <p><b>Optimistic on unreachable cluster:</b> if the Admin API cannot be reached
+     * (e.g. during initial bootstrap), returns {@code true} so the operator does not
+     * deadlock waiting for a cluster that has not started yet.
      *
-     * @param bootstrapAddress "host:port" for any Kafka broker in the cluster
-     * @param nodeId           the Kafka node.id of the broker about to be restarted
+     * @param bootstrapAddress {@code host:port} of any broker in the cluster
+     * @param nodeId           Kafka {@code node.id} of the broker about to be restarted
      */
     public boolean isBrokerSafeToRestart(String bootstrapAddress, int nodeId) {
         Properties props = new Properties();

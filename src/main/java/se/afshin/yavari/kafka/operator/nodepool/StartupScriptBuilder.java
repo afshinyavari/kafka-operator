@@ -17,6 +17,17 @@ public class StartupScriptBuilder {
     @ConfigProperty(name = "kafka.networking.mcs-enabled")
     boolean mcsEnabled;
 
+    /**
+     * Generates the {@code start.sh} script that runs as the pod's entrypoint.
+     * <p>At boot the script: (1) derives {@code NODE_ID} from the pod ordinal,
+     * (2) computes {@code ADVERTISED_ADDR} (MCS clusterset.local or per-pod FQDN),
+     * (3) resolves per-listener address variables (internal: from {@code ADVERTISED_ADDR};
+     * NodePort: from {@code HOST_IP} + {@code EXTERNAL_*_NODEPORT} env vars),
+     * (4) sed-substitutes all placeholders into {@code server.properties.template},
+     * (5) formats storage idempotently via {@code kafka-storage.sh},
+     * (6) converts TLS certs to PKCS12 keystores if TLS listeners are configured,
+     * (7) execs {@code kafka-server-start.sh}.
+     */
     public String build(KafkaNodePool pool, int clusterIndex, String namespace,
                         boolean hasMetrics, List<KafkaListenerSpec> listeners,
                         KafkaListenerTlsConfig controllerTls) {

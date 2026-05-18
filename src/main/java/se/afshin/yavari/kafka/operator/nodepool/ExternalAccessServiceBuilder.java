@@ -20,6 +20,13 @@ public class ExternalAccessServiceBuilder {
 
     private static final Logger LOG = Logger.getLogger(ExternalAccessServiceBuilder.class);
 
+    /**
+     * Idempotently creates or updates one NodePort {@code Service} per broker ordinal per
+     * external listener. Service name: {@code {pool}-{ordinal}-{listener}-ext}.
+     * NodePort assignment: {@code listener.nodePortBase + ordinal} — deterministic, no
+     * API read required. The service selector targets a single pod via its
+     * {@code kafka.node.id} label, ensuring clients reach the correct broker.
+     */
     public void applyExternalServices(KafkaNodePool pool, String namespace, String clusterName,
             List<KafkaListenerSpec> externalListeners, int clusterIndex, KubernetesClient client) {
         String poolName = pool.getMetadata().getName();

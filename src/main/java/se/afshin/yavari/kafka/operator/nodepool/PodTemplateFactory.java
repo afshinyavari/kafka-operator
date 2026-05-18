@@ -51,6 +51,15 @@ public class PodTemplateFactory {
     @Inject KRaftConfigGenerator kraftConfig;
     @Inject KubernetesClient client;
 
+    /**
+     * Builds one {@link PodEntry} per replica in the pool.
+     * Each entry contains a fully specified {@code PodSpec} with: the Kafka container
+     * (image, command, resources, probes, env vars, volume mounts), config + data volumes,
+     * optional TLS secret and JMX config volumes, pod anti-affinity, and optional topology
+     * spread constraints. Env vars include {@code POD_NAME}, {@code KAFKA_CLUSTER_ID},
+     * {@code KAFKA_CONFIG_HASH} (triggers rolling update on config change), and — for
+     * NodePort external listeners — {@code HOST_IP} and {@code EXTERNAL_*_NODEPORT}.
+     */
     public List<PodEntry> build(KafkaNodePool pool, KafkaCluster cluster, String namespace,
                                 int clusterIndex, String kafkaClusterId, String configHash,
                                 boolean isBroker, boolean isController) {

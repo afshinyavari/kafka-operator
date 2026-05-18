@@ -22,16 +22,24 @@ public class ServerPropertiesBuilder {
     KRaftConfigGenerator kraftConfig;
 
     /**
-     * Builds the merged Kafka configuration for a node pool.
-     * Pool config overrides cluster config; computed fields (node.id, quorum voters, etc.) are set last.
+     * Builds the merged Kafka properties for a node pool.
+     * Precedence (lowest → highest): cluster {@code spec.config} → pool {@code spec.config} →
+     * operator-computed fields. Computed fields ({@code process.roles}, {@code node.id},
+     * {@code listeners}, {@code advertised.listeners}, {@code controller.quorum.voters}, etc.)
+     * always win and cannot be overridden via user config.
      *
-     * @param cr           parent KafkaCluster CR
-     * @param poolSpec     the KafkaNodePool spec
-     * @param clusterIndex 0-based index of this cluster in spec.clusters
-     * @param poolLocalIndex 0-based index of this node within the pool (for broker node ID)
-     * @param quorumVoters pre-computed controller.quorum.voters string
-     * @param controllerAdvertisedAddress external address for the controller on this cluster
-     * @param brokerAdvertisedAddress external address for this broker (null if not a broker)
+     * <p>The returned map is a template: broker-specific values ({@code ${NODE_ID}},
+     * {@code ${ADVERTISED_ADDR}}, per-listener addr vars) are placeholder strings that
+     * {@code start.sh} resolves at pod startup via {@code sed}.
+     *
+     * @param cr                          parent KafkaCluster CR
+     * @param poolSpec                    the KafkaNodePool spec
+     * @param clusterIndex                0-based index of this cluster in spec.clusters
+     * @param poolLocalIndex              0-based index of this node within the pool (for broker node ID)
+     * @param quorumVoters                pre-computed controller.quorum.voters string
+     * @param controllerAdvertisedAddress host:port for the KRaft CONTROLLER listener on this cluster
+     * @param brokerAdvertisedAddress     startup-time placeholder (e.g. {@code "${ADVERTISED_ADDR}"})
+     *                                    substituted by start.sh; ignored for controller-only nodes
      */
     public Map<String, String> buildProperties(
             KafkaCluster cr,

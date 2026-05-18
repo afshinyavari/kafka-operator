@@ -53,8 +53,11 @@ public class KRaftConfigGenerator {
     }
 
     /**
-     * Builds the controller.quorum.voters string for all clusters.
-     * Format: "1000@ctrl-a:9093,1001@ctrl-b:9093,1002@ctrl-c:9093"
+     * Builds the {@code controller.quorum.voters} string from {@code spec.clusters}.
+     * Format: {@code "10000@host-a:9093,10001@host-b:9093,10002@host-c:9093"}.
+     * Controller node IDs are assigned as {@code CONTROLLER_BASE + clusterIndex} where
+     * index is the 0-based position in the clusters list — the same list must appear
+     * identically on every cluster in the quorum.
      */
     public String buildQuorumVoters(KafkaClusterSpec spec) {
         List<ClusterEntry> clusters = spec.getClusters();
