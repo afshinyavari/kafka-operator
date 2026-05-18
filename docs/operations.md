@@ -114,6 +114,139 @@ kubectl patch kafkanodepool brokers-a -n kafka \
 
 ---
 
+## Kafka Proxy and RBAC
+
+The `KafkaProxy` CRD deploys Kroxylicious as a transparent proxy in front of the broker pool.
+When OIDC is configured, clients authenticate with SASL/OAUTHBEARER (JWT Bearer tokens), and
+topic-level RBAC is enforced by `GroupAwareAuthorizerService` using group membership from
+the JWT claims.
+
+### Prerequisites
+
+- Keycloak (or another OIDC provider) with realm `demo`, groups `orders-team` / `invoices-team` /
+  `schema-admin`, and test users `alice` (orders-team) and `bob` (invoices-team)
+- Custom Kroxylicious filter image built and loaded
+
+### Setup
+
+```bash
+# 1. Build the custom filter image (once; skip if already built)
+make -C kind kroxy-image
+make -C kind reload-kroxy-image
+
+# 2. Deploy Keycloak with realm import
+make -C kind keycloak-setup       # waits for Ready (up to 5 min)
+
+# 3. Apply KafkaRbac + KafkaProxy CRs
+make -C kind proxy-setup          # waits for KafkaProxy phase=READY
+
+# 4. Run end-to-end RBAC test
+make -C kind rbac-test            # 4 assertions: alice/bob × orders/invoices topics
+```
+
+### Verifying the generated proxy config
+
+```bash
+kubectl --context kind-kafka-a -n kafka \
+  get cm kafka-proxy-config -o jsonpath='{.data.config\.yaml}'
+```
+
+The filter chain for OIDC mode should appear as:
+`jwt-groups → oauth-bearer-validation → sasl-handshake-synthesizer → [authorization]`
+
+### Testing from inside a broker pod (Kafka 4.0 FileTokenRetriever)
+
+```bash
+BROKER_POD=$(kubectl --context kind-kafka-a get pods -n kafka \
+  -l kafka.yavari.afshin.se/node-pool=brokers-a --no-headers \
+  -o custom-columns='NAME:.metadata.name' | head -1)
+
+# Fetch JWT and write to file
+kubectl --context kind-kafka-a -n kafka exec "${BROKER_POD}" -- bash -c "
+  curl -sf -X POST http://keycloak.kafka.svc.cluster.local:8080/realms/demo/protocol/openid-connect/token \
+    -d 'grant_type=password&client_id=rbac-proxy&client_secret=rbac-proxy-secret&username=alice&password=alice' \
+    | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"access_token\"], end=\"\")' \
+    > /tmp/kafka-oauth-token"
+
+# Produce via proxy (SASL/OAUTHBEARER using file:// token retriever)
+kubectl --context kind-kafka-a -n kafka exec "${BROKER_POD}" -- bash -c "
+  printf '%s\n' \
+    'security.protocol=SASL_PLAINTEXT' \
+    'sasl.mechanism=OAUTHBEARER' \
+    'sasl.oauthbearer.token.endpoint.url=file:///tmp/kafka-oauth-token' \
+    'sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required;' \
+    'sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler' \
+    > /tmp/client.properties
+  export KAFKA_OPTS='-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=file:///tmp/kafka-oauth-token'
+  echo 'test-message' | timeout 20 /opt/kafka/bin/kafka-console-producer.sh \
+    --bootstrap-server kafka-proxy.kafka.svc.cluster.local:9094 \
+    --topic orders \
+    --producer.config /tmp/client.properties"
+```
+
+---
+
+## Schema Registry (Apicurio)
+
+`ApicurioRegistry` deploys Apicurio Registry and an HTTP RBAC proxy. Clients must use the
+proxy URL (`status.proxyUrl`, port 8082) with a Bearer JWT — direct registry access on port
+8080 bypasses RBAC entirely.
+
+### Prerequisites
+
+- `make -C kind proxy-setup` already run (KafkaRbac CR and policy ConfigMap must exist)
+- Keycloak already deployed (`make -C kind keycloak-setup`)
+
+### Setup
+
+```bash
+# Build and deploy (builds image, loads into Kind, applies CR, waits for READY)
+make -C kind apicurio-setup
+
+# Run end-to-end schema registry RBAC test
+# 8 assertions: alice/bob × orders/invoices × READ/WRITE
+make -C kind apicurio-rbac-test
+```
+
+### Policy hot-reload
+
+Editing `KafkaRbac` triggers the operator to update `{name}-apicurio-policy`. The proxy's
+`PolicyEngine` watches the mounted file and reloads within ~1 second — no proxy restart
+required.
+
+```bash
+# Verify the current policy
+kubectl --context kind-kafka-a -n kafka \
+  get cm kafka-rbac-apicurio-policy -o jsonpath='{.data.policy\.yaml}'
+```
+
+### Accessing the schema registry from an application
+
+```bash
+# Get a JWT
+TOKEN=$(curl -sf -X POST http://<keycloak>:8080/realms/demo/protocol/openid-connect/token \
+  -d 'grant_type=password&client_id=rbac-proxy&client_secret=rbac-proxy-secret&username=alice&password=alice' \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["access_token"], end="")')
+
+PROXY=http://apicurio-rbac-proxy.kafka.svc.cluster.local:8082
+
+# Read a schema (allowed for orders-team on 'orders' artifact)
+curl -H "Authorization: Bearer $TOKEN" \
+  $PROXY/apis/registry/v2/groups/default/artifacts/orders
+
+# Write a new version (allowed for orders-team on 'orders' artifact)
+curl -X POST -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{"type":"object"}' \
+     $PROXY/apis/registry/v2/groups/default/artifacts/orders/versions
+
+# Attempt on a forbidden artifact → 403 Forbidden
+curl -H "Authorization: Bearer $TOKEN" \
+  $PROXY/apis/registry/v2/groups/default/artifacts/invoices
+```
+
+---
+
 ## Monitoring
 
 ### Prometheus metrics
@@ -195,6 +328,18 @@ If non-empty and not progressing:
   kubectl get kafkacluster my-kafka -n kafka -o jsonpath='{.status.upgradePhase}'
   ```
 - **Pod not becoming Ready:** Check pod logs and readiness probe; default probe is TCP on port 9092 (or first TLS listener port).
+
+### Proxy and RBAC issues
+
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| All RBAC denied; proxy logs `subject=Subject[principals=[]]` | Filter chain order wrong; `OauthBearerValidationFilter` processes the broker's SASL error before `SaslHandshakeSynthesizerFilter` converts it to success, so `clientSaslAuthenticationSuccess()` is never called | Ensure chain order: `jwt-groups → oauth-bearer-validation → sasl-handshake-synthesizer` |
+| `TopicAuthorizationException` for METADATA requests despite valid JWT | `DESCRIBE` operation not covered by RBAC rules | Use semantic operations `PRODUCE`/`FETCH` which alias to `{WRITE, DESCRIBE}` / `{READ, DESCRIBE}` |
+| Proxy pod logs `OIDC discovery failed` or `Connection refused` to Keycloak | Wrong realm in `spec.oidc.jwksEndpointUrl` or Keycloak not yet ready | Check the realm name matches the realm imported into Keycloak; run `make keycloak-setup` if Keycloak is missing |
+| ConfigMap `kafka-proxy-config` not updated after `KafkaRbac` change | Field manager conflict from prior manual `kubectl apply` | Delete and recreate the ConfigMap, or let the operator manage it exclusively via `createOrReplace` |
+| Schema registry proxy returns 502 Bad Gateway | `apicurio-registry` service not reachable from proxy pod | Verify `apicurio-registry` Service exists and registry pod is Running |
+| Schema registry proxy throws `IllegalArgumentException: :status` | HTTP/2 pseudo-headers forwarded into HTTP/1 response | Fixed in `ProxyResource.forward()` — skip headers starting with `:`. Rebuild proxy image if on an old version. |
+| Schema registry: 403 Forbidden for an expected-allowed call | RBAC policy not yet reloaded after `KafkaRbac` update | Wait ~1–2 s for `PolicyEngine` watcher to hot-reload; check proxy logs for `[PolicyEngine] Loaded N rules` |
 
 ### Checking generated server.properties
 

@@ -10,6 +10,8 @@ Three reconcilers form a strict hierarchy. Pods are never created directly — t
 
 ## CRD Hierarchy
 
+### Kafka cluster tree
+
 ```
 KafkaCluster  (user-managed)
   │  Produces: quorum ConfigMap
@@ -24,7 +26,24 @@ KafkaCluster  (user-managed)
               └── Pod  (operator-managed, 1 per replica)
 ```
 
-Users create and update `KafkaCluster` and `KafkaNodePool`. The operator creates and owns everything below.
+### Proxy / RBAC tree (independent, optional)
+
+```
+KafkaRbac  (user-managed)
+  │  Produces:
+  │    {name}-kafka-rules ConfigMap    → mounted by KafkaProxy
+  │    {name}-apicurio-policy ConfigMap → mounted by apicurio-rbac-proxy
+  │
+  ├── KafkaProxy  (user-managed, references KafkaNodePool via poolRef)
+  │     Produces: {name}-config ConfigMap (Kroxylicious YAML),
+  │               Deployment (Kroxylicious + custom filters), Service
+  │
+  └── ApicurioRegistry  (user-managed, references KafkaRbac via rbacRef)
+        Produces: {name}-registry Deployment + Service,
+                  {name}-rbac-proxy Deployment + Service
+```
+
+Users create `KafkaRbac`, `KafkaProxy`, and `ApicurioRegistry`. The operator creates and owns all downstream resources.
 
 ---
 
@@ -35,6 +54,9 @@ Users create and update `KafkaCluster` and `KafkaNodePool`. The operator creates
 | `KafkaClusterReconciler` | `KafkaCluster` | `{cluster}-quorum-config` ConfigMap; deletion ordering | `KafkaCluster` changes; `KafkaPodSet` status changes |
 | `KafkaNodePoolReconciler` | `KafkaNodePool` | Pool ConfigMap, headless Service, per-broker external Services, PDB, ServiceExport, KafkaPodSet | `KafkaNodePool` changes; parent `KafkaCluster` changes |
 | `KafkaPodSetReconciler` | `KafkaPodSet` | Pods, PVCs; rolling updates | `KafkaPodSet` changes; Pod changes |
+| `KafkaRbacReconciler` | `KafkaRbac` | `{name}-kafka-rules` ConfigMap, `{name}-apicurio-policy` ConfigMap | `KafkaRbac` changes |
+| `KafkaProxyReconciler` | `KafkaProxy` | `{name}-config` ConfigMap (Kroxylicious YAML), Deployment, Service | `KafkaProxy`, `KafkaNodePool`, `KafkaRbac`, `ApicurioRegistry` changes |
+| `ApicurioRegistryReconciler` | `ApicurioRegistry` | `{name}-registry` Deployment + Service, `{name}-rbac-proxy` Deployment + Service | `ApicurioRegistry`, `KafkaRbac` changes |
 
 All reconcilers use JOSDK's `UpdateControl.patchStatus().rescheduleAfter(15s)` when work is still in progress, creating a self-healing loop.
 
@@ -205,3 +227,100 @@ Downgrade protection: `CrValidator` rejects a `targetMetadataVersion` lower than
 | `ClusterStatusAggregator` | `cluster` | Rolls up pool readiness into `KafkaCluster.status` |
 | `CrValidator` | `reconciler` | Semantic validation beyond CRD schema constraints |
 | `OperatorMetrics` | `metrics` | Micrometer counters/timers for rolling updates, ISR, scale-down |
+| `KroxyliciousConfigBuilder` | `proxy` | Generates Kroxylicious `config.yaml` from `KafkaProxy` spec |
+| `KafkaRbacConfigMapBuilder` | `proxy` | Generates `rbac-rules.yaml` and `policy.yaml` from `KafkaRbac` spec |
+| `GroupAwareAuthorizerService` | `filters/…/rbac` | Kroxylicious `AuthorizerService` plugin; enforces topic RBAC |
+| `PolicyEngine` | `apicurio-proxy/…/rbac` | YAML policy loader with `WatchService` hot-reload; enforces artifact RBAC |
+
+---
+
+## Proxy Layer (KafkaProxy)
+
+`KafkaProxy` deploys [Kroxylicious](https://kroxylicious.io/) as a transparent Kafka proxy.
+Custom filters are compiled into the `kroxy-filters:dev` image (Maven project under `filters/`).
+
+### Filter chain — OIDC mode
+
+When `spec.oidc` is set, `KroxyliciousConfigBuilder` generates a four-filter chain. Filters
+run **in order on the request path** and **in reverse on the response path**:
+
+```
+Request path (client → broker):
+  jwt-groups → oauth-bearer-validation → sasl-handshake-synthesizer → [authorization]
+
+Response path (broker → client, reversed):
+  [authorization] → sasl-handshake-synthesizer → oauth-bearer-validation → jwt-groups
+```
+
+**Why this order matters:**
+
+The backend Kafka broker runs on a PLAINTEXT listener with no SASL support. When
+`OauthBearerValidationFilter` forwards `SASL_AUTHENTICATE` to the broker, the broker
+returns error 34 (`ILLEGAL_SASL_STATE`). On the response path, `SaslHandshakeSynthesizerFilter`
+must run **first** — it converts that error into a success response, so that when
+`OauthBearerValidationFilter` processes the response it calls `clientSaslAuthenticationSuccess()`
+with the validated JWT subject. Incorrect order leaves Subject as anonymous, and all RBAC
+decisions default to DENY.
+
+### JwtGroupStore side-channel
+
+`OauthBearerValidationFilter` builds `Subject{User(sub_UUID)}` internally — it does not
+call any externally registered `SaslSubjectBuilderService` SPI. This means groups are
+**not** in the Subject's principal set. To bridge the gap:
+
+1. `JwtGroupFilter` parses the JWT on the `SASL_AUTHENTICATE_REQUEST` path and stores
+   `sub → Set<groupName>` in the static `JwtGroupStore`.
+2. `GroupAwareAuthorizer.isAllowed()` checks `subject.allPrincipalsOfType(Group.class)`;
+   if empty, it falls back to `JwtGroupStore.get(user.name())` using the same sub UUID.
+
+### Operation aliases
+
+`KafkaProxy` RBAC rules use semantic names; `GroupAwareAuthorizer.matchesOp()` maps them:
+
+| Semantic | Kroxylicious `TopicResource` operations |
+|----------|-----------------------------------------|
+| `PRODUCE` | `WRITE`, `DESCRIBE` |
+| `FETCH` | `READ`, `DESCRIBE` |
+
+`DESCRIBE` is needed because a Kafka producer first sends a `METADATA` request, which
+Kroxylicious authorises as `DESCRIBE`. Without this alias, METADATA requests fail even for
+groups that are allowed to produce.
+
+---
+
+## Schema Registry RBAC Proxy (ApicurioRegistry)
+
+`ApicurioRegistry` optionally deploys a Quarkus HTTP proxy (`apicurio-rbac-proxy`) in
+front of the Apicurio Registry that enforces artifact-level access control.
+
+```
+Kafka client (curl / producer)
+  │  Authorization: Bearer <JWT>
+  ▼
+apicurio-rbac-proxy:8082   (Quarkus OIDC + PolicyEngine)
+  │  if allowed — strip Authorization header, forward
+  ▼
+apicurio-registry:8080     (Apicurio Registry, no auth)
+```
+
+### Request routing in `ProxyResource`
+
+| Path pattern | Extracted artifact | Action |
+|---|---|---|
+| `GET /apis/registry/v2/groups/{g}/artifacts/{id}` | `{id}` | READ |
+| `POST /apis/registry/v2/groups/{g}/artifacts/{id}/versions` | `{id}` | WRITE |
+| `POST /apis/registry/v2/groups/{g}/artifacts` | `*` | WRITE |
+| `DELETE /apis/registry/v2/groups/{g}/artifacts/{id}` | `{id}` | DELETE |
+| `/schemas/{name}` (XML schema proxy) | `{name}` | method-based |
+
+### PolicyEngine
+
+- Loads `policy.yaml` (mounted from `{rbacRef}-apicurio-policy` ConfigMap) at startup.
+- Watches the file with `java.nio.file.WatchService` and hot-reloads within ~1 s on change
+  (no pod restart required when `KafkaRbac` is updated).
+- `isAllowed(callerRoles, artifact, action)` returns `true` if any rule's `roles` intersect
+  `callerRoles` and that rule grants `action` on `artifact` or `"*"`.
+
+**Important:** HTTP/2 pseudo-headers (`:status`, `:path`) returned by the upstream Apicurio
+Registry are filtered out before forwarding the response to the client. Vert.x rejects these
+as invalid HTTP/1 header names.
