@@ -1,13 +1,16 @@
-SHELL         := /bin/bash
-export PATH   := $(HOME)/.local/bin:$(PATH)
-CLUSTERS      := kafka-a kafka-b kafka-c
-NAMESPACE     := kafka
-IMAGE         := kafka-operator:dev
-KAFKA_IMAGE   := kafka-ubi:4.0.0
-KAFKA_VERSION := 4.0.0
-OPERATOR_DIR  := ..
+SHELL              := /bin/bash
+export PATH        := $(HOME)/.local/bin:$(PATH)
+CLUSTERS           := kafka-a kafka-b kafka-c
+NAMESPACE          := kafka
+IMAGE              := kafka-operator:dev
+KAFKA_IMAGE        := kafka-ubi:4.0.0
+KAFKA_VERSION      := 4.0.0
+KROXY_IMAGE        := kroxy-filters:dev
+APICURIO_PROXY_IMG := apicurio-rbac-proxy:dev
+OPERATOR_DIR       := ..
 
-.PHONY: all setup mcs-setup teardown status quorum logs-a logs-b logs-c build image help
+.PHONY: all setup mcs-setup teardown status quorum logs-a logs-b logs-c build image \
+        kroxy-image reload-kroxy-image apicurio-proxy-image reload-apicurio-proxy-image help
 
 all: setup  ## Full setup: build → image → clusters → deploy
 
@@ -74,6 +77,24 @@ reload-image:  ## Rebuild + reload image without recreating clusters
 	@for cluster in $(CLUSTERS); do \
 	  kind load docker-image $(IMAGE) --name $$cluster; \
 	  kubectl --context kind-$$cluster -n $(NAMESPACE) rollout restart deployment kafka-operator; \
+	done
+
+kroxy-image:  ## Build the Kroxylicious + custom filters Docker image
+	cd $(OPERATOR_DIR)/filters && mvn package -DskipTests -q
+	docker build -t $(KROXY_IMAGE) $(OPERATOR_DIR)/filters
+
+reload-kroxy-image: kroxy-image  ## Rebuild + reload kroxy-filters image into all Kind clusters
+	@for cluster in $(CLUSTERS); do \
+	  kind load docker-image $(KROXY_IMAGE) --name $$cluster; \
+	done
+
+apicurio-proxy-image:  ## Build the apicurio-rbac-proxy Docker image
+	cd $(OPERATOR_DIR)/apicurio-proxy && mvn package -DskipTests -q
+	docker build -t $(APICURIO_PROXY_IMG) $(OPERATOR_DIR)/apicurio-proxy
+
+reload-apicurio-proxy-image: apicurio-proxy-image  ## Rebuild + reload apicurio-rbac-proxy image into all Kind clusters
+	@for cluster in $(CLUSTERS); do \
+	  kind load docker-image $(APICURIO_PROXY_IMG) --name $$cluster; \
 	done
 
 help:  ## Show this help

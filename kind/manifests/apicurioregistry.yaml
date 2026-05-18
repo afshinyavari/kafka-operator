@@ -1,0 +1,16 @@
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: ApicurioRegistry
+metadata:
+  name: apicurio
+  namespace: kafka
+spec:
+  image: quay.io/apicurio/apicurio-registry-mem:latest-snapshot
+  rbacProxyImage: apicurio-rbac-proxy:dev
+  rbacRef: kafka-rbac
+  replicas: 1
+  storage:
+    type: mem
+  oidc:
+    issuerUrl: http://keycloak.kafka.svc.cluster.local:8080/realms/kafka
+    groupsClaim: realm_access.roles
+  exportService: false

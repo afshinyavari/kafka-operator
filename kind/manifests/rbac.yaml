@@ -20,9 +20,21 @@ rules:
       - kafkapodsets
       - kafkapodsets/status
       - kafkapodsets/finalizers
+      - kafkarbacs
+      - kafkarbacs/status
+      - kafkarbacs/finalizers
+      - kafkaproxies
+      - kafkaproxies/status
+      - kafkaproxies/finalizers
+      - apicurioregistries
+      - apicurioregistries/status
+      - apicurioregistries/finalizers
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "deployments/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["pods", "persistentvolumeclaims", "configmaps", "services", "namespaces", "events"]
+    resources: ["pods", "persistentvolumeclaims", "configmaps", "services", "secrets", "namespaces", "events"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["nodes"]

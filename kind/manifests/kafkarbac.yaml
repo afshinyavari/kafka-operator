@@ -1,0 +1,36 @@
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaRbac
+metadata:
+  name: kafka-rbac
+  namespace: kafka
+spec:
+  groups:
+    - name: orders-team
+      kafka:
+        topics:
+          - orders
+          - orders-dlq
+        operations:
+          - PRODUCE
+          - FETCH
+      schemaRegistry:
+        artifacts:
+          - orders
+        actions:
+          - READ
+          - WRITE
+    - name: schema-admins
+      schemaRegistry:
+        artifacts:
+          - "*"
+        actions:
+          - READ
+          - WRITE
+          - DELETE
+  users:
+    - name: app1        # mTLS cert CN
+      kafka:
+        topics:
+          - orders
+        operations:
+          - PRODUCE

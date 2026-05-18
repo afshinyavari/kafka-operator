@@ -1,0 +1,13 @@
+rules:
+  - roles: [orders-team]
+    resources:
+      - artifact: orders
+        actions: [READ, WRITE]
+  - roles: [invoices-team]
+    resources:
+      - artifact: invoices
+        actions: [READ, WRITE]
+  - roles: [schema-admin]
+    resources:
+      - artifact: "*"
+        actions: [READ, WRITE, DELETE]

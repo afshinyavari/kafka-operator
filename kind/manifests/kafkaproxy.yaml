@@ -1,0 +1,45 @@
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaProxy
+metadata:
+  name: kafka-proxy
+  namespace: kafka
+spec:
+  clusterRef: kafka-cluster
+  poolRef: brokers-a
+  replicas: 1
+  image: kroxy-filters:dev
+  clientPort: 9094
+  brokerNodeIdRanges:
+    - name: brokers-a
+      start: 0
+      end: 0
+    - name: brokers-b
+      start: 1000
+      end: 1000
+    - name: brokers-c
+      start: 2000
+      end: 2000
+  # rbacRef: kafka-rbac      # disabled for initial test (no Keycloak)
+  # apicurioRef: apicurio
+  # tls:
+  #   proxyKeySecretRef: kafka-proxy-tls
+  #   clientCaSecretRef: kafka-client-ca
+  # oidc:                     # disabled for initial test (no Keycloak)
+  #   jwksEndpointUrl: http://keycloak.kafka.svc.cluster.local:8080/realms/kafka/protocol/openid-connect/certs
+  #   groupsClaim: realm_access.roles
+  filters:
+    xmlValidation:
+      enabled: false
+      schemaTopic: xml-schemas
+    schemaRegistry:
+      enabled: false
+      schemaType: JSON_SCHEMA
+      topics:
+        - orders
+        - invoices
+  # Uncomment to add custom filters:
+  # customFilters:
+  #   - name: my-filter
+  #     type: com.example.MyFilterFactory
+  #     config:
+  #       someKey: someValue

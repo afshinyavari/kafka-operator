@@ -1,0 +1,114 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>se.afshin.yavari</groupId>
+    <artifactId>kroxy-filters</artifactId>
+    <version>1.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <kroxylicious.version>0.21.0</kroxylicious.version>
+        <kafka.version>3.9.0</kafka.version>
+        <jackson.version>2.17.1</jackson.version>
+        <snakeyaml.version>2.2</snakeyaml.version>
+    </properties>
+
+    <dependencies>
+        <!-- Kroxylicious filter API - provided by the proxy runtime -->
+        <dependency>
+            <groupId>io.kroxylicious</groupId>
+            <artifactId>kroxylicious-api</artifactId>
+            <version>${kroxylicious.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Kroxylicious authorizer API - for GroupAwareAuthorizerService -->
+        <dependency>
+            <groupId>io.kroxylicious</groupId>
+            <artifactId>kroxylicious-authorizer-api</artifactId>
+            <version>${kroxylicious.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- SnakeYAML for GroupAwareAuthorizer rules parsing -->
+        <dependency>
+            <groupId>org.yaml</groupId>
+            <artifactId>snakeyaml</artifactId>
+            <version>${snakeyaml.version}</version>
+        </dependency>
+
+        <!-- Kafka client for schema topic consumer/producer -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>${kafka.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- JSON for schema envelope -->
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <version>${jackson.version}</version>
+        </dependency>
+
+        <!-- Logging -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.13</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- Test -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.2</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>3.25.3</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.3</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <!-- Shade deps not provided by Kroxylicious runtime -->
+                            <artifactSet>
+                                <includes>
+                                    <include>com.fasterxml.jackson.core:*</include>
+                                    <include>org.yaml:snakeyaml</include>
+                                </includes>
+                            </artifactSet>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

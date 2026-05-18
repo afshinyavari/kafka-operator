@@ -1,0 +1,6 @@
+target/
+filters/target/
+apicurio-proxy/target/
+*.class
+*.jar
+!kafka-image/

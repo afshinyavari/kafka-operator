@@ -1,0 +1,30 @@
+# Schema RBAC Policy
+#
+# Set PRINCIPAL_CLAIM env var to the JWT claim path containing roles/groups.
+# Examples:
+#   Keycloak:  PRINCIPAL_CLAIM=realm_access.roles
+#   Azure AD:  PRINCIPAL_CLAIM=roles
+#   Auth0:     PRINCIPAL_CLAIM=https://example.com/roles
+#
+# Each rule grants listed roles access to listed artifacts with listed actions.
+# artifact: "*" is a wildcard matching any artifact.
+# Actions: READ, WRITE, DELETE
+
+rules:
+  - roles:
+      - "orders-team"
+    resources:
+      - artifact: "orders"
+        actions: [READ, WRITE]
+
+  - roles:
+      - "invoices-team"
+    resources:
+      - artifact: "invoices"
+        actions: [READ, WRITE]
+
+  - roles:
+      - "schema-admin"
+    resources:
+      - artifact: "*"
+        actions: [READ, WRITE, DELETE]
