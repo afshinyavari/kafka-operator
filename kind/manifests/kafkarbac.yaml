@@ -19,7 +19,15 @@ spec:
         actions:
           - READ
           - WRITE
-    - name: schema-admins
+    - name: invoices-team
+      kafka:
+        topics:
+          - invoices
+          - invoices-dlq
+        operations:
+          - PRODUCE
+          - FETCH
+    - name: schema-admin
       schemaRegistry:
         artifacts:
           - "*"

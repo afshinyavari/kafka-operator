@@ -7,6 +7,7 @@ import io.kroxylicious.authorizer.service.ResourceType;
 import io.kroxylicious.proxy.authentication.Subject;
 import io.kroxylicious.proxy.authentication.User;
 import se.afshin.yavari.kroxy.auth.Group;
+import se.afshin.yavari.kroxy.auth.JwtGroupStore;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -61,12 +62,25 @@ class GroupAwareAuthorizer implements Authorizer {
             }
         }
 
-        // Check group rules (SASL JWT groups)
+        // Check group rules (SASL JWT groups via Subject principals or JwtGroupStore fallback)
         Set<Group> groups = subject.allPrincipalsOfType(Group.class);
-        for (Group group : groups) {
-            for (RbacGroup rule : rules.groups) {
-                if (rule.name.equals(group.name()) && matchesTopic(rule.topics, topic) && matchesOp(rule.operations, operation)) {
-                    return true;
+        if (groups.isEmpty() && user.isPresent()) {
+            // OauthBearerValidationFilter sets Subject{User(sub)} without Group principals.
+            // JwtGroupFilter stored groups in JwtGroupStore keyed by the same sub UUID.
+            Set<String> jwtGroups = JwtGroupStore.get(user.get().name());
+            for (String groupName : jwtGroups) {
+                for (RbacGroup rule : rules.groups) {
+                    if (rule.name.equals(groupName) && matchesTopic(rule.topics, topic) && matchesOp(rule.operations, operation)) {
+                        return true;
+                    }
+                }
+            }
+        } else {
+            for (Group group : groups) {
+                for (RbacGroup rule : rules.groups) {
+                    if (rule.name.equals(group.name()) && matchesTopic(rule.topics, topic) && matchesOp(rule.operations, operation)) {
+                        return true;
+                    }
                 }
             }
         }
@@ -79,7 +93,11 @@ class GroupAwareAuthorizer implements Authorizer {
     }
 
     private static boolean matchesOp(List<String> allowed, String operation) {
-        return allowed.contains("*") || allowed.contains(operation);
+        if (allowed.contains("*") || allowed.contains(operation)) return true;
+        // Semantic aliases: PRODUCE → {WRITE, DESCRIBE}; FETCH → {READ, DESCRIBE}
+        if (allowed.contains("PRODUCE") && (operation.equals("WRITE") || operation.equals("DESCRIBE"))) return true;
+        if (allowed.contains("FETCH") && (operation.equals("READ") || operation.equals("DESCRIBE"))) return true;
+        return false;
     }
 
     private static String operationName(Action action) {

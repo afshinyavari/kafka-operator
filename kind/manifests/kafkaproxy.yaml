@@ -19,14 +19,16 @@ spec:
     - name: brokers-c
       start: 2000
       end: 2000
-  # rbacRef: kafka-rbac      # disabled for initial test (no Keycloak)
+  rbacRef: kafka-rbac
   # apicurioRef: apicurio
   # tls:
   #   proxyKeySecretRef: kafka-proxy-tls
   #   clientCaSecretRef: kafka-client-ca
-  # oidc:                     # disabled for initial test (no Keycloak)
-  #   jwksEndpointUrl: http://keycloak.kafka.svc.cluster.local:8080/realms/kafka/protocol/openid-connect/certs
-  #   groupsClaim: realm_access.roles
+  oidc:
+    jwksEndpointUrl: http://keycloak.kafka.svc.cluster.local:8080/realms/demo/protocol/openid-connect/certs
+    groupsClaim: realm_access.roles
+    expectedIssuer: http://keycloak.kafka.svc.cluster.local:8080/realms/demo
+    expectedAudience: rbac-proxy
   filters:
     xmlValidation:
       enabled: false

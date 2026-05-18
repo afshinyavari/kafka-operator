@@ -1,0 +1,159 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: keycloak-realm
+  namespace: kafka
+data:
+  realm-demo.json: |
+    {
+      "realm": "demo",
+      "enabled": true,
+      "requiredCredentials": ["password"],
+      "clients": [
+        {
+          "clientId": "rbac-proxy",
+          "enabled": true,
+          "publicClient": false,
+          "clientAuthenticatorType": "client-secret",
+          "secret": "rbac-proxy-secret",
+          "directAccessGrantsEnabled": true,
+          "standardFlowEnabled": false,
+          "protocolMappers": [
+            {
+              "name": "audience-rbac-proxy",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "consentRequired": false,
+              "config": {
+                "included.client.audience": "rbac-proxy",
+                "id.token.claim": "false",
+                "access.token.claim": "true"
+              }
+            }
+          ]
+        }
+      ],
+      "requiredActions": [
+        {
+          "alias": "VERIFY_PROFILE",
+          "name": "Verify Profile",
+          "providerId": "VERIFY_PROFILE",
+          "enabled": false,
+          "defaultAction": false,
+          "priority": 90,
+          "config": {}
+        }
+      ],
+      "roles": {
+        "realm": [
+          { "name": "orders-team" },
+          { "name": "invoices-team" },
+          { "name": "schema-admin" }
+        ]
+      },
+      "users": [
+        {
+          "username": "alice",
+          "enabled": true,
+          "emailVerified": true,
+          "requiredActions": [],
+          "credentials": [{ "type": "password", "value": "alice", "temporary": false }],
+          "realmRoles": ["orders-team"]
+        },
+        {
+          "username": "bob",
+          "enabled": true,
+          "emailVerified": true,
+          "requiredActions": [],
+          "credentials": [{ "type": "password", "value": "bob", "temporary": false }],
+          "realmRoles": ["invoices-team"]
+        },
+        {
+          "username": "schemadmin",
+          "enabled": true,
+          "emailVerified": true,
+          "requiredActions": [],
+          "credentials": [{ "type": "password", "value": "schemadmin", "temporary": false }],
+          "realmRoles": ["schema-admin"]
+        }
+      ]
+    }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak
+  namespace: kafka
+  labels:
+    app: keycloak
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      containers:
+        - name: keycloak
+          image: quay.io/keycloak/keycloak:latest
+          imagePullPolicy: IfNotPresent
+          args: ["start-dev", "--import-realm"]
+          env:
+            - name: KC_BOOTSTRAP_ADMIN_USERNAME
+              value: "admin"
+            - name: KC_BOOTSTRAP_ADMIN_PASSWORD
+              value: "admin"
+            - name: KC_HTTP_PORT
+              value: "8080"
+          ports:
+            - containerPort: 8080
+              name: http
+          volumeMounts:
+            - name: realm-config
+              mountPath: /opt/keycloak/data/import
+          readinessProbe:
+            httpGet:
+              path: /realms/demo/.well-known/openid-configuration
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 12
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 1000m
+              memory: 1Gi
+      volumes:
+        - name: realm-config
+          configMap:
+            name: keycloak-realm
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: keycloak
+  namespace: kafka
+  labels:
+    app: keycloak
+spec:
+  selector:
+    app: keycloak
+  type: NodePort
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30800
+      protocol: TCP
+---
+apiVersion: multicluster.x-k8s.io/v1alpha1
+kind: ServiceExport
+metadata:
+  name: keycloak
+  namespace: kafka

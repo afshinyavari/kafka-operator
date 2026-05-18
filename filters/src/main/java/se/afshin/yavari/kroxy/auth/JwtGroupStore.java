@@ -18,6 +18,10 @@ public final class JwtGroupStore {
         STORE.put(sub, groups);
     }
 
+    public static Set<String> get(String sub) {
+        return STORE.getOrDefault(sub, Set.of());
+    }
+
     public static Set<String> getAndRemove(String sub) {
         return STORE.remove(sub);
     }

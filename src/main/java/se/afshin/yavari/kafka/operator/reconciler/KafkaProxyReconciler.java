@@ -144,7 +144,7 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
                     .endMetadata()
                     .withData(Map.of("config.yaml", configYaml))
                     .build();
-            client.configMaps().inNamespace(namespace).resource(configMap).serverSideApply();
+            client.configMaps().inNamespace(namespace).resource(configMap).createOrReplace();
 
             // Apply Deployment
             Deployment deployment = deploymentBuilder.build(proxy, namespace);

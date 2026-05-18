@@ -8,9 +8,11 @@ KAFKA_VERSION      := 4.0.0
 KROXY_IMAGE        := kroxy-filters:dev
 APICURIO_PROXY_IMG := apicurio-rbac-proxy:dev
 OPERATOR_DIR       := ..
+MANIFESTS_DIR      := manifests
 
 .PHONY: all setup mcs-setup teardown status quorum logs-a logs-b logs-c build image \
-        kroxy-image reload-kroxy-image apicurio-proxy-image reload-apicurio-proxy-image help
+        kroxy-image reload-kroxy-image apicurio-proxy-image reload-apicurio-proxy-image \
+        keycloak-setup proxy-setup rbac-test help
 
 all: setup  ## Full setup: build → image → clusters → deploy
 
@@ -96,6 +98,26 @@ reload-apicurio-proxy-image: apicurio-proxy-image  ## Rebuild + reload apicurio-
 	@for cluster in $(CLUSTERS); do \
 	  kind load docker-image $(APICURIO_PROXY_IMG) --name $$cluster; \
 	done
+
+keycloak-setup:  ## Deploy Keycloak to cluster-a (namespace: kafka) and wait for Ready
+	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/keycloak.yaml
+	@echo "Waiting for Keycloak to be Ready (up to 5 min)..."
+	kubectl --context kind-kafka-a -n $(NAMESPACE) wait --for=condition=Ready \
+	  pod -l app=keycloak --timeout=300s
+	@echo "Keycloak ready."
+
+proxy-setup:  ## Apply KafkaProxy + KafkaRbac CRs to cluster-a, wait for READY
+	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafkarbac.yaml
+	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafkaproxy.yaml
+	@echo "Waiting for KafkaProxy to reach READY phase..."
+	@until kubectl --context kind-kafka-a -n $(NAMESPACE) get kafkaproxy kafka-proxy \
+	    -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do \
+	  sleep 5; \
+	done
+	@echo "KafkaProxy READY."
+
+rbac-test:  ## Run end-to-end RBAC test via SASL/OAUTHBEARER
+	@chmod +x rbac-test.sh && ./rbac-test.sh
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \

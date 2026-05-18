@@ -70,11 +70,19 @@ public class KroxyliciousConfigBuilder {
         cfg.append("filterDefinitions:\n");
 
         if (spec.getOidc() != null) {
+            // Request path order: jwt-groups → oauth-bearer-validation → sasl-handshake-synthesizer
+            // Response path order (reversed): sasl-handshake-synthesizer → oauth-bearer-validation → jwt-groups
+            // The synthesizer must run FIRST on the response path so it converts the PLAINTEXT backend's
+            // ILLEGAL_SASL_STATE error to success BEFORE OauthBearerValidationFilter sees the response
+            // and calls clientSaslAuthenticationSuccess().
             appendJwtGroupFilter(cfg, spec.getOidc());
             activeFilters.add("jwt-groups");
 
             appendOauthBearerFilter(cfg, spec.getOidc());
             activeFilters.add("oauth-bearer-validation");
+
+            appendSaslHandshakeSynthesizerFilter(cfg);
+            activeFilters.add("sasl-handshake-synthesizer");
         }
 
         if (spec.getRbacRef() != null) {
@@ -132,6 +140,11 @@ public class KroxyliciousConfigBuilder {
         }
     }
 
+    private void appendSaslHandshakeSynthesizerFilter(StringBuilder cfg) {
+        cfg.append("  - name: sasl-handshake-synthesizer\n");
+        cfg.append("    type: SaslHandshakeSynthesizerFilterFactory\n");
+    }
+
     private void appendJwtGroupFilter(StringBuilder cfg, KafkaProxyOidcConfig oidc) {
         cfg.append("  - name: jwt-groups\n");
         cfg.append("    type: JwtGroupFilterFactory\n");
@@ -144,6 +157,12 @@ public class KroxyliciousConfigBuilder {
         cfg.append("    type: OauthBearerValidation\n");
         cfg.append("    config:\n");
         cfg.append("      jwksEndpointUrl: ").append(oidc.getJwksEndpointUrl()).append("\n");
+        if (oidc.getExpectedIssuer() != null) {
+            cfg.append("      expectedIssuer: ").append(oidc.getExpectedIssuer()).append("\n");
+        }
+        if (oidc.getExpectedAudience() != null) {
+            cfg.append("      expectedAudience: ").append(oidc.getExpectedAudience()).append("\n");
+        }
     }
 
     private void appendAuthorizationFilter(StringBuilder cfg) {
