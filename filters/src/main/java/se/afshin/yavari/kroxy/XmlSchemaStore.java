@@ -14,6 +14,9 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.xml.sax.SAXException;
 
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Collections;
@@ -33,6 +36,7 @@ public class XmlSchemaStore implements AutoCloseable {
 
     private final String bootstrapServers;
     private final String schemaTopic;
+    private final Properties securityProps;
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final ConcurrentHashMap<String, XmlValidator> validators = new ConcurrentHashMap<>();
     private final CountDownLatch readyLatch = new CountDownLatch(1);
@@ -44,8 +48,14 @@ public class XmlSchemaStore implements AutoCloseable {
     private KafkaProducer<String, String> producer;
 
     public XmlSchemaStore(String bootstrapServers, String schemaTopic, int validationThreadPoolSize) {
+        this(bootstrapServers, schemaTopic, validationThreadPoolSize, new Properties());
+    }
+
+    public XmlSchemaStore(String bootstrapServers, String schemaTopic, int validationThreadPoolSize,
+                          Properties securityProps) {
         this.bootstrapServers = bootstrapServers;
         this.schemaTopic = schemaTopic;
+        this.securityProps = securityProps;
         this.validationExecutor = Executors.newFixedThreadPool(validationThreadPoolSize,
             r -> new Thread(r, "xml-validation-worker"));
     }
@@ -143,6 +153,7 @@ public class XmlSchemaStore implements AutoCloseable {
         props.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, StringDeserializer.class.getName());
         props.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG, "earliest");
         props.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, "false");
+        props.putAll(securityProps);
         return new KafkaConsumer<>(props);
     }
 
@@ -152,6 +163,49 @@ public class XmlSchemaStore implements AutoCloseable {
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, StringSerializer.class.getName());
         props.put(ProducerConfig.ACKS_CONFIG, "all");
+        props.putAll(securityProps);
         return new KafkaProducer<>(props);
+    }
+
+    /**
+     * Reads PEM cert/key/CA files from disk and returns the inline-PEM Kafka client
+     * properties that point at them. Returns an empty Properties when {@code securityProtocol}
+     * is null/PLAINTEXT (preserves the previous PLAINTEXT behavior). Throws if SSL is
+     * requested but any path is missing or unreadable.
+     */
+    public static Properties buildSecurityProps(String securityProtocol,
+                                                 String keystoreCertPath,
+                                                 String keystoreKeyPath,
+                                                 String truststoreCertPath) {
+        Properties props = new Properties();
+        if (securityProtocol == null || securityProtocol.isBlank()
+                || "PLAINTEXT".equalsIgnoreCase(securityProtocol)) {
+            return props;
+        }
+        if (!"SSL".equalsIgnoreCase(securityProtocol)) {
+            throw new IllegalArgumentException(
+                    "Only SSL (or PLAINTEXT) supported on XmlSchemaStore today, got: " + securityProtocol);
+        }
+        if (keystoreCertPath == null || keystoreKeyPath == null || truststoreCertPath == null) {
+            throw new IllegalArgumentException(
+                    "securityProtocol=SSL requires sslKeystoreCertPath, sslKeystoreKeyPath, sslTruststoreCertPath");
+        }
+        try {
+            String cert = Files.readString(Path.of(keystoreCertPath));
+            String key = Files.readString(Path.of(keystoreKeyPath));
+            String ca = Files.readString(Path.of(truststoreCertPath));
+            props.put("security.protocol", "SSL");
+            props.put("ssl.keystore.type", "PEM");
+            props.put("ssl.keystore.certificate.chain", cert);
+            props.put("ssl.keystore.key", key);
+            props.put("ssl.truststore.type", "PEM");
+            props.put("ssl.truststore.certificates", ca);
+            // Broker cert SAN uses the headless service hostname; disable strict hostname
+            // checking so reaching the broker via cluster.local or pod-IP both work.
+            props.put("ssl.endpoint.identification.algorithm", "");
+        } catch (IOException e) {
+            throw new IllegalArgumentException("Failed to read PEM cert/key/CA for XmlSchemaStore", e);
+        }
+        return props;
     }
 }

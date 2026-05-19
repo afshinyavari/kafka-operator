@@ -10,7 +10,8 @@ APICURIO_PROXY_IMG := apicurio-rbac-proxy:dev
 OPERATOR_DIR       := ..
 MANIFESTS_DIR      := manifests
 
-.PHONY: all setup mcs-setup teardown status quorum proxy-test logs-a logs-b logs-c build image \
+.PHONY: all setup mcs-setup teardown status quorum proxy-test xml-filter-test schema-validation-test \
+        logs-a logs-b logs-c build image \
         kroxy-image reload-kroxy-image apicurio-proxy-image reload-apicurio-proxy-image \
         keycloak-setup proxy-setup rbac-test apicurio-setup apicurio-rbac-test help
 
@@ -33,6 +34,12 @@ quorum:  ## Verify KRaft controller quorum health
 
 proxy-test:  ## Quick end-to-end produce/consume test through proxy (mTLS + OIDC)
 	@chmod +x proxy-test.sh && ./proxy-test.sh
+
+xml-filter-test:  ## End-to-end test of the XML validation filter (valid + invalid XML)
+	@chmod +x xml-filter-test.sh && ./xml-filter-test.sh
+
+schema-validation-test:  ## End-to-end test of the Apicurio RecordValidation filter (valid + invalid JSON)
+	@chmod +x schema-validation-test.sh && ./schema-validation-test.sh
 
 build:  ## Build the kafka-operator Maven package (skips tests)
 	cd $(OPERATOR_DIR) && mvn package -DskipTests -q

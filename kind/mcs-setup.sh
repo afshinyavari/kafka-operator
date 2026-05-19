@@ -11,6 +11,7 @@ MANIFESTS_DIR="${SCRIPT_DIR}/manifests"
 IMAGE_NAME="kafka-operator:dev"
 KAFKA_IMAGE_NAME="kafka-ubi:4.0.0"
 KROXY_IMAGE_NAME="kroxy-filters:dev"
+APICURIO_PROXY_IMAGE_NAME="apicurio-rbac-proxy:dev"
 KAFKA_VERSION="4.0.0"
 CLUSTERS=(kafka-a kafka-b kafka-c)
 CLUSTER_IDS=(A B C)
@@ -109,6 +110,16 @@ else
   ok "Image ${KROXY_IMAGE_NAME} built"
 fi
 
+# ── Step 2d: Build apicurio-rbac-proxy image (skip if already exists) ─────────
+if docker inspect "${APICURIO_PROXY_IMAGE_NAME}" &>/dev/null && [ "${FORCE_BUILD:-0}" != "1" ]; then
+  ok "Image ${APICURIO_PROXY_IMAGE_NAME} already exists — skipping Docker build (set FORCE_BUILD=1 to rebuild)"
+else
+  info "Building Apicurio RBAC proxy image ${APICURIO_PROXY_IMAGE_NAME}..."
+  cd "${OPERATOR_DIR}/apicurio-proxy" && mvn package -DskipTests -q
+  docker build -t "${APICURIO_PROXY_IMAGE_NAME}" "${OPERATOR_DIR}/apicurio-proxy" -q
+  ok "Image ${APICURIO_PROXY_IMAGE_NAME} built"
+fi
+
 # ── Step 3: Create Kind clusters in parallel ─────────────────────────────────
 info "Creating Kind clusters in parallel..."
 PIDS=(); LOGS=(); NAMES=()
@@ -143,13 +154,14 @@ wait_pids "Node labeling" "${PIDS[@]}"
 ok "Nodes labeled"
 
 # ── Step 4: Load images in parallel ──────────────────────────────────────────
-info "Loading operator, Kafka, and Kroxylicious images into all clusters..."
+info "Loading operator, Kafka, Kroxylicious, and Apicurio RBAC proxy images into all clusters..."
 PIDS=()
 for cluster in "${CLUSTERS[@]}"; do
   (
     kind load docker-image "${IMAGE_NAME}" --name "${cluster}" &>/dev/null
     kind load docker-image "${KAFKA_IMAGE_NAME}" --name "${cluster}" &>/dev/null
     kind load docker-image "${KROXY_IMAGE_NAME}" --name "${cluster}" &>/dev/null
+    kind load docker-image "${APICURIO_PROXY_IMAGE_NAME}" --name "${cluster}" &>/dev/null
   ) &
   PIDS+=($!)
 done
@@ -502,9 +514,21 @@ kubectl --context kind-kafka-a -n "${NAMESPACE}" wait --for=condition=Ready \
   pod -l app=keycloak --timeout=300s
 ok "Keycloak ready"
 
-# ── Step 17: Deploy KafkaRbac + KafkaProxy (OIDC + RBAC + auto-mTLS gateway) ─
-info "Deploying KafkaRbac and KafkaProxy (mTLS + OIDC + RBAC) on kafka-a..."
+# ── Step 17: Deploy KafkaRbac + ApicurioRegistry + KafkaProxy ──────────────────
+# Order matters: ApicurioRegistry needs the KafkaRbac-generated policy ConfigMap,
+# and the KafkaProxy reads ApicurioRegistry.status.registryUrl to wire the
+# record-validation filter, so deploy in dependency order to avoid status churn.
+info "Deploying KafkaRbac on kafka-a..."
 kubectl --context kind-kafka-a apply -f "${MANIFESTS_DIR}/kafkarbac.yaml" --server-side &>/dev/null
+
+info "Deploying ApicurioRegistry (registry + rbac-proxy) on kafka-a..."
+kubectl --context kind-kafka-a apply -f "${MANIFESTS_DIR}/apicurioregistry.yaml" --server-side &>/dev/null
+info "Waiting for ApicurioRegistry to reach READY (up to 5 min)..."
+until kubectl --context kind-kafka-a -n "${NAMESPACE}" get apicurioregistry apicurio \
+    -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
+ok "ApicurioRegistry READY"
+
+info "Deploying KafkaProxy (mTLS + OIDC + RBAC + XML/schema-registry filters) on kafka-a..."
 kubectl --context kind-kafka-a apply -f "${MANIFESTS_DIR}/kafkaproxy.yaml" --server-side &>/dev/null
 info "Waiting for KafkaProxy kafka-proxy to reach READY (up to 5 min)..."
 until kubectl --context kind-kafka-a -n "${NAMESPACE}" get kafkaproxy kafka-proxy \
@@ -518,9 +542,12 @@ echo ""
 echo "Useful commands:"
 echo "  make -C kind status        # check all clusters"
 echo "  make -C kind quorum        # verify KRaft quorum"
-echo "  make -C kind proxy-test    # quick mTLS + OIDC produce/consume test"
-echo "  make -C kind rbac-test     # full RBAC allow/deny test via mTLS + OIDC"
-echo "  make -C kind teardown      # destroy all clusters"
+echo "  make -C kind proxy-test               # quick mTLS + OIDC produce/consume test"
+echo "  make -C kind rbac-test                # RBAC allow/deny test via mTLS + OIDC"
+echo "  make -C kind apicurio-rbac-test       # Apicurio rbac-proxy HTTP authz test"
+echo "  make -C kind xml-filter-test          # XML validation filter accept/reject test"
+echo "  make -C kind schema-validation-test   # Apicurio schema-registry filter accept/reject test"
+echo "  make -C kind teardown                 # destroy all clusters"
 echo "  make -C kind reload-image  # hot-swap operator only (~30s, no cluster rebuild)"
 echo "  FORCE_BUILD=1 make -C kind mcs-setup  # force rebuild even if image exists"
 echo ""

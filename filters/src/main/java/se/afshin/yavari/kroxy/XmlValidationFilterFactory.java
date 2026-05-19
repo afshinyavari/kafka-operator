@@ -17,13 +17,19 @@ public class XmlValidationFilterFactory
     @Override
     public XmlSchemaStore initialize(FilterFactoryContext context, XmlValidationFilterConfig config)
             throws PluginConfigurationException {
-        log.info("Initializing XmlValidationFilter — bootstrapServers={}, schemaTopic={}, apiPort={}",
-            config.getBootstrapServers(), config.getSchemaTopic(), config.getApiPort());
+        log.info("Initializing XmlValidationFilter — bootstrapServers={}, schemaTopic={}, apiPort={}, securityProtocol={}",
+            config.getBootstrapServers(), config.getSchemaTopic(), config.getApiPort(),
+            config.getSecurityProtocol() == null ? "PLAINTEXT" : config.getSecurityProtocol());
 
         XmlSchemaStore store = new XmlSchemaStore(
             config.getBootstrapServers(),
             config.getSchemaTopic(),
-            config.getValidationThreadPoolSize()
+            config.getValidationThreadPoolSize(),
+            XmlSchemaStore.buildSecurityProps(
+                config.getSecurityProtocol(),
+                config.getSslKeystoreCertPath(),
+                config.getSslKeystoreKeyPath(),
+                config.getSslTruststoreCertPath())
         );
 
         try {

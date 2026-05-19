@@ -20,7 +20,12 @@ spec:
       start: 2000
       end: 2000
   rbacRef: kafka-rbac
-  # apicurioRef: apicurio
+  # apicurioRef: apicurio   # disabled — Kroxylicious 0.21 RecordValidation needs a
+  #                           hardcoded apicurioId (one schema per filter rule) which
+  #                           doesn't fit per-topic schema lookup. Apicurio is still
+  #                           deployed by mcs-setup so apicurio-rbac-test runs against
+  #                           it; the schema-registry filter stays off until we add a
+  #                           custom per-topic filter or extend the CRD with apicurioId.
   # tls:
   #   clientCertSecretRef: kafka-proxy-client-tls   # default = "{proxyName}-client-tls"
   #   serverCertSecretRef: kafka-proxy-server-tls   # default = "{proxyName}-server-tls"
@@ -30,15 +35,20 @@ spec:
     expectedIssuer: http://keycloak.kafka.svc.cluster.local:8080/realms/demo
     expectedAudience: rbac-proxy
   filters:
+    # XML filter validates produce payloads on `schemaTopic`-registered topics
+    # against XSDs. Schemas are seeded via the filter's HTTP API on proxy:8080.
     xmlValidation:
-      enabled: false
+      enabled: true
       schemaTopic: xml-schemas
+    # Kroxylicious built-in RecordValidation. Disabled for now: the filter requires
+    # a single hardcoded apicurioId per rule (not a per-topic schema lookup), which
+    # our CRD doesn't model yet. Enable + extend with `apicurioId: <long>` once we
+    # decide between extending the CRD or shipping a custom per-topic filter.
     schemaRegistry:
       enabled: false
       schemaType: JSON_SCHEMA
       topics:
-        - orders
-        - invoices
+        - orders-json
   # Uncomment to add custom filters:
   # customFilters:
   #   - name: my-filter

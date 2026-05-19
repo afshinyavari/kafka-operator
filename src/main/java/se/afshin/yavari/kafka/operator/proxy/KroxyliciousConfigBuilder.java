@@ -178,6 +178,12 @@ public class KroxyliciousConfigBuilder {
         cfg.append("    config:\n");
         cfg.append("      bootstrapServers: ").append(poolHeadless).append(":9092\n");
         cfg.append("      schemaTopic: ").append(filters.getXmlValidation().getSchemaTopic()).append("\n");
+        // The broker INTERNAL listener is SSL (proxyMtls is required for the proxy to deploy),
+        // so the filter's internal Kafka client must mTLS using the proxy's already-mounted certs.
+        cfg.append("      securityProtocol: SSL\n");
+        cfg.append("      sslKeystoreCertPath: /etc/proxy/kafka-tls/tls.crt\n");
+        cfg.append("      sslKeystoreKeyPath: /etc/proxy/kafka-tls/tls.key\n");
+        cfg.append("      sslTruststoreCertPath: /etc/proxy/kafka-tls/ca.crt\n");
     }
 
     private void appendRecordValidationFilter(StringBuilder cfg, KafkaProxyFiltersConfig filters,

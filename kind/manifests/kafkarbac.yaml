@@ -10,12 +10,15 @@ spec:
         topics:
           - orders
           - orders-dlq
+          - orders-xml     # XML validation filter test topic
+          - orders-json    # Apicurio schema-registry filter test topic
         operations:
           - PRODUCE
           - FETCH
       schemaRegistry:
         artifacts:
           - orders
+          - orders-json-value   # subject convention for orders-json's value schema
         actions:
           - READ
           - WRITE
