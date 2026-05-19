@@ -10,6 +10,7 @@ MANIFESTS_DIR="${SCRIPT_DIR}/manifests"
 
 IMAGE_NAME="kafka-operator:dev"
 KAFKA_IMAGE_NAME="kafka-ubi:4.0.0"
+KROXY_IMAGE_NAME="kroxy-filters:dev"
 KAFKA_VERSION="4.0.0"
 CLUSTERS=(kafka-a kafka-b kafka-c)
 CLUSTER_IDS=(A B C)
@@ -98,6 +99,16 @@ else
   ok "Image ${KAFKA_IMAGE_NAME} built"
 fi
 
+# ── Step 2c: Build Kroxylicious filters image (skip if already exists) ────────
+if docker inspect "${KROXY_IMAGE_NAME}" &>/dev/null && [ "${FORCE_BUILD:-0}" != "1" ]; then
+  ok "Image ${KROXY_IMAGE_NAME} already exists — skipping Docker build (set FORCE_BUILD=1 to rebuild)"
+else
+  info "Building Kroxylicious filters image ${KROXY_IMAGE_NAME}..."
+  cd "${OPERATOR_DIR}/filters" && mvn package -DskipTests -q
+  docker build -t "${KROXY_IMAGE_NAME}" "${OPERATOR_DIR}/filters" -q
+  ok "Image ${KROXY_IMAGE_NAME} built"
+fi
+
 # ── Step 3: Create Kind clusters in parallel ─────────────────────────────────
 info "Creating Kind clusters in parallel..."
 PIDS=(); LOGS=(); NAMES=()
@@ -132,12 +143,13 @@ wait_pids "Node labeling" "${PIDS[@]}"
 ok "Nodes labeled"
 
 # ── Step 4: Load images in parallel ──────────────────────────────────────────
-info "Loading ${IMAGE_NAME} and ${KAFKA_IMAGE_NAME} into all clusters..."
+info "Loading operator, Kafka, and Kroxylicious images into all clusters..."
 PIDS=()
 for cluster in "${CLUSTERS[@]}"; do
   (
     kind load docker-image "${IMAGE_NAME}" --name "${cluster}" &>/dev/null
     kind load docker-image "${KAFKA_IMAGE_NAME}" --name "${cluster}" &>/dev/null
+    kind load docker-image "${KROXY_IMAGE_NAME}" --name "${cluster}" &>/dev/null
   ) &
   PIDS+=($!)
 done
@@ -302,6 +314,111 @@ done
 wait_pids "Namespace + RBAC" "${PIDS[@]}"
 ok "Namespace and RBAC ready"
 
+# ── Step 11b: Mint full mTLS cert set + distribute as Secrets ─────────────────
+# Stands in for cert-manager in this test rig. Generates ONE CA locally, signs all
+# leaf certs (per-pool broker, proxy client, proxy server, test client), and applies
+# each as a kubernetes.io/tls-shaped Secret (tls.crt + tls.key + ca.crt — cert-manager
+# convention) to the clusters that need it. The operator no longer signs anything;
+# it just mounts the named secrets and reschedules until they exist.
+
+CA_DIR=$(mktemp -d /tmp/kafka-mtls-ca-XXXXXX)
+trap 'rm -rf "${CA_DIR}"' EXIT
+PROXY_PRINCIPAL="kafka-proxy"
+
+info "Generating local CA and leaf certs (CA, brokers-{a,b,c}, proxy client/server, test client)..."
+# CA
+openssl genrsa -out "${CA_DIR}/ca.key" 2048 2>/dev/null
+openssl req -x509 -new -nodes -key "${CA_DIR}/ca.key" \
+  -subj "/CN=kafka-operator-ca" -days 3650 \
+  -out "${CA_DIR}/ca.crt" 2>/dev/null
+
+# Helper: sign a leaf cert and convert key to PKCS#8 PEM (Kroxylicious/Netty needs PKCS#8).
+# $1=name (file prefix), $2=CN, $3=SAN list (comma-separated dnsNames, or empty for no SAN)
+mint_cert() {
+  local name="$1" cn="$2" sans="$3"
+  openssl genrsa -out "${CA_DIR}/${name}.key.raw" 2048 2>/dev/null
+  openssl pkcs8 -topk8 -nocrypt -in "${CA_DIR}/${name}.key.raw" -out "${CA_DIR}/${name}.key" 2>/dev/null
+  local extfile="${CA_DIR}/${name}.ext"
+  if [ -n "${sans}" ]; then
+    {
+      echo "basicConstraints=CA:FALSE"
+      echo "keyUsage=digitalSignature,keyEncipherment"
+      echo "extendedKeyUsage=serverAuth,clientAuth"
+      echo -n "subjectAltName="
+      local first=1
+      IFS=',' read -ra SAN_ARR <<< "${sans}"
+      for s in "${SAN_ARR[@]}"; do
+        if [ ${first} -eq 1 ]; then first=0; else echo -n ","; fi
+        echo -n "DNS:${s}"
+      done
+      echo ""
+    } > "${extfile}"
+  else
+    {
+      echo "basicConstraints=CA:FALSE"
+      echo "keyUsage=digitalSignature,keyEncipherment"
+      echo "extendedKeyUsage=clientAuth"
+    } > "${extfile}"
+  fi
+  openssl req -new -key "${CA_DIR}/${name}.key" -subj "/CN=${cn}" \
+    -out "${CA_DIR}/${name}.csr" 2>/dev/null
+  openssl x509 -req -in "${CA_DIR}/${name}.csr" \
+    -CA "${CA_DIR}/ca.crt" -CAkey "${CA_DIR}/ca.key" -CAcreateserial \
+    -out "${CA_DIR}/${name}.crt" -days 3650 -sha256 \
+    -extfile "${extfile}" 2>/dev/null
+}
+
+# Per-pool broker certs (one per cluster), each with both cluster.local + clusterset.local SANs.
+for cluster in "${CLUSTERS[@]}"; do
+  suffix="${cluster#kafka-}"  # a / b / c
+  pool="brokers-${suffix}"
+  mint_cert "${pool}" "${pool}" \
+    "${pool}-headless.${NAMESPACE}.svc.cluster.local,${pool}-headless.${NAMESPACE}.svc.clusterset.local"
+done
+
+# Proxy client cert — CN goes into broker super.users.
+mint_cert "${PROXY_PRINCIPAL}-client" "${PROXY_PRINCIPAL}" ""
+# Proxy server cert — presented to clients; SANs match the gateway Service hostname.
+mint_cert "${PROXY_PRINCIPAL}-server" "${PROXY_PRINCIPAL}" \
+  "${PROXY_PRINCIPAL}.${NAMESPACE}.svc.cluster.local,${PROXY_PRINCIPAL}.${NAMESPACE}.svc.clusterset.local"
+# Test client cert — extracted by proxy-test.sh / rbac-test.sh for SASL_SSL mTLS handshake.
+mint_cert "${PROXY_PRINCIPAL}-test-client" "test-client" ""
+
+# Helper: apply a 3-key kubernetes.io/tls-style secret (cert-manager convention).
+apply_tls_secret() {
+  local ctx="$1" secret_name="$2" crt="$3" key="$4"
+  kubectl --context "${ctx}" -n "${NAMESPACE}" create secret generic "${secret_name}" \
+    --type=kubernetes.io/tls \
+    --from-file=tls.crt="${crt}" \
+    --from-file=tls.key="${key}" \
+    --from-file=ca.crt="${CA_DIR}/ca.crt" \
+    --dry-run=client -o yaml | \
+    kubectl --context "${ctx}" apply --server-side -f -
+}
+
+info "Applying broker-pool TLS secrets to each cluster..."
+PIDS=()
+for cluster in "${CLUSTERS[@]}"; do
+  ctx="kind-${cluster}"
+  suffix="${cluster#kafka-}"
+  pool="brokers-${suffix}"
+  (
+    apply_tls_secret "${ctx}" "${pool}-broker-tls" "${CA_DIR}/${pool}.crt" "${CA_DIR}/${pool}.key"
+  ) &>/dev/null &
+  PIDS+=($!)
+done
+wait_pids "Broker TLS secrets" "${PIDS[@]}"
+
+info "Applying proxy client/server/test-client TLS secrets to cluster-a..."
+PROXY_CTX="kind-kafka-a"
+apply_tls_secret "${PROXY_CTX}" "${PROXY_PRINCIPAL}-client-tls" \
+  "${CA_DIR}/${PROXY_PRINCIPAL}-client.crt" "${CA_DIR}/${PROXY_PRINCIPAL}-client.key" &>/dev/null
+apply_tls_secret "${PROXY_CTX}" "${PROXY_PRINCIPAL}-server-tls" \
+  "${CA_DIR}/${PROXY_PRINCIPAL}-server.crt" "${CA_DIR}/${PROXY_PRINCIPAL}-server.key" &>/dev/null
+apply_tls_secret "${PROXY_CTX}" "${PROXY_PRINCIPAL}-test-client-tls" \
+  "${CA_DIR}/${PROXY_PRINCIPAL}-test-client.crt" "${CA_DIR}/${PROXY_PRINCIPAL}-test-client.key" &>/dev/null
+ok "All mTLS secrets provisioned"
+
 # ── Step 12: Deploy operator in parallel ──────────────────────────────────────
 info "Deploying kafka-operator (MCS enabled) to all clusters..."
 PIDS=()
@@ -377,6 +494,23 @@ done
 par_wait "Kafka pods wait" PIDS LOGS NAMES
 ok "Kafka pods ready on all clusters"
 
+# ── Step 16: Deploy Keycloak on cluster-a ─────────────────────────────────────
+info "Deploying Keycloak on kafka-a..."
+kubectl --context kind-kafka-a apply -f "${MANIFESTS_DIR}/keycloak.yaml" --server-side &>/dev/null
+info "Waiting for Keycloak to be Ready (up to 5 min)..."
+kubectl --context kind-kafka-a -n "${NAMESPACE}" wait --for=condition=Ready \
+  pod -l app=keycloak --timeout=300s
+ok "Keycloak ready"
+
+# ── Step 17: Deploy KafkaRbac + KafkaProxy (OIDC + RBAC + auto-mTLS gateway) ─
+info "Deploying KafkaRbac and KafkaProxy (mTLS + OIDC + RBAC) on kafka-a..."
+kubectl --context kind-kafka-a apply -f "${MANIFESTS_DIR}/kafkarbac.yaml" --server-side &>/dev/null
+kubectl --context kind-kafka-a apply -f "${MANIFESTS_DIR}/kafkaproxy.yaml" --server-side &>/dev/null
+info "Waiting for KafkaProxy kafka-proxy to reach READY (up to 5 min)..."
+until kubectl --context kind-kafka-a -n "${NAMESPACE}" get kafkaproxy kafka-proxy \
+    -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
+ok "KafkaProxy READY"
+
 echo ""
 echo "────────────────────────────────────────────────────────────────────────"
 echo -e "${GREEN}MCS setup complete!${NC} Submariner is routing cross-cluster traffic."
@@ -384,6 +518,8 @@ echo ""
 echo "Useful commands:"
 echo "  make -C kind status        # check all clusters"
 echo "  make -C kind quorum        # verify KRaft quorum"
+echo "  make -C kind proxy-test    # quick mTLS + OIDC produce/consume test"
+echo "  make -C kind rbac-test     # full RBAC allow/deny test via mTLS + OIDC"
 echo "  make -C kind teardown      # destroy all clusters"
 echo "  make -C kind reload-image  # hot-swap operator only (~30s, no cluster rebuild)"
 echo "  FORCE_BUILD=1 make -C kind mcs-setup  # force rebuild even if image exists"

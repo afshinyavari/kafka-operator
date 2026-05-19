@@ -4,7 +4,7 @@ metadata:
   name: kafka-proxy
   namespace: kafka
 spec:
-  clusterRef: kafka-cluster
+  clusterRef: my-kafka
   poolRef: brokers-a
   replicas: 1
   image: kroxy-filters:dev
@@ -22,8 +22,8 @@ spec:
   rbacRef: kafka-rbac
   # apicurioRef: apicurio
   # tls:
-  #   proxyKeySecretRef: kafka-proxy-tls
-  #   clientCaSecretRef: kafka-client-ca
+  #   clientCertSecretRef: kafka-proxy-client-tls   # default = "{proxyName}-client-tls"
+  #   serverCertSecretRef: kafka-proxy-server-tls   # default = "{proxyName}-server-tls"
   oidc:
     jwksEndpointUrl: http://keycloak.kafka.svc.cluster.local:8080/realms/demo/protocol/openid-connect/certs
     groupsClaim: realm_access.roles

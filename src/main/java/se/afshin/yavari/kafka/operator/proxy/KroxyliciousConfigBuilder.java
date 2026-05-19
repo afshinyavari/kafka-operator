@@ -7,7 +7,6 @@ import se.afshin.yavari.kafka.operator.crd.KafkaProxyCustomFilter;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyFiltersConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyOidcConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxySpec;
-import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -30,12 +29,10 @@ public class KroxyliciousConfigBuilder {
         cfg.append("    targetCluster:\n");
         cfg.append("      bootstrapServers: ").append(poolHeadless).append(":9092\n");
 
-        // Append target TLS: use explicit spec.tls if set, otherwise use auto-generated proxy cert
-        if (spec.getTls() != null) {
-            appendTargetTls(cfg, spec.getTls());
-        } else {
-            appendAutoTargetTls(cfg);
-        }
+        // Target (proxy→broker) mTLS — always present. The client cert secret is mounted at
+        // /etc/proxy/kafka-tls by ProxyDeploymentBuilder; the secret name (default or override)
+        // is resolved there, the paths inside the pod are fixed.
+        appendTargetTls(cfg);
 
         cfg.append("    gateways:\n");
         cfg.append("      - name: gateway\n");
@@ -57,9 +54,7 @@ public class KroxyliciousConfigBuilder {
             cfg.append("              end: ").append(brokerNodeIdBase + brokerCount - 1).append("\n");
         }
 
-        if (spec.getTls() != null) {
-            appendGatewayTls(cfg, spec.getTls());
-        }
+        appendGatewayTls(cfg);
 
         // mTLS CN subject builder (saslSubjectBuilder removed — not in 0.21.0 VirtualCluster schema)
         cfg.append("    subjectBuilder:\n");
@@ -117,7 +112,12 @@ public class KroxyliciousConfigBuilder {
         return cfg.toString();
     }
 
-    private void appendTargetTls(StringBuilder cfg, KafkaProxyTlsConfig tls) {
+    // ProxyDeploymentBuilder mounts the client cert secret at /etc/proxy/kafka-tls and the
+    // server cert secret at /etc/proxy/server-tls. Both secrets bundle ca.crt (cert-manager
+    // convention). Kroxylicious 0.21.0 Tls schema: trust + key only — when trust is set on a
+    // gateway, Kroxylicious requests client certs (mTLS); there is no separate clientAuth field.
+
+    private void appendTargetTls(StringBuilder cfg) {
         cfg.append("      tls:\n");
         cfg.append("        key:\n");
         cfg.append("          privateKeyFile: /etc/proxy/kafka-tls/tls.key\n");
@@ -127,29 +127,14 @@ public class KroxyliciousConfigBuilder {
         cfg.append("          storeType: PEM\n");
     }
 
-    private void appendAutoTargetTls(StringBuilder cfg) {
-        // Auto mTLS: proxy client cert and CA are mounted by ProxyDeploymentBuilder at this path.
-        // KeyPair fields: privateKeyFile / certificateFile (Kroxylicious 0.21.0 schema).
-        cfg.append("      tls:\n");
-        cfg.append("        key:\n");
-        cfg.append("          privateKeyFile: /etc/proxy/kafka-tls/tls.key\n");
-        cfg.append("          certificateFile: /etc/proxy/kafka-tls/tls.crt\n");
-        cfg.append("        trust:\n");
-        cfg.append("          storeFile: /etc/proxy/kafka-tls/ca.crt\n");
-        cfg.append("          storeType: PEM\n");
-    }
-
-    private void appendGatewayTls(StringBuilder cfg, KafkaProxyTlsConfig tls) {
+    private void appendGatewayTls(StringBuilder cfg) {
         cfg.append("        tls:\n");
         cfg.append("          key:\n");
-        cfg.append("            privateKeyFile: /etc/proxy/kafka-tls/tls.key\n");
-        cfg.append("            certificateFile: /etc/proxy/kafka-tls/tls.crt\n");
-        cfg.append("          clientAuth: REQUIRED\n");
-        if (tls.getClientCaSecretRef() != null) {
-            cfg.append("          trust:\n");
-            cfg.append("            storeFile: /etc/proxy/client-tls/ca.crt\n");
-            cfg.append("            storeType: PEM\n");
-        }
+        cfg.append("            privateKeyFile: /etc/proxy/server-tls/tls.key\n");
+        cfg.append("            certificateFile: /etc/proxy/server-tls/tls.crt\n");
+        cfg.append("          trust:\n");
+        cfg.append("            storeFile: /etc/proxy/server-tls/ca.crt\n");
+        cfg.append("            storeType: PEM\n");
     }
 
     private void appendSaslHandshakeSynthesizerFilter(StringBuilder cfg) {

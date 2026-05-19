@@ -1,16 +1,18 @@
 #!/bin/bash
-# End-to-end Kafka RBAC test via SASL/OAUTHBEARER through the Kroxylicious proxy.
-# Prerequisites: mcs-setup complete, keycloak-setup complete, proxy-setup complete.
+# End-to-end Kafka RBAC test via SASL/OAUTHBEARER + mTLS through the Kroxylicious proxy.
+# All clients use SASL_SSL: mTLS transport (shared test-client cert) + JWT for group-based authorization.
+# Prerequisites: mcs-setup complete (Keycloak, KafkaRbac, and KafkaProxy all deployed).
 set -euo pipefail
 export PATH="${HOME}/.local/bin:${PATH}"
 
 CTX="kind-kafka-a"
 NS="kafka"
 BOOTSTRAP="kafka-proxy.${NS}.svc.cluster.local:9094"
-DIRECT_BOOTSTRAP="brokers-a-headless.${NS}.svc.cluster.local:9092"
+DIRECT_BOOTSTRAP="brokers-a-headless.${NS}.svc.clusterset.local:9092"
 KEYCLOAK_TOKEN_URL="http://keycloak.${NS}.svc.cluster.local:8080/realms/demo/protocol/openid-connect/token"
 CLIENT_ID="rbac-proxy"
 CLIENT_SECRET="rbac-proxy-secret"
+MTLS_SECRET="kafka-proxy-test-client-tls"
 TOKEN_FILE="/tmp/kafka-oauth-token"
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; CYAN='\033[0;36m'; NC='\033[0m'
@@ -26,20 +28,63 @@ BROKER_POD=$(kubectl --context "${CTX}" get pods -n "${NS}" \
 [ -n "${BROKER_POD}" ] || { echo "ERROR: No brokers-a pod found on ${CTX}"; exit 1; }
 echo "Using broker pod: ${BROKER_POD}"
 
+# ── mTLS setup: extract client cert from secret and create PKCS12 keystores ──
 echo ""
-echo "══ Pre-flight: create topics via direct PLAINTEXT (bypasses proxy) ══"
+echo "══ Setting up mTLS client cert (shared across all test users) ══"
+CA_B64=$(kubectl --context "${CTX}" -n "${NS}" get secret "${MTLS_SECRET}" \
+  -o jsonpath='{.data.ca\.crt}')
+CERT_B64=$(kubectl --context "${CTX}" -n "${NS}" get secret "${MTLS_SECRET}" \
+  -o jsonpath='{.data.tls\.crt}')
+KEY_B64=$(kubectl --context "${CTX}" -n "${NS}" get secret "${MTLS_SECRET}" \
+  -o jsonpath='{.data.tls\.key}')
+
+kubectl --context "${CTX}" -n "${NS}" exec "${BROKER_POD}" -- bash -c "
+  mkdir -p /tmp/rbac-test
+  echo '${CA_B64}'   | base64 -d > /tmp/rbac-test/ca.crt
+  echo '${CERT_B64}' | base64 -d > /tmp/rbac-test/client.crt
+  echo '${KEY_B64}'  | base64 -d > /tmp/rbac-test/client.key
+  rm -f /tmp/rbac-test/keystore.p12 /tmp/rbac-test/truststore.p12
+  openssl pkcs12 -export \
+    -inkey /tmp/rbac-test/client.key \
+    -in    /tmp/rbac-test/client.crt \
+    -out   /tmp/rbac-test/keystore.p12 \
+    -passout pass:changeit 2>/dev/null
+  keytool -importcert -noprompt -trustcacerts -alias ca \
+    -file /tmp/rbac-test/ca.crt \
+    -keystore /tmp/rbac-test/truststore.p12 \
+    -storetype PKCS12 -storepass changeit 2>/dev/null
+" 2>/dev/null
+echo "  mTLS keystores ready"
+
+echo ""
+echo "══ Pre-flight: create topics via broker SSL (super.user, bypasses proxy) ══"
+kubectl --context "${CTX}" -n "${NS}" exec "${BROKER_POD}" -- bash -c "
+  printf '%s\n' \
+    'security.protocol=SSL' \
+    'ssl.keystore.type=PKCS12' \
+    'ssl.keystore.location=/tmp/tls/INTERNAL/keystore.p12' \
+    'ssl.keystore.password=changeit' \
+    'ssl.truststore.type=PKCS12' \
+    'ssl.truststore.location=/tmp/tls/INTERNAL/truststore.p12' \
+    'ssl.truststore.password=changeit' \
+    'ssl.endpoint.identification.algorithm=' \
+    > /tmp/admin.properties
+" 2>/dev/null
 for topic in orders orders-dlq invoices invoices-dlq; do
-  kubectl --context "${CTX}" -n "${NS}" exec "${BROKER_POD}" -- \
+  kubectl --context "${CTX}" -n "${NS}" exec "${BROKER_POD}" -- bash -c "
+    export KAFKA_HEAP_OPTS='-Xmx64m -Xms32m'
     /opt/kafka/bin/kafka-topics.sh \
-      --bootstrap-server "${DIRECT_BOOTSTRAP}" \
+      --bootstrap-server '${DIRECT_BOOTSTRAP}' \
       --create --if-not-exists \
-      --topic "${topic}" \
-      --partitions 1 --replication-factor 1 2>/dev/null \
+      --topic '${topic}' \
+      --partitions 1 --replication-factor 1 \
+      --command-config /tmp/admin.properties 2>/dev/null
+  " 2>/dev/null \
     && echo "  topic ${topic}: ready" || echo "  topic ${topic}: already exists"
 done
 
 # Fetch JWT for a user via curl and write to shared token file inside the broker pod,
-# then attempt to produce through the proxy.
+# then attempt to produce through the proxy using SASL_SSL (mTLS + OIDC).
 # Returns 0=allowed, 1=RBAC denied, 2=unexpected error.
 try_produce() {
   local user="$1" topic="$2"
@@ -52,11 +97,17 @@ try_produce() {
       > '${TOKEN_FILE}'
   " 2>/dev/null
 
-  # Step 2: write client properties — file:// token URL (avoids HTTP endpoint restrictions)
+  # Step 2: write SASL_SSL client properties (mTLS + OAUTHBEARER)
   local cfg="/tmp/client-${user}.properties"
   kubectl --context "${CTX}" -n "${NS}" exec "${BROKER_POD}" -- bash -c "
     printf '%s\n' \
-      'security.protocol=SASL_PLAINTEXT' \
+      'security.protocol=SASL_SSL' \
+      'ssl.keystore.type=PKCS12' \
+      'ssl.keystore.location=/tmp/rbac-test/keystore.p12' \
+      'ssl.keystore.password=changeit' \
+      'ssl.truststore.type=PKCS12' \
+      'ssl.truststore.location=/tmp/rbac-test/truststore.p12' \
+      'ssl.truststore.password=changeit' \
       'sasl.mechanism=OAUTHBEARER' \
       'sasl.oauthbearer.token.endpoint.url=file://${TOKEN_FILE}' \
       'sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required;' \
@@ -64,9 +115,10 @@ try_produce() {
       > ${cfg}
   " 2>/dev/null
 
-  # Step 3: produce — KAFKA_OPTS allows the file:// URL
+  # Step 3: produce — KAFKA_OPTS allows the file:// URL; KAFKA_HEAP_OPTS avoids OOMKill
   local output rc=0
   output=$(kubectl --context "${CTX}" -n "${NS}" exec "${BROKER_POD}" -- bash -c "
+    export KAFKA_HEAP_OPTS='-Xmx64m -Xms32m'
     export KAFKA_OPTS='-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=file://${TOKEN_FILE}'
     echo 'rbac-test-${user}-\$(date +%s)' | timeout 20 \
       /opt/kafka/bin/kafka-console-producer.sh \

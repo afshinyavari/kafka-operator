@@ -24,6 +24,14 @@ spec:
     transaction.state.log.replication.factor: "1"
     transaction.state.log.min.isr: "1"
     default.replication.factor: "1"
+  # Cross-cluster proxy mTLS. The operator does NOT sign certs; it just expects
+  # pre-provisioned secrets to exist (cert-manager in production, mcs-setup.sh in
+  # tests). Each broker pool reads "{poolName}-broker-tls" (overridable per pool
+  # via KafkaNodePoolSpec.brokerCertSecretRef). proxyPrincipal is the CN the
+  # proxy presents and is added to super.users.
+  proxyMtls:
+    enabled: true
+    proxyPrincipal: kafka-proxy
 # Uncomment to enable TLS listeners. Requires per-pod secrets named {podName}-tls
 # with keys tls.crt, tls.key, ca.crt (cert-manager convention).
 #  listeners:

@@ -47,34 +47,34 @@ public class ProxyDeploymentBuilder {
                     .build());
         }
 
-        // TLS volumes: use manually-configured secret if provided, otherwise use auto-generated proxy cert
+        // Mount the pre-provisioned proxy TLS secrets. Operator does not create these;
+        // cert-manager / mcs-setup provisions them with the cert-manager convention
+        // (tls.crt + tls.key + ca.crt). Field overrides default to "{name}-client-tls"
+        // and "{name}-server-tls"; KafkaProxyReconciler verifies existence before this
+        // builder runs and reschedules if missing.
         KafkaProxyTlsConfig tls = spec.getTls();
-        String proxyKeySecretRef = tls != null ? tls.getProxyKeySecretRef() : null;
-        if (proxyKeySecretRef == null) {
-            // Auto mTLS: mount the operator-generated proxy client cert
-            proxyKeySecretRef = ProxyTlsManager.proxySecretName(name);
-        }
+        String clientCertSecret = (tls != null && tls.getClientCertSecretRef() != null)
+                ? tls.getClientCertSecretRef() : name + "-client-tls";
+        String serverCertSecret = (tls != null && tls.getServerCertSecretRef() != null)
+                ? tls.getServerCertSecretRef() : name + "-server-tls";
         volumes.add(new VolumeBuilder()
                 .withName("proxy-tls")
-                .withNewSecret().withSecretName(proxyKeySecretRef).endSecret()
+                .withNewSecret().withSecretName(clientCertSecret).endSecret()
                 .build());
         mounts.add(new VolumeMountBuilder()
                 .withName("proxy-tls")
                 .withMountPath("/etc/proxy/kafka-tls")
                 .withReadOnly(true)
                 .build());
-
-        if (tls != null && tls.getClientCaSecretRef() != null) {
-            volumes.add(new VolumeBuilder()
-                    .withName("client-ca")
-                    .withNewSecret().withSecretName(tls.getClientCaSecretRef()).endSecret()
-                    .build());
-            mounts.add(new VolumeMountBuilder()
-                    .withName("client-ca")
-                    .withMountPath("/etc/proxy/client-tls")
-                    .withReadOnly(true)
-                    .build());
-        }
+        volumes.add(new VolumeBuilder()
+                .withName("server-tls")
+                .withNewSecret().withSecretName(serverCertSecret).endSecret()
+                .build());
+        mounts.add(new VolumeMountBuilder()
+                .withName("server-tls")
+                .withMountPath("/etc/proxy/server-tls")
+                .withReadOnly(true)
+                .build());
 
         return new DeploymentBuilder()
                 .withNewMetadata()

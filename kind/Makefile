@@ -10,7 +10,7 @@ APICURIO_PROXY_IMG := apicurio-rbac-proxy:dev
 OPERATOR_DIR       := ..
 MANIFESTS_DIR      := manifests
 
-.PHONY: all setup mcs-setup teardown status quorum logs-a logs-b logs-c build image \
+.PHONY: all setup mcs-setup teardown status quorum proxy-test logs-a logs-b logs-c build image \
         kroxy-image reload-kroxy-image apicurio-proxy-image reload-apicurio-proxy-image \
         keycloak-setup proxy-setup rbac-test apicurio-setup apicurio-rbac-test help
 
@@ -30,6 +30,9 @@ status:  ## Show operator/pod/CR status on all clusters
 
 quorum:  ## Verify KRaft controller quorum health
 	@chmod +x quorum.sh && ./quorum.sh
+
+proxy-test:  ## Quick end-to-end produce/consume test through proxy (mTLS + OIDC)
+	@chmod +x proxy-test.sh && ./proxy-test.sh
 
 build:  ## Build the kafka-operator Maven package (skips tests)
 	cd $(OPERATOR_DIR) && mvn package -DskipTests -q

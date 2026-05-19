@@ -10,7 +10,6 @@ import se.afshin.yavari.kafka.operator.crd.KafkaProxyFiltersConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyOidcConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxySchemaRegistryConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxySpec;
-import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyXmlFilterConfig;
 
 import java.util.List;
@@ -219,6 +218,24 @@ class KroxyliciousConfigBuilderTest {
         assertThat(sasl).isLessThan(auth);
         assertThat(auth).isLessThan(xml);
         assertThat(xml).isLessThan(rec);
+    }
+
+    @Test
+    void alwaysAddsTargetAndGatewayMtls() {
+        // The config always emits target (proxy→broker) mTLS at /etc/proxy/kafka-tls
+        // and gateway (client→proxy) mTLS at /etc/proxy/server-tls — paths are fixed by
+        // ProxyDeploymentBuilder's volume mounts, regardless of any KafkaProxyTlsConfig
+        // override (the override only changes the SECRET behind those mounts).
+        String cfg = builder.build(proxy(), 1, 0, null, NS);
+
+        // Target (upstream to brokers)
+        assertThat(cfg).contains("/etc/proxy/kafka-tls/tls.key");
+        assertThat(cfg).contains("/etc/proxy/kafka-tls/tls.crt");
+        assertThat(cfg).contains("/etc/proxy/kafka-tls/ca.crt");
+        // Gateway (downstream from clients)
+        assertThat(cfg).contains("/etc/proxy/server-tls/tls.key");
+        assertThat(cfg).contains("/etc/proxy/server-tls/tls.crt");
+        assertThat(cfg).contains("/etc/proxy/server-tls/ca.crt");
     }
 
     // --- helpers ---

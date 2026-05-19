@@ -23,7 +23,6 @@ import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSetStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
-import se.afshin.yavari.kafka.operator.proxy.ProxyTlsManager;
 
 import java.util.List;
 import java.util.Map;
@@ -56,7 +55,6 @@ class KafkaNodePoolReconcilerTest {
     private HeadlessServiceBuilder headlessServiceBuilder;
     private ExternalAccessServiceBuilder externalServiceBuilder;
     private PodTemplateFactory podTemplateFactory;
-    private ProxyTlsManager proxyTlsManager;
     private Context<KafkaNodePool> context;
     private KafkaNodePoolReconciler reconciler;
 
@@ -94,7 +92,6 @@ class KafkaNodePoolReconcilerTest {
         headlessServiceBuilder = mock(HeadlessServiceBuilder.class);
         externalServiceBuilder = mock(ExternalAccessServiceBuilder.class);
         podTemplateFactory = mock(PodTemplateFactory.class);
-        proxyTlsManager = mock(ProxyTlsManager.class);
         context = mock(Context.class);
         client = mock(KubernetesClient.class);
 
@@ -183,7 +180,6 @@ class KafkaNodePoolReconcilerTest {
         injectField(reconciler, "headlessServiceBuilder", headlessServiceBuilder);
         injectField(reconciler, "externalServiceBuilder", externalServiceBuilder);
         injectField(reconciler, "podTemplateFactory", podTemplateFactory);
-        injectField(reconciler, "proxyTlsManager", proxyTlsManager);
         injectField(reconciler, "localClusterId", LOCAL_CLUSTER_ID);
         injectField(reconciler, "mcsEnabled", false);
     }

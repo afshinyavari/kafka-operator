@@ -33,6 +33,13 @@ public class KafkaNodePoolSpec {
      */
     private String rackTopologyKey;
 
+    /**
+     * Optional override for the pre-provisioned TLS secret (cert-manager / mcs-setup) that
+     * holds this pool's broker cert when KafkaCluster.spec.proxyMtls.enabled=true. Must follow
+     * the cert-manager convention (tls.crt + tls.key + ca.crt). Defaults to "{poolName}-broker-tls".
+     */
+    private String brokerCertSecretRef;
+
     public List<NodeRole> getRoles() { return roles; }
     public void setRoles(List<NodeRole> roles) { this.roles = roles; }
 
@@ -50,4 +57,7 @@ public class KafkaNodePoolSpec {
 
     public String getRackTopologyKey() { return rackTopologyKey; }
     public void setRackTopologyKey(String rackTopologyKey) { this.rackTopologyKey = rackTopologyKey; }
+
+    public String getBrokerCertSecretRef() { return brokerCertSecretRef; }
+    public void setBrokerCertSecretRef(String brokerCertSecretRef) { this.brokerCertSecretRef = brokerCertSecretRef; }
 }

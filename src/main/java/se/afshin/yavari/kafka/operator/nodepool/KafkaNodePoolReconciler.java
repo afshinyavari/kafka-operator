@@ -37,12 +37,12 @@ import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePoolStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
+import se.afshin.yavari.kafka.operator.crd.KafkaProxyMtlsConfig;
 import se.afshin.yavari.kafka.operator.crd.MetricsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSetSpec;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
-import se.afshin.yavari.kafka.operator.proxy.ProxyTlsManager;
 
 import java.util.List;
 import java.util.Map;
@@ -61,7 +61,6 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
     @Inject HeadlessServiceBuilder headlessServiceBuilder;
     @Inject ExternalAccessServiceBuilder externalServiceBuilder;
     @Inject PodTemplateFactory podTemplateFactory;
-    @Inject ProxyTlsManager proxyTlsManager;
 
     @ConfigProperty(name = "kafka.cluster.id")
     String localClusterId;
@@ -151,17 +150,28 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         boolean isBroker = pool.getSpec().getRoles().contains(NodeRole.BROKER);
         String controllerAddr = cluster.getSpec().getClusters().get(clusterIndex).getControllerAdvertisedAddress();
 
-        // Look up the KafkaProxy for this cluster — mTLS applies to all broker pools in the cluster
-        KafkaProxy proxy = client.resources(KafkaProxy.class)
-                .inNamespace(namespace).list().getItems().stream()
-                .filter(p -> clusterName.equals(p.getSpec().getClusterRef()))
-                .findFirst().orElse(null);
+        // Broker INTERNAL:SSL is driven by KafkaCluster.spec.proxyMtls — NOT by KafkaProxy presence —
+        // so b/c clusters (which never see the cluster-a KafkaProxy CR) reconcile consistently.
+        // The operator does NOT sign certs: the named secret must already exist (provisioned
+        // externally by cert-manager in production, mcs-setup.sh in tests). Convention default
+        // is "{poolName}-broker-tls"; override per pool via KafkaNodePoolSpec.brokerCertSecretRef.
+        KafkaProxyMtlsConfig proxyMtls = cluster.getSpec().getProxyMtls();
         String proxyName = null;
         String brokerMtlsSecretName = null;
-        if (proxy != null && isBroker) {
-            proxyTlsManager.ensureSecrets(proxy.getMetadata().getName(), poolName, namespace);
-            proxyName = proxy.getMetadata().getName();
-            brokerMtlsSecretName = ProxyTlsManager.brokerSecretName(proxyName);
+        if (proxyMtls != null && proxyMtls.isEnabled() && isBroker) {
+            proxyName = proxyMtls.getProxyPrincipal();
+            brokerMtlsSecretName = pool.getSpec().getBrokerCertSecretRef() != null
+                    ? pool.getSpec().getBrokerCertSecretRef()
+                    : poolName + "-broker-tls";
+            if (client.secrets().inNamespace(namespace).withName(brokerMtlsSecretName).get() == null) {
+                String msg = "Broker mTLS secret '" + brokerMtlsSecretName + "' not found in namespace "
+                        + namespace + " — waiting for cert-manager / mcs-setup to create it";
+                LOG.warnf(msg + " (pool %s)", poolName);
+                status.setPhase(KafkaNodePoolStatus.Phase.RECONCILING);
+                status.setMessage(msg);
+                pool.setStatus(status);
+                return UpdateControl.patchStatus(pool).rescheduleAfter(java.time.Duration.ofSeconds(10));
+            }
         }
 
         // Build and apply per-pool ConfigMap (server.properties + start script)

@@ -22,9 +22,12 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistry;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistryStatus;
+import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
+import se.afshin.yavari.kafka.operator.crd.KafkaClusterSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePoolSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
+import se.afshin.yavari.kafka.operator.crd.KafkaProxyMtlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxySpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyStatus;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
@@ -52,7 +55,6 @@ class KafkaProxyReconcilerTest {
     private KroxyliciousConfigBuilder configBuilder;
     private ProxyDeploymentBuilder deploymentBuilder;
     private ProxyServiceBuilder serviceBuilder;
-    private ProxyTlsManager proxyTlsManager;
     private Context<KafkaProxy> context;
     private KafkaProxyReconciler reconciler;
 
@@ -89,7 +91,6 @@ class KafkaProxyReconcilerTest {
         configBuilder = mock(KroxyliciousConfigBuilder.class);
         deploymentBuilder = mock(ProxyDeploymentBuilder.class);
         serviceBuilder = mock(ProxyServiceBuilder.class);
-        proxyTlsManager = mock(ProxyTlsManager.class);
         context = mock(Context.class);
         client = mock(KubernetesClient.class);
 
@@ -101,6 +102,24 @@ class KafkaProxyReconcilerTest {
         when(poolOp.inNamespace(NS)).thenReturn(nsPoolOp);
         when(nsPoolOp.withName(POOL_NAME)).thenReturn(namedPoolOp);
         when(namedPoolOp.get()).thenReturn(pool(1));
+
+        // KafkaCluster chain (reconciler reads spec.proxyMtls from the parent cluster)
+        MixedOperation clusterOp = mock(MixedOperation.class);
+        NonNamespaceOperation nsClusterOp = mock(NonNamespaceOperation.class);
+        Resource namedClusterOp = mock(Resource.class);
+        when(client.resources(KafkaCluster.class)).thenReturn(clusterOp);
+        when(clusterOp.inNamespace(NS)).thenReturn(nsClusterOp);
+        when(nsClusterOp.withName(anyString())).thenReturn(namedClusterOp);
+        when(namedClusterOp.get()).thenReturn(clusterWithProxyMtls());
+
+        // Secrets chain — the reconciler checks that proxy client + server cert secrets exist.
+        MixedOperation secretsOp = mock(MixedOperation.class);
+        NonNamespaceOperation nsSecretsOp = mock(NonNamespaceOperation.class);
+        Resource secretResource = mock(Resource.class);
+        when(client.secrets()).thenReturn(secretsOp);
+        when(secretsOp.inNamespace(NS)).thenReturn(nsSecretsOp);
+        when(nsSecretsOp.withName(anyString())).thenReturn(secretResource);
+        when(secretResource.get()).thenReturn(new io.fabric8.kubernetes.api.model.Secret());
 
         // ApicurioRegistry chain
         apicurioOp = mock(MixedOperation.class);
@@ -170,7 +189,6 @@ class KafkaProxyReconcilerTest {
         injectField(reconciler, "configBuilder", configBuilder);
         injectField(reconciler, "deploymentBuilder", deploymentBuilder);
         injectField(reconciler, "serviceBuilder", serviceBuilder);
-        injectField(reconciler, "proxyTlsManager", proxyTlsManager);
         injectField(reconciler, "mcsEnabled", false);
     }
 
@@ -254,6 +272,21 @@ class KafkaProxyReconcilerTest {
         spec.setApicurioRef(apicurioRef);
         p.setSpec(spec);
         return p;
+    }
+
+    private KafkaCluster clusterWithProxyMtls() {
+        KafkaCluster c = new KafkaCluster();
+        ObjectMeta meta = new ObjectMeta();
+        meta.setName("kafka-a");
+        meta.setNamespace(NS);
+        c.setMetadata(meta);
+        KafkaClusterSpec spec = new KafkaClusterSpec();
+        KafkaProxyMtlsConfig pm = new KafkaProxyMtlsConfig();
+        pm.setEnabled(true);
+        pm.setProxyPrincipal("kafka-proxy");
+        spec.setProxyMtls(pm);
+        c.setSpec(spec);
+        return c;
     }
 
     private KafkaNodePool pool(int replicas) {

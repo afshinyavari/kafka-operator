@@ -24,9 +24,12 @@ import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistry;
+import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
+import se.afshin.yavari.kafka.operator.crd.KafkaProxyMtlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyStatus;
+import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
 
 import java.time.Duration;
@@ -44,7 +47,6 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
     @Inject KroxyliciousConfigBuilder configBuilder;
     @Inject ProxyDeploymentBuilder deploymentBuilder;
     @Inject ProxyServiceBuilder serviceBuilder;
-    @Inject ProxyTlsManager proxyTlsManager;
 
     @ConfigProperty(name = "kafka.networking.mcs-enabled")
     boolean mcsEnabled;
@@ -132,9 +134,41 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
             }
         }
 
+        // Resolve the parent KafkaCluster to confirm spec.proxyMtls.enabled. The operator does
+        // NOT sign certs; it only mounts pre-provisioned secrets (cert-manager / mcs-setup).
+        KafkaCluster cluster = client.resources(KafkaCluster.class)
+                .inNamespace(namespace).withName(proxy.getSpec().getClusterRef()).get();
+        if (cluster == null) {
+            status.setMessage("KafkaCluster '" + proxy.getSpec().getClusterRef() + "' not found");
+            proxy.setStatus(status);
+            return UpdateControl.patchStatus(proxy).rescheduleAfter(Duration.ofSeconds(15));
+        }
+        KafkaProxyMtlsConfig proxyMtls = cluster.getSpec().getProxyMtls();
+        if (proxyMtls == null || !proxyMtls.isEnabled()) {
+            status.setMessage("KafkaCluster '" + cluster.getMetadata().getName()
+                    + "' spec.proxyMtls.enabled must be true");
+            proxy.setStatus(status);
+            return UpdateControl.patchStatus(proxy).rescheduleAfter(Duration.ofSeconds(15));
+        }
+
+        // Resolve proxy client + server cert secret names (spec overrides, else defaults).
+        KafkaProxyTlsConfig tls = proxy.getSpec().getTls();
+        String clientCertSecret = (tls != null && tls.getClientCertSecretRef() != null)
+                ? tls.getClientCertSecretRef() : name + "-client-tls";
+        String serverCertSecret = (tls != null && tls.getServerCertSecretRef() != null)
+                ? tls.getServerCertSecretRef() : name + "-server-tls";
+        for (String s : new String[] { clientCertSecret, serverCertSecret }) {
+            if (client.secrets().inNamespace(namespace).withName(s).get() == null) {
+                String msg = "Proxy TLS secret '" + s + "' not found in namespace " + namespace
+                        + " — waiting for cert-manager / mcs-setup to create it";
+                LOG.warnf(msg);
+                status.setMessage(msg);
+                proxy.setStatus(status);
+                return UpdateControl.patchStatus(proxy).rescheduleAfter(Duration.ofSeconds(10));
+            }
+        }
+
         try {
-            // Ensure mTLS secrets exist before building the proxy config and deployment
-            proxyTlsManager.ensureSecrets(name, proxy.getSpec().getPoolRef(), namespace);
 
             // Generate and apply config ConfigMap
             String configYaml = configBuilder.build(proxy, brokerCount, brokerNodeIdBase, apicurioRegistryUrl, namespace);
@@ -189,7 +223,8 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
         client.configMaps().inNamespace(namespace).withName(name + "-config").delete();
         client.apps().deployments().inNamespace(namespace).withName(name).delete();
         client.services().inNamespace(namespace).withName(name).delete();
-        proxyTlsManager.deleteSecrets(name, namespace);
+        // TLS secrets are NOT operator-owned (cert-manager / mcs-setup provisions them);
+        // leave them in place on KafkaProxy delete.
         if (mcsEnabled) {
             client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
                     .inNamespace(namespace).withName(name).delete();

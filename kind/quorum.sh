@@ -41,10 +41,20 @@ for i in "${!CLUSTERS[@]}"; do
 
   if [ -n "${BROKER_POD}" ]; then
     echo "Using broker pod for quorum check: ${BROKER_POD}"
-    kubectl --context "${ctx}" exec -n "${NAMESPACE}" "${BROKER_POD}" -- \
-      /opt/kafka/bin/kafka-metadata-quorum.sh \
-        --bootstrap-server "localhost:9092" \
-        describe --status 2>/dev/null && echo -e "${GREEN}✓ Quorum healthy${NC}" \
+    # Broker INTERNAL listener is SSL (mTLS) when KafkaCluster.spec.proxyMtls.enabled=true;
+    # the PKCS12 keystores at /tmp/tls/INTERNAL/ are written by start.sh on every boot, so a
+    # quick SSL config is the most portable. Falls back to PLAINTEXT if those keystores are
+    # absent (mTLS disabled).
+    kubectl --context "${ctx}" exec -n "${NAMESPACE}" "${BROKER_POD}" -- bash -c "
+      if [ -f /tmp/tls/INTERNAL/keystore.p12 ]; then
+        printf 'security.protocol=SSL\nssl.keystore.type=PKCS12\nssl.keystore.location=/tmp/tls/INTERNAL/keystore.p12\nssl.keystore.password=changeit\nssl.truststore.type=PKCS12\nssl.truststore.location=/tmp/tls/INTERNAL/truststore.p12\nssl.truststore.password=changeit\nssl.endpoint.identification.algorithm=\n' > /tmp/quorum.properties
+        export KAFKA_HEAP_OPTS='-Xmx64m -Xms32m'
+        /opt/kafka/bin/kafka-metadata-quorum.sh --bootstrap-server localhost:9092 --command-config /tmp/quorum.properties describe --status
+      else
+        export KAFKA_HEAP_OPTS='-Xmx64m -Xms32m'
+        /opt/kafka/bin/kafka-metadata-quorum.sh --bootstrap-server localhost:9092 describe --status
+      fi
+    " 2>/dev/null && echo -e "${GREEN}✓ Quorum healthy${NC}" \
       || echo -e "${RED}✗ Quorum check failed (cluster may still be bootstrapping)${NC}"
   else
     # Fall back to controller-direct check

@@ -43,6 +43,15 @@ public class KafkaClusterSpec {
      *  When set, CONTROLLER:SSL replaces CONTROLLER:PLAINTEXT. */
     private KafkaListenerTlsConfig controllerTls;
 
+    /** Enables mTLS on the broker INTERNAL listener for a Kroxylicious-style proxy.
+     *  When enabled, the operator signs per-pool broker certs from the shared CA at
+     *  caSecretRef (must be pre-provisioned identically in every cluster of the
+     *  MCS topology). proxyPrincipal is the CN the proxy will present; it is added
+     *  to super.users so the proxy has unrestricted access. Driven from the cluster
+     *  spec (not KafkaProxy presence) so b/c clusters reconcile consistently even
+     *  when the proxy Deployment runs only on cluster-a. */
+    private KafkaProxyMtlsConfig proxyMtls;
+
     public String getKafkaImage() { return kafkaImage; }
     public void setKafkaImage(String kafkaImage) { this.kafkaImage = kafkaImage; }
 
@@ -69,4 +78,7 @@ public class KafkaClusterSpec {
 
     public KafkaListenerTlsConfig getControllerTls() { return controllerTls; }
     public void setControllerTls(KafkaListenerTlsConfig controllerTls) { this.controllerTls = controllerTls; }
+
+    public KafkaProxyMtlsConfig getProxyMtls() { return proxyMtls; }
+    public void setProxyMtls(KafkaProxyMtlsConfig proxyMtls) { this.proxyMtls = proxyMtls; }
 }
