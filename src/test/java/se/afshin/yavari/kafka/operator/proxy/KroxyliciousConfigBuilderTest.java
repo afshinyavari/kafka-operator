@@ -82,12 +82,12 @@ class KroxyliciousConfigBuilderTest {
         assertThat(cfg).contains("sasl-handshake-synthesizer");
         assertThat(cfg).contains("defaultFilters:");
 
-        // verify order in defaultFilters section
-        int jwtIdx = cfg.indexOf("- jwt-groups");
+        // verify order in defaultFilters section: oauth validates first, then jwt, then sasl
         int oauthIdx = cfg.indexOf("- oauth-bearer-validation");
+        int jwtIdx = cfg.indexOf("- jwt-groups");
         int saslIdx = cfg.indexOf("- sasl-handshake-synthesizer");
-        assertThat(jwtIdx).isLessThan(oauthIdx);
-        assertThat(oauthIdx).isLessThan(saslIdx);
+        assertThat(oauthIdx).isLessThan(jwtIdx);
+        assertThat(jwtIdx).isLessThan(saslIdx);
     }
 
     @Test
@@ -214,8 +214,8 @@ class KroxyliciousConfigBuilderTest {
         int xml = defaultSection.indexOf("- xml-validation");
         int rec = defaultSection.indexOf("- record-validation");
 
-        assertThat(jwt).isLessThan(oauth);
-        assertThat(oauth).isLessThan(sasl);
+        assertThat(oauth).isLessThan(jwt);
+        assertThat(jwt).isLessThan(sasl);
         assertThat(sasl).isLessThan(auth);
         assertThat(auth).isLessThan(xml);
         assertThat(xml).isLessThan(rec);

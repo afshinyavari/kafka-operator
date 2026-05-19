@@ -39,7 +39,7 @@ class ServerPropertiesBuilderTest {
                 cr, poolSpec, 0, 0,
                 "10000@ctrl-a:9093,10001@ctrl-b:9093,10002@ctrl-c:9093",
                 "ctrl-a.example.com:9093",
-                null);
+                null, null, null);
 
         assertThat(props.get("process.roles")).isEqualTo("controller");
         assertThat(props.get("node.id")).isEqualTo("10000");
@@ -60,7 +60,7 @@ class ServerPropertiesBuilderTest {
                 cr, poolSpec, 1, 2,
                 "10000@ctrl-a:9093,10001@ctrl-b:9093",
                 null,
-                "broker-b-2.example.com:9092");
+                "broker-b-2.example.com:9092", null, null);
 
         assertThat(props.get("process.roles")).isEqualTo("broker");
         assertThat(props.get("node.id")).isEqualTo("1002");  // clusterIndex=1, poolLocalIndex=2
@@ -80,7 +80,7 @@ class ServerPropertiesBuilderTest {
                 cr, poolSpec, 0, 0,
                 "10000@ctrl-a:9093",
                 "ctrl-a.example.com:9093",
-                "broker-a.example.com:9092");
+                "broker-a.example.com:9092", null, null);
 
         assertThat(props.get("process.roles")).isEqualTo("controller,broker");
         assertThat(props.get("listeners")).contains("CONTROLLER://").contains("INTERNAL://");
@@ -96,7 +96,7 @@ class ServerPropertiesBuilderTest {
         poolSpec.setConfig(Map.of("log.retention.hours", "24"));
 
         Map<String, String> props = builder.buildProperties(
-                cr, poolSpec, 0, 0, "10000@x:9093", null, "b:9092");
+                cr, poolSpec, 0, 0, "10000@x:9093", null, "b:9092", null, null);
 
         assertThat(props.get("log.retention.hours")).isEqualTo("24");
         assertThat(props.get("num.partitions")).isEqualTo("3");

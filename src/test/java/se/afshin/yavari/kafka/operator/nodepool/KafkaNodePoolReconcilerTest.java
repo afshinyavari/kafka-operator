@@ -21,7 +21,9 @@ import se.afshin.yavari.kafka.operator.crd.KafkaNodePoolSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePoolStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSetStatus;
+import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
+import se.afshin.yavari.kafka.operator.proxy.ProxyTlsManager;
 
 import java.util.List;
 import java.util.Map;
@@ -54,6 +56,7 @@ class KafkaNodePoolReconcilerTest {
     private HeadlessServiceBuilder headlessServiceBuilder;
     private ExternalAccessServiceBuilder externalServiceBuilder;
     private PodTemplateFactory podTemplateFactory;
+    private ProxyTlsManager proxyTlsManager;
     private Context<KafkaNodePool> context;
     private KafkaNodePoolReconciler reconciler;
 
@@ -61,6 +64,10 @@ class KafkaNodePoolReconcilerTest {
     private MixedOperation clusterMixedOp;
     private NonNamespaceOperation nsClusterOp;
     private Resource namedClusterOp;
+
+    // KafkaProxy lookup chain
+    private MixedOperation proxyMixedOp;
+    private NonNamespaceOperation nsProxyOp;
 
     // ConfigMaps chain
     private MixedOperation cmOp;
@@ -87,6 +94,7 @@ class KafkaNodePoolReconcilerTest {
         headlessServiceBuilder = mock(HeadlessServiceBuilder.class);
         externalServiceBuilder = mock(ExternalAccessServiceBuilder.class);
         podTemplateFactory = mock(PodTemplateFactory.class);
+        proxyTlsManager = mock(ProxyTlsManager.class);
         context = mock(Context.class);
         client = mock(KubernetesClient.class);
 
@@ -98,6 +106,16 @@ class KafkaNodePoolReconcilerTest {
         when(clusterMixedOp.inNamespace(NS)).thenReturn(nsClusterOp);
         when(nsClusterOp.withName(CLUSTER_NAME)).thenReturn(namedClusterOp);
         when(namedClusterOp.get()).thenReturn(validCluster());
+
+        // KafkaProxy list lookup (no proxy → no mTLS in basic tests)
+        proxyMixedOp = mock(MixedOperation.class);
+        nsProxyOp = mock(NonNamespaceOperation.class);
+        io.fabric8.kubernetes.api.model.KubernetesResourceList proxyList =
+                mock(io.fabric8.kubernetes.api.model.KubernetesResourceList.class);
+        when(client.resources(KafkaProxy.class)).thenReturn(proxyMixedOp);
+        when(proxyMixedOp.inNamespace(NS)).thenReturn(nsProxyOp);
+        when(nsProxyOp.list()).thenReturn(proxyList);
+        when(proxyList.getItems()).thenReturn(List.of());
 
         // ConfigMaps: withName for quorum CM, resource() for pool CM serverSideApply
         cmOp = mock(MixedOperation.class);
@@ -149,13 +167,13 @@ class KafkaNodePoolReconcilerTest {
         when(kraftConfig.clusterIndex(any(), anyString())).thenReturn(0);
         ConfigMap poolCm = new ConfigMap();
         poolCm.setData(Map.of("server.properties.template", "node.id=0\n"));
-        when(poolConfigMapBuilder.build(any(), any(), anyString(), anyInt(), anyString(), anyString()))
+        when(poolConfigMapBuilder.build(any(), any(), anyString(), anyInt(), anyString(), anyString(), any()))
                 .thenReturn(poolCm);
         when(headlessServiceBuilder.build(any(), anyString(), anyString(), anyBoolean(), anyBoolean(), any()))
                 .thenReturn(mock(Service.class));
         when(headlessServiceBuilder.buildServiceExport(anyString(), anyString(), any()))
                 .thenReturn(Optional.empty());
-        when(podTemplateFactory.build(any(), any(), anyString(), anyInt(), anyString(), anyString(), anyBoolean(), anyBoolean()))
+        when(podTemplateFactory.build(any(), any(), anyString(), anyInt(), anyString(), anyString(), anyBoolean(), anyBoolean(), any()))
                 .thenReturn(List.of());
 
         reconciler = new KafkaNodePoolReconciler();
@@ -165,6 +183,7 @@ class KafkaNodePoolReconcilerTest {
         injectField(reconciler, "headlessServiceBuilder", headlessServiceBuilder);
         injectField(reconciler, "externalServiceBuilder", externalServiceBuilder);
         injectField(reconciler, "podTemplateFactory", podTemplateFactory);
+        injectField(reconciler, "proxyTlsManager", proxyTlsManager);
         injectField(reconciler, "localClusterId", LOCAL_CLUSTER_ID);
         injectField(reconciler, "mcsEnabled", false);
     }
@@ -212,8 +231,8 @@ class KafkaNodePoolReconcilerTest {
         verify(cmResourceOp).serverSideApply();   // pool ConfigMap applied
         verify(svcResourceOp).serverSideApply();  // headless Service applied
         verify(podSetResourceOp).serverSideApply(); // KafkaPodSet applied
-        verify(poolConfigMapBuilder).build(any(), any(), anyString(), anyInt(), anyString(), anyString());
-        verify(podTemplateFactory).build(any(), any(), anyString(), anyInt(), anyString(), anyString(), anyBoolean(), anyBoolean());
+        verify(poolConfigMapBuilder).build(any(), any(), anyString(), anyInt(), anyString(), anyString(), any());
+        verify(podTemplateFactory).build(any(), any(), anyString(), anyInt(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
         assertThat(pool.getStatus().getPhase()).isEqualTo(KafkaNodePoolStatus.Phase.READY);
     }
 

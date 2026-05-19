@@ -62,7 +62,7 @@ public class PodTemplateFactory {
      */
     public List<PodEntry> build(KafkaNodePool pool, KafkaCluster cluster, String namespace,
                                 int clusterIndex, String kafkaClusterId, String configHash,
-                                boolean isBroker, boolean isController) {
+                                boolean isBroker, boolean isController, String brokerMtlsSecretName) {
         List<PodEntry> pods = new ArrayList<>();
         String poolName = pool.getMetadata().getName();
         String clusterName = cluster.getMetadata().getName();
@@ -101,10 +101,10 @@ public class PodTemplateFactory {
 
             String zone = zones.isEmpty() ? "" : zones.get(i % zones.size());
 
-            List<Volume> volumes = buildVolumes(poolName, podName, hasMetrics, metrics, needsTls);
+            List<Volume> volumes = buildVolumes(poolName, podName, hasMetrics, metrics, needsTls, brokerMtlsSecretName);
             List<EnvVar> env = buildEnv(kafkaClusterId, kafkaVersion, configHash,
                     isController, isBroker, zone, hasMetrics, listeners, i);
-            List<VolumeMount> mounts = buildMounts(hasMetrics, needsTls);
+            List<VolumeMount> mounts = buildMounts(hasMetrics, needsTls, brokerMtlsSecretName != null);
             List<ContainerPort> ports = buildContainerPorts(isController, isBroker, hasMetrics, listeners);
 
             Container container = new ContainerBuilder()
@@ -210,7 +210,8 @@ public class PodTemplateFactory {
     }
 
     private List<Volume> buildVolumes(String poolName, String podName,
-                                      boolean hasMetrics, MetricsConfig metrics, boolean needsTls) {
+                                      boolean hasMetrics, MetricsConfig metrics,
+                                      boolean needsTls, String brokerMtlsSecretName) {
         List<Volume> volumes = new ArrayList<>();
         volumes.add(new VolumeBuilder()
                 .withName("config")
@@ -238,6 +239,16 @@ public class PodTemplateFactory {
                     .withName("tls")
                     .withNewSecret()
                         .withSecretName(podName + "-tls")
+                        .withDefaultMode(0440)
+                    .endSecret()
+                    .build());
+        }
+        if (brokerMtlsSecretName != null) {
+            // Shared broker cert for the proxy-managed mTLS listener on port 9092
+            volumes.add(new VolumeBuilder()
+                    .withName("broker-mtls")
+                    .withNewSecret()
+                        .withSecretName(brokerMtlsSecretName)
                         .withDefaultMode(0440)
                     .endSecret()
                     .build());
@@ -294,7 +305,7 @@ public class PodTemplateFactory {
         return env;
     }
 
-    private List<VolumeMount> buildMounts(boolean hasMetrics, boolean needsTls) {
+    private List<VolumeMount> buildMounts(boolean hasMetrics, boolean needsTls, boolean hasBrokerMtls) {
         List<VolumeMount> mounts = new ArrayList<>();
         mounts.add(new VolumeMountBuilder().withName("config").withMountPath("/opt/kafka-config").build());
         mounts.add(new VolumeMountBuilder().withName("data").withMountPath("/var/lib/kafka/data").build());
@@ -303,6 +314,10 @@ public class PodTemplateFactory {
         }
         if (needsTls) {
             mounts.add(new VolumeMountBuilder().withName("tls").withMountPath("/etc/kafka/tls").withReadOnly(true).build());
+        }
+        if (hasBrokerMtls) {
+            mounts.add(new VolumeMountBuilder()
+                    .withName("broker-mtls").withMountPath("/etc/kafka/broker-mtls").withReadOnly(true).build());
         }
         return mounts;
     }

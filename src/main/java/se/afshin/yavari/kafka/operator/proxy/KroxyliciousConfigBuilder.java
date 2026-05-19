@@ -30,8 +30,11 @@ public class KroxyliciousConfigBuilder {
         cfg.append("    targetCluster:\n");
         cfg.append("      bootstrapServers: ").append(poolHeadless).append(":9092\n");
 
+        // Append target TLS: use explicit spec.tls if set, otherwise use auto-generated proxy cert
         if (spec.getTls() != null) {
             appendTargetTls(cfg, spec.getTls());
+        } else {
+            appendAutoTargetTls(cfg);
         }
 
         cfg.append("    gateways:\n");
@@ -70,16 +73,15 @@ public class KroxyliciousConfigBuilder {
         cfg.append("filterDefinitions:\n");
 
         if (spec.getOidc() != null) {
-            // Request path order: jwt-groups → oauth-bearer-validation → sasl-handshake-synthesizer
-            // Response path order (reversed): sasl-handshake-synthesizer → oauth-bearer-validation → jwt-groups
-            // The synthesizer must run FIRST on the response path so it converts the PLAINTEXT backend's
-            // ILLEGAL_SASL_STATE error to success BEFORE OauthBearerValidationFilter sees the response
-            // and calls clientSaslAuthenticationSuccess().
-            appendJwtGroupFilter(cfg, spec.getOidc());
-            activeFilters.add("jwt-groups");
-
+            // Request path order: oauth-bearer-validation → jwt-groups → sasl-handshake-synthesizer
+            // Response path order (reversed): sasl-handshake-synthesizer → jwt-groups (noop) → oauth-bearer-validation
+            // oauth-bearer-validation runs first on the request path so forged JWTs are rejected
+            // before jwt-groups stores their (potentially fabricated) group claims.
             appendOauthBearerFilter(cfg, spec.getOidc());
             activeFilters.add("oauth-bearer-validation");
+
+            appendJwtGroupFilter(cfg, spec.getOidc());
+            activeFilters.add("jwt-groups");
 
             appendSaslHandshakeSynthesizerFilter(cfg);
             activeFilters.add("sasl-handshake-synthesizer");
@@ -118,9 +120,20 @@ public class KroxyliciousConfigBuilder {
     private void appendTargetTls(StringBuilder cfg, KafkaProxyTlsConfig tls) {
         cfg.append("      tls:\n");
         cfg.append("        key:\n");
-        cfg.append("          certificateAndKey:\n");
-        cfg.append("            certificate: /etc/proxy/kafka-tls/tls.crt\n");
-        cfg.append("            privateKey: /etc/proxy/kafka-tls/tls.key\n");
+        cfg.append("          privateKeyFile: /etc/proxy/kafka-tls/tls.key\n");
+        cfg.append("          certificateFile: /etc/proxy/kafka-tls/tls.crt\n");
+        cfg.append("        trust:\n");
+        cfg.append("          storeFile: /etc/proxy/kafka-tls/ca.crt\n");
+        cfg.append("          storeType: PEM\n");
+    }
+
+    private void appendAutoTargetTls(StringBuilder cfg) {
+        // Auto mTLS: proxy client cert and CA are mounted by ProxyDeploymentBuilder at this path.
+        // KeyPair fields: privateKeyFile / certificateFile (Kroxylicious 0.21.0 schema).
+        cfg.append("      tls:\n");
+        cfg.append("        key:\n");
+        cfg.append("          privateKeyFile: /etc/proxy/kafka-tls/tls.key\n");
+        cfg.append("          certificateFile: /etc/proxy/kafka-tls/tls.crt\n");
         cfg.append("        trust:\n");
         cfg.append("          storeFile: /etc/proxy/kafka-tls/ca.crt\n");
         cfg.append("          storeType: PEM\n");
@@ -129,9 +142,8 @@ public class KroxyliciousConfigBuilder {
     private void appendGatewayTls(StringBuilder cfg, KafkaProxyTlsConfig tls) {
         cfg.append("        tls:\n");
         cfg.append("          key:\n");
-        cfg.append("            certificateAndKey:\n");
-        cfg.append("              certificate: /etc/proxy/kafka-tls/tls.crt\n");
-        cfg.append("              privateKey: /etc/proxy/kafka-tls/tls.key\n");
+        cfg.append("            privateKeyFile: /etc/proxy/kafka-tls/tls.key\n");
+        cfg.append("            certificateFile: /etc/proxy/kafka-tls/tls.crt\n");
         cfg.append("          clientAuth: REQUIRED\n");
         if (tls.getClientCaSecretRef() != null) {
             cfg.append("          trust:\n");

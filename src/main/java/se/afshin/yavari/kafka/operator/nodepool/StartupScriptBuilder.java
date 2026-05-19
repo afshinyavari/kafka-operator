@@ -30,7 +30,7 @@ public class StartupScriptBuilder {
      */
     public String build(KafkaNodePool pool, int clusterIndex, String namespace,
                         boolean hasMetrics, List<KafkaListenerSpec> listeners,
-                        KafkaListenerTlsConfig controllerTls) {
+                        KafkaListenerTlsConfig controllerTls, boolean internalMtls) {
         boolean isBroker = pool.getSpec().getRoles().contains(NodeRole.BROKER);
         String poolName = pool.getMetadata().getName();
         // Set javaagent inline in start.sh so kubectl exec commands don't inherit it
@@ -40,7 +40,7 @@ public class StartupScriptBuilder {
                 : "";
 
         if (!isBroker) {
-            String ctrlTlsBlock = controllerTls != null ? buildPkcs12Block("CONTROLLER") : "";
+            String ctrlTlsBlock = controllerTls != null ? buildPkcs12Block("CONTROLLER", "/etc/kafka/tls") : "";
             return "#!/bin/bash\nset -euo pipefail\n"
                     + "sed -e \"s|\\${MY_POD_IP}|${MY_POD_IP}|g\" "
                     + "/opt/kafka-config/server.properties.template > /tmp/server.properties\n"
@@ -83,13 +83,17 @@ public class StartupScriptBuilder {
                 tlsSed.append("    -e \"s|\\${").append(n).append("_ADDR}|${")
                       .append(n).append("_ADDR}|g\" \\\n");
                 if (l.getTls() != null) {
-                    tlsPkcs12.append(buildPkcs12Block(n));
+                    tlsPkcs12.append(buildPkcs12Block(n, "/etc/kafka/tls"));
                 }
             }
         }
+        // Proxy mTLS: broker cert is mounted at a separate path to avoid collision
+        if (internalMtls) {
+            tlsPkcs12.append(buildPkcs12Block("INTERNAL", "/etc/kafka/broker-mtls"));
+        }
         // Broker also needs PKCS12 for CONTROLLER channel when controller TLS is enabled
         if (controllerTls != null) {
-            tlsPkcs12.append(buildPkcs12Block("CONTROLLER"));
+            tlsPkcs12.append(buildPkcs12Block("CONTROLLER", "/etc/kafka/tls"));
         }
 
         return "#!/bin/bash\n"
@@ -112,17 +116,17 @@ public class StartupScriptBuilder {
                 + "exec /opt/kafka/bin/kafka-server-start.sh /tmp/server.properties\n";
     }
 
-    private String buildPkcs12Block(String listenerName) {
+    private String buildPkcs12Block(String listenerName, String certBasePath) {
         return "mkdir -p /tmp/tls/" + listenerName + "\n"
                 // Keystore: combine private key + cert into PKCS12
                 + "openssl pkcs12 -export"
-                + " -inkey /etc/kafka/tls/tls.key"
-                + " -in /etc/kafka/tls/tls.crt"
+                + " -inkey " + certBasePath + "/tls.key"
+                + " -in " + certBasePath + "/tls.crt"
                 + " -out /tmp/tls/" + listenerName + "/keystore.p12"
                 + " -passout pass:changeit 2>/dev/null\n"
                 // Truststore: keytool creates proper Java-trusted cert entries from CA cert
                 + "keytool -importcert -noprompt -trustcacerts"
-                + " -alias ca -file /etc/kafka/tls/ca.crt"
+                + " -alias ca -file " + certBasePath + "/ca.crt"
                 + " -keystore /tmp/tls/" + listenerName + "/truststore.p12"
                 + " -storetype PKCS12 -storepass changeit 2>/dev/null\n";
     }

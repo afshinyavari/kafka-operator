@@ -45,7 +45,7 @@ class PodTemplateFactoryTest {
 
     @Test
     void broker_hasCorrectPortAndLabels() {
-        List<PodEntry> pods = factory.build(pool(1, NodeRole.BROKER), cluster(), NS, 0, "cid", "hash", true, false);
+        List<PodEntry> pods = factory.build(pool(1, NodeRole.BROKER), cluster(), NS, 0, "cid", "hash", true, false, null);
 
         assertThat(pods).hasSize(1);
         PodEntry pod = pods.get(0);
@@ -59,7 +59,7 @@ class PodTemplateFactoryTest {
 
     @Test
     void controller_hasControllerPortAndSmallHeap() {
-        List<PodEntry> pods = factory.build(pool(1, NodeRole.CONTROLLER), cluster(), NS, 0, "cid", "hash", false, true);
+        List<PodEntry> pods = factory.build(pool(1, NodeRole.CONTROLLER), cluster(), NS, 0, "cid", "hash", false, true, null);
 
         assertThat(pods).hasSize(1);
         var container = pods.get(0).getSpec().getContainers().get(0);
@@ -76,7 +76,7 @@ class PodTemplateFactoryTest {
 
     @Test
     void combined_hasBothPorts() {
-        List<PodEntry> pods = factory.build(pool(1, NodeRole.BROKER, NodeRole.CONTROLLER), cluster(), NS, 0, "cid", "hash", true, true);
+        List<PodEntry> pods = factory.build(pool(1, NodeRole.BROKER, NodeRole.CONTROLLER), cluster(), NS, 0, "cid", "hash", true, true, null);
 
         var ports = pods.get(0).getSpec().getContainers().get(0).getPorts();
         assertThat(ports).anyMatch(p -> p.getContainerPort() == 9092);
@@ -89,7 +89,7 @@ class PodTemplateFactoryTest {
         KafkaNodePool rackPool = pool(1, NodeRole.BROKER);
         rackPool.getSpec().setRackTopologyKey(RACK_KEY);
 
-        List<PodEntry> pods = factory.build(rackPool, cluster(), NS, 0, "cid", "hash", true, false);
+        List<PodEntry> pods = factory.build(rackPool, cluster(), NS, 0, "cid", "hash", true, false, null);
 
         var env = pods.get(0).getSpec().getContainers().get(0).getEnv();
         assertThat(env).anyMatch(e -> "BROKER_RACK".equals(e.getName()) && "zone-a".equals(e.getValue()));
@@ -99,7 +99,7 @@ class PodTemplateFactoryTest {
     @Test
     void brokerWithoutRack_noBrokerRackEnvOrAffinity() {
         // no rackTopologyKey set on pool
-        List<PodEntry> pods = factory.build(pool(1, NodeRole.BROKER), cluster(), NS, 0, "cid", "hash", true, false);
+        List<PodEntry> pods = factory.build(pool(1, NodeRole.BROKER), cluster(), NS, 0, "cid", "hash", true, false, null);
 
         var env = pods.get(0).getSpec().getContainers().get(0).getEnv();
         assertThat(env).noneMatch(e -> "BROKER_RACK".equals(e.getName()));
@@ -109,7 +109,7 @@ class PodTemplateFactoryTest {
 
     @Test
     void replicaCount_createsCorrectNumberOfPods() {
-        List<PodEntry> pods = factory.build(pool(3, NodeRole.BROKER), cluster(), NS, 0, "cid", "hash", true, false);
+        List<PodEntry> pods = factory.build(pool(3, NodeRole.BROKER), cluster(), NS, 0, "cid", "hash", true, false, null);
 
         assertThat(pods).hasSize(3);
         assertThat(pods.get(0).getMetadata().getName()).isEqualTo(POOL_NAME + "-0");

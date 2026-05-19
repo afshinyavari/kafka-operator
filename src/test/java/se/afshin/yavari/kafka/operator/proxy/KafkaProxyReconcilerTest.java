@@ -52,6 +52,7 @@ class KafkaProxyReconcilerTest {
     private KroxyliciousConfigBuilder configBuilder;
     private ProxyDeploymentBuilder deploymentBuilder;
     private ProxyServiceBuilder serviceBuilder;
+    private ProxyTlsManager proxyTlsManager;
     private Context<KafkaProxy> context;
     private KafkaProxyReconciler reconciler;
 
@@ -88,6 +89,7 @@ class KafkaProxyReconcilerTest {
         configBuilder = mock(KroxyliciousConfigBuilder.class);
         deploymentBuilder = mock(ProxyDeploymentBuilder.class);
         serviceBuilder = mock(ProxyServiceBuilder.class);
+        proxyTlsManager = mock(ProxyTlsManager.class);
         context = mock(Context.class);
         client = mock(KubernetesClient.class);
 
@@ -168,6 +170,7 @@ class KafkaProxyReconcilerTest {
         injectField(reconciler, "configBuilder", configBuilder);
         injectField(reconciler, "deploymentBuilder", deploymentBuilder);
         injectField(reconciler, "serviceBuilder", serviceBuilder);
+        injectField(reconciler, "proxyTlsManager", proxyTlsManager);
         injectField(reconciler, "mcsEnabled", false);
     }
 

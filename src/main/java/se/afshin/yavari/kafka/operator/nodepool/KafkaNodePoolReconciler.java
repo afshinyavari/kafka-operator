@@ -36,11 +36,13 @@ import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePoolStatus;
+import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
 import se.afshin.yavari.kafka.operator.crd.MetricsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSetSpec;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
+import se.afshin.yavari.kafka.operator.proxy.ProxyTlsManager;
 
 import java.util.List;
 import java.util.Map;
@@ -59,6 +61,7 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
     @Inject HeadlessServiceBuilder headlessServiceBuilder;
     @Inject ExternalAccessServiceBuilder externalServiceBuilder;
     @Inject PodTemplateFactory podTemplateFactory;
+    @Inject ProxyTlsManager proxyTlsManager;
 
     @ConfigProperty(name = "kafka.cluster.id")
     String localClusterId;
@@ -83,7 +86,24 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
                 })
                 .build(),
             context);
-        return EventSourceInitializer.nameEventSources(clusterEventSource);
+
+        // Re-reconcile all pools in the cluster when a proxy changes (mTLS affects all broker pools)
+        var proxyEventSource = new InformerEventSource<>(
+            InformerConfiguration.from(KafkaProxy.class, context)
+                .withSecondaryToPrimaryMapper(proxy -> {
+                    String ns = proxy.getMetadata().getNamespace();
+                    return context.getClient()
+                        .resources(KafkaNodePool.class)
+                        .inNamespace(ns)
+                        .withLabel(KafkaNodePool.CLUSTER_LABEL, proxy.getSpec().getClusterRef())
+                        .list().getItems().stream()
+                        .map(p -> new ResourceID(p.getMetadata().getName(), ns))
+                        .collect(Collectors.toSet());
+                })
+                .build(),
+            context);
+
+        return EventSourceInitializer.nameEventSources(clusterEventSource, proxyEventSource);
     }
 
     @Override
@@ -131,8 +151,22 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         boolean isBroker = pool.getSpec().getRoles().contains(NodeRole.BROKER);
         String controllerAddr = cluster.getSpec().getClusters().get(clusterIndex).getControllerAdvertisedAddress();
 
+        // Look up the KafkaProxy for this cluster — mTLS applies to all broker pools in the cluster
+        KafkaProxy proxy = client.resources(KafkaProxy.class)
+                .inNamespace(namespace).list().getItems().stream()
+                .filter(p -> clusterName.equals(p.getSpec().getClusterRef()))
+                .findFirst().orElse(null);
+        String proxyName = null;
+        String brokerMtlsSecretName = null;
+        if (proxy != null && isBroker) {
+            proxyTlsManager.ensureSecrets(proxy.getMetadata().getName(), poolName, namespace);
+            proxyName = proxy.getMetadata().getName();
+            brokerMtlsSecretName = ProxyTlsManager.brokerSecretName(proxyName);
+        }
+
         // Build and apply per-pool ConfigMap (server.properties + start script)
-        ConfigMap poolCm = poolConfigMapBuilder.build(pool, cluster, namespace, clusterIndex, quorumVoters, controllerAddr);
+        ConfigMap poolCm = poolConfigMapBuilder.build(
+                pool, cluster, namespace, clusterIndex, quorumVoters, controllerAddr, proxyName);
         String configHash = Integer.toHexString(
                 (poolCm.getData().get("server.properties.template")
                  + poolCm.getData().get("start.sh")).hashCode());
@@ -169,7 +203,8 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
 
         // Build desired pod list and apply KafkaPodSet
         List<PodEntry> desiredPods = podTemplateFactory.build(
-                pool, cluster, namespace, clusterIndex, kafkaClusterId, configHash, isBroker, isController);
+                pool, cluster, namespace, clusterIndex, kafkaClusterId, configHash,
+                isBroker, isController, brokerMtlsSecretName);
         applyPodSet(pool, namespace, clusterName, desiredPods);
 
         // Propagate KafkaPodSet readiness into pool status

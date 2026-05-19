@@ -47,31 +47,33 @@ public class ProxyDeploymentBuilder {
                     .build());
         }
 
-        // TLS volumes
+        // TLS volumes: use manually-configured secret if provided, otherwise use auto-generated proxy cert
         KafkaProxyTlsConfig tls = spec.getTls();
-        if (tls != null) {
-            if (tls.getProxyKeySecretRef() != null) {
-                volumes.add(new VolumeBuilder()
-                        .withName("proxy-tls")
-                        .withNewSecret().withSecretName(tls.getProxyKeySecretRef()).endSecret()
-                        .build());
-                mounts.add(new VolumeMountBuilder()
-                        .withName("proxy-tls")
-                        .withMountPath("/etc/proxy/kafka-tls")
-                        .withReadOnly(true)
-                        .build());
-            }
-            if (tls.getClientCaSecretRef() != null) {
-                volumes.add(new VolumeBuilder()
-                        .withName("client-ca")
-                        .withNewSecret().withSecretName(tls.getClientCaSecretRef()).endSecret()
-                        .build());
-                mounts.add(new VolumeMountBuilder()
-                        .withName("client-ca")
-                        .withMountPath("/etc/proxy/client-tls")
-                        .withReadOnly(true)
-                        .build());
-            }
+        String proxyKeySecretRef = tls != null ? tls.getProxyKeySecretRef() : null;
+        if (proxyKeySecretRef == null) {
+            // Auto mTLS: mount the operator-generated proxy client cert
+            proxyKeySecretRef = ProxyTlsManager.proxySecretName(name);
+        }
+        volumes.add(new VolumeBuilder()
+                .withName("proxy-tls")
+                .withNewSecret().withSecretName(proxyKeySecretRef).endSecret()
+                .build());
+        mounts.add(new VolumeMountBuilder()
+                .withName("proxy-tls")
+                .withMountPath("/etc/proxy/kafka-tls")
+                .withReadOnly(true)
+                .build());
+
+        if (tls != null && tls.getClientCaSecretRef() != null) {
+            volumes.add(new VolumeBuilder()
+                    .withName("client-ca")
+                    .withNewSecret().withSecretName(tls.getClientCaSecretRef()).endSecret()
+                    .build());
+            mounts.add(new VolumeMountBuilder()
+                    .withName("client-ca")
+                    .withMountPath("/etc/proxy/client-tls")
+                    .withReadOnly(true)
+                    .build());
         }
 
         return new DeploymentBuilder()

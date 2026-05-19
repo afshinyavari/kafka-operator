@@ -30,7 +30,7 @@ class StartupScriptBuilderTest {
     @Test
     void controllerOnly_hasMyPodIpSed_noNodeId() {
         KafkaNodePool pool = pool(List.of(NodeRole.CONTROLLER));
-        String script = builder.build(pool, 0, NS, false, List.of(), null);
+        String script = builder.build(pool, 0, NS, false, List.of(), null, false);
 
         assertThat(script).contains("MY_POD_IP");
         assertThat(script).doesNotContain("NODE_ID=$(");
@@ -42,7 +42,7 @@ class StartupScriptBuilderTest {
         KafkaNodePool pool = pool(List.of(NodeRole.CONTROLLER));
         KafkaListenerTlsConfig ctrlTls = new KafkaListenerTlsConfig();
 
-        String script = builder.build(pool, 0, NS, false, List.of(), ctrlTls);
+        String script = builder.build(pool, 0, NS, false, List.of(), ctrlTls, false);
 
         assertThat(script).contains("openssl pkcs12");
         assertThat(script).contains("/tmp/tls/CONTROLLER");
@@ -52,7 +52,7 @@ class StartupScriptBuilderTest {
     void controllerOnly_noTls_noPkcs12Block() {
         KafkaNodePool pool = pool(List.of(NodeRole.CONTROLLER));
 
-        String script = builder.build(pool, 0, NS, false, List.of(), null);
+        String script = builder.build(pool, 0, NS, false, List.of(), null, false);
 
         assertThat(script).doesNotContain("openssl pkcs12");
         assertThat(script).doesNotContain("/tmp/tls/");
@@ -63,7 +63,7 @@ class StartupScriptBuilderTest {
         injectField(builder, "mcsEnabled", true);
         KafkaNodePool pool = pool(List.of(NodeRole.BROKER));
 
-        String script = builder.build(pool, 0, NS, false, List.of(), null);
+        String script = builder.build(pool, 0, NS, false, List.of(), null, false);
 
         assertThat(script).contains("clusterset.local");
         assertThat(script).doesNotContain("svc.cluster.local");
@@ -73,7 +73,7 @@ class StartupScriptBuilderTest {
     void broker_mcsDisabled_usesPodFqdn() {
         KafkaNodePool pool = pool(List.of(NodeRole.BROKER));
 
-        String script = builder.build(pool, 0, NS, false, List.of(), null);
+        String script = builder.build(pool, 0, NS, false, List.of(), null, false);
 
         assertThat(script).contains("svc.cluster.local");
         assertThat(script).contains("${POD_NAME}");
@@ -85,7 +85,7 @@ class StartupScriptBuilderTest {
         KafkaNodePool pool = pool(List.of(NodeRole.BROKER));
         KafkaListenerSpec listener = listener("CLIENT", 9095, ExternalAccessType.NODEPORT, null, 31000);
 
-        String script = builder.build(pool, 0, NS, false, List.of(listener), null);
+        String script = builder.build(pool, 0, NS, false, List.of(listener), null, false);
 
         assertThat(script).contains("CLIENT_ADDR=\"${HOST_IP}:${EXTERNAL_CLIENT_NODEPORT}\"");
     }
@@ -96,7 +96,7 @@ class StartupScriptBuilderTest {
         KafkaListenerTlsConfig tls = new KafkaListenerTlsConfig();
         KafkaListenerSpec l = listener("SECURE", 9095, null, tls, 31000);
 
-        String script = builder.build(pool, 0, NS, false, List.of(l), null);
+        String script = builder.build(pool, 0, NS, false, List.of(l), null, false);
 
         // internal listener: address derived from ADVERTISED_ADDR minus port
         assertThat(script).contains("SECURE_ADDR=\"${ADVERTISED_ADDR%:*}:9095\"");
@@ -110,7 +110,7 @@ class StartupScriptBuilderTest {
         KafkaNodePool pool = pool(List.of(NodeRole.BROKER));
         pool.getSpec().setRackTopologyKey("topology.kubernetes.io/zone");
 
-        String script = builder.build(pool, 0, NS, false, List.of(), null);
+        String script = builder.build(pool, 0, NS, false, List.of(), null, false);
 
         assertThat(script).contains("${BROKER_RACK}");
     }
@@ -119,7 +119,7 @@ class StartupScriptBuilderTest {
     void broker_withoutRack_noBrokerRackSed() {
         KafkaNodePool pool = pool(List.of(NodeRole.BROKER));
 
-        String script = builder.build(pool, 0, NS, false, List.of(), null);
+        String script = builder.build(pool, 0, NS, false, List.of(), null, false);
 
         assertThat(script).doesNotContain("BROKER_RACK");
     }
@@ -128,7 +128,7 @@ class StartupScriptBuilderTest {
     void metricsEnabled_hasJmxExportLine() {
         KafkaNodePool pool = pool(List.of(NodeRole.BROKER));
 
-        String script = builder.build(pool, 0, NS, true, List.of(), null);
+        String script = builder.build(pool, 0, NS, true, List.of(), null, false);
 
         assertThat(script).contains("jmx-exporter.jar");
         assertThat(script).contains("KAFKA_OPTS");
@@ -138,7 +138,7 @@ class StartupScriptBuilderTest {
     void metricsDisabled_noJmxExportLine() {
         KafkaNodePool pool = pool(List.of(NodeRole.BROKER));
 
-        String script = builder.build(pool, 0, NS, false, List.of(), null);
+        String script = builder.build(pool, 0, NS, false, List.of(), null, false);
 
         assertThat(script).doesNotContain("jmx-exporter.jar");
     }

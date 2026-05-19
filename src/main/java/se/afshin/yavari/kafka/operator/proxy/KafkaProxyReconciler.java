@@ -44,6 +44,7 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
     @Inject KroxyliciousConfigBuilder configBuilder;
     @Inject ProxyDeploymentBuilder deploymentBuilder;
     @Inject ProxyServiceBuilder serviceBuilder;
+    @Inject ProxyTlsManager proxyTlsManager;
 
     @ConfigProperty(name = "kafka.networking.mcs-enabled")
     boolean mcsEnabled;
@@ -132,6 +133,9 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
         }
 
         try {
+            // Ensure mTLS secrets exist before building the proxy config and deployment
+            proxyTlsManager.ensureSecrets(name, proxy.getSpec().getPoolRef(), namespace);
+
             // Generate and apply config ConfigMap
             String configYaml = configBuilder.build(proxy, brokerCount, brokerNodeIdBase, apicurioRegistryUrl, namespace);
             ConfigMap configMap = new ConfigMapBuilder()
@@ -185,6 +189,7 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
         client.configMaps().inNamespace(namespace).withName(name + "-config").delete();
         client.apps().deployments().inNamespace(namespace).withName(name).delete();
         client.services().inNamespace(namespace).withName(name).delete();
+        proxyTlsManager.deleteSecrets(name, namespace);
         if (mcsEnabled) {
             client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
                     .inNamespace(namespace).withName(name).delete();

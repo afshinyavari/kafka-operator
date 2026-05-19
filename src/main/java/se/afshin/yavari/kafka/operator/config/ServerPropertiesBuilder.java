@@ -40,6 +40,8 @@ public class ServerPropertiesBuilder {
      * @param controllerAdvertisedAddress host:port for the KRaft CONTROLLER listener on this cluster
      * @param brokerAdvertisedAddress     startup-time placeholder (e.g. {@code "${ADVERTISED_ADDR}"})
      *                                    substituted by start.sh; ignored for controller-only nodes
+     * @param proxyCn                     CN of the Kroxylicious proxy cert (null = no proxy mTLS)
+     * @param poolName                    pool name, used as the broker client CN in super.users
      */
     public Map<String, String> buildProperties(
             KafkaCluster cr,
@@ -48,7 +50,9 @@ public class ServerPropertiesBuilder {
             int poolLocalIndex,
             String quorumVoters,
             String controllerAdvertisedAddress,
-            String brokerAdvertisedAddress) {
+            String brokerAdvertisedAddress,
+            String proxyCn,
+            String poolName) {
 
         KafkaClusterSpec clusterSpec = cr.getSpec();
         List<NodeRole> roles = poolSpec.getRoles();
@@ -76,10 +80,12 @@ public class ServerPropertiesBuilder {
         StringBuilder advertisedListeners = new StringBuilder();
         StringBuilder protocolMap = new StringBuilder();
 
+        boolean internalMtls = proxyCn != null;
         KafkaListenerTlsConfig ctrlTls = clusterSpec.getControllerTls();
         List<KafkaListenerSpec> extraListeners = clusterSpec.getListeners();
         boolean hasExtraListeners = extraListeners != null && !extraListeners.isEmpty();
-        boolean hasInternalTlsListener = hasExtraListeners && extraListeners.stream()
+        // Only applies when the user configured a dedicated internal TLS listener (not auto mTLS)
+        boolean hasInternalTlsListener = !internalMtls && hasExtraListeners && extraListeners.stream()
                 .anyMatch(l -> l.getExternalAccess() == null && l.getTls() != null);
 
         if (isController) {
@@ -91,21 +97,23 @@ public class ServerPropertiesBuilder {
             if (listeners.length() > 0) {
                 listeners.append(',');
             }
-            // Bind INTERNAL to localhost only when an internal TLS listener handles inter-broker traffic
-            String plaintextBind = hasInternalTlsListener ? "127.0.0.1" : "0.0.0.0";
-            listeners.append("INTERNAL://").append(plaintextBind).append(":9092");
-            if (hasInternalTlsListener) {
-                // Inter-broker uses a TLS listener: INTERNAL is localhost-only for admin tools
+            if (internalMtls) {
+                // Proxy mTLS: INTERNAL stays at 0.0.0.0 (inter-broker cross-pod), but is now SSL
+                listeners.append("INTERNAL://0.0.0.0:9092");
+                advertisedListeners.append("INTERNAL://").append(brokerAdvertisedAddress);
+            } else if (hasInternalTlsListener) {
+                // User-configured internal TLS listener handles inter-broker: INTERNAL is localhost-only
+                listeners.append("INTERNAL://127.0.0.1:9092");
                 advertisedListeners.append("INTERNAL://127.0.0.1:9092");
             } else {
-                // No internal TLS listener: INTERNAL is the inter-broker listener
+                listeners.append("INTERNAL://0.0.0.0:9092");
                 advertisedListeners.append("INTERNAL://").append(brokerAdvertisedAddress);
             }
         }
         // CONTROLLER must always be in the protocol map — brokers use it to talk to controllers
         protocolMap.append("CONTROLLER:").append(ctrlTls != null ? "SSL" : "PLAINTEXT");
         if (isBroker) {
-            protocolMap.append(",INTERNAL:PLAINTEXT");
+            protocolMap.append(",INTERNAL:").append(internalMtls ? "SSL" : "PLAINTEXT");
             if (hasExtraListeners) {
                 for (KafkaListenerSpec l : extraListeners) {
                     listeners.append(',').append(l.getName()).append("://0.0.0.0:").append(l.getPort());
@@ -148,11 +156,24 @@ public class ServerPropertiesBuilder {
         props.put("log.dirs",                    "/var/lib/kafka/data");
 
         if (isBroker) {
-            String interBrokerListener = extraListeners.stream()
-                    .filter(l -> l.getExternalAccess() == null)
-                    .findFirst().map(KafkaListenerSpec::getName).orElse("INTERNAL");
+            String interBrokerListener;
+            if (internalMtls) {
+                interBrokerListener = "INTERNAL";
+            } else {
+                interBrokerListener = extraListeners.stream()
+                        .filter(l -> l.getExternalAccess() == null)
+                        .findFirst().map(KafkaListenerSpec::getName).orElse("INTERNAL");
+            }
             props.put("inter.broker.listener.name", interBrokerListener);
-            // Per-listener SSL properties for each TLS listener
+            if (internalMtls) {
+                // Mutual TLS on the INTERNAL listener — requires client cert from all peers.
+                // Hostname verification is disabled because the internal cert uses CN-only (no SAN);
+                // CA trust still ensures only operator-issued certs can connect.
+                addSslProps(props, "INTERNAL", true);
+                props.put("listener.name.internal.ssl.endpoint.identification.algorithm", "");
+                props.put("super.users", "User:CN=" + proxyCn + ";User:CN=" + poolName);
+            }
+            // Per-listener SSL properties for each user-configured TLS listener
             for (KafkaListenerSpec l : extraListeners) {
                 if (l.getTls() != null) {
                     addSslProps(props, l.getName(), l.getTls().isMutualTls());

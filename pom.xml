@@ -79,6 +79,24 @@
       <version>${kafka-clients.version}</version>
     </dependency>
 
+    <!-- TLS certificate generation for proxy↔broker mTLS -->
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcpkix-jdk18on</artifactId>
+      <version>1.79</version>
+    </dependency>
+    <!-- Pin bcprov to 1.79 to match bcpkix — Quarkus BOM resolves it to 1.78.1 which is missing id_ml_dsa_44 -->
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcprov-jdk18on</artifactId>
+      <version>1.79</version>
+    </dependency>
+    <dependency>
+      <groupId>org.bouncycastle</groupId>
+      <artifactId>bcutil-jdk18on</artifactId>
+      <version>1.79</version>
+    </dependency>
+
     <!-- Test -->
     <dependency>
       <groupId>io.quarkus</groupId>

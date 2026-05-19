@@ -27,16 +27,19 @@ public class PoolConfigMapBuilder {
     StartupScriptBuilder scriptBuilder;
 
     public ConfigMap build(KafkaNodePool pool, KafkaCluster cluster, String namespace,
-                           int clusterIndex, String quorumVoters, String controllerAddr) {
+                           int clusterIndex, String quorumVoters, String controllerAddr,
+                           String proxyName) {
         boolean isBroker = pool.getSpec().getRoles().contains(NodeRole.BROKER);
+        String poolName = pool.getMetadata().getName();
         List<KafkaListenerSpec> listeners = cluster.getSpec().getListeners();
         KafkaListenerTlsConfig controllerTls = cluster.getSpec().getControllerTls();
-        boolean hasExtraListeners = listeners != null && !listeners.isEmpty();
+        boolean internalMtls = proxyName != null && isBroker;
 
         // Pass the startup-time placeholder so buildProperties can compose advertised.listeners
         // correctly for all three cases: no extra listeners, external-only, and internal TLS.
         Map<String, String> props = propsBuilder.buildProperties(
-                cluster, pool.getSpec(), clusterIndex, 0, quorumVoters, controllerAddr, "${ADVERTISED_ADDR}");
+                cluster, pool.getSpec(), clusterIndex, 0, quorumVoters, controllerAddr,
+                "${ADVERTISED_ADDR}", internalMtls ? proxyName : null, poolName);
 
         if (isBroker) {
             props.put("node.id", "${NODE_ID}");
@@ -45,7 +48,8 @@ public class PoolConfigMapBuilder {
         String content = propsBuilder.toPropertiesString(props);
         MetricsConfig metrics = cluster.getSpec().getMetricsConfig();
         boolean hasMetrics = metrics != null && metrics.getConfigMapRef() != null;
-        String startScript = scriptBuilder.build(pool, clusterIndex, namespace, hasMetrics, listeners, controllerTls);
+        String startScript = scriptBuilder.build(
+                pool, clusterIndex, namespace, hasMetrics, listeners, controllerTls, internalMtls);
 
         return new ConfigMapBuilder()
                 .withNewMetadata()

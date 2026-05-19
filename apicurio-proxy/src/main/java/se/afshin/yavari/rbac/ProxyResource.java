@@ -70,9 +70,7 @@ public class ProxyResource {
         PolicyEngine.Action action = resolveAction(method, fullPath);
 
         if (!policy.isAllowed(roles, artifact, action)) {
-            return Response.status(403)
-                .entity("Forbidden: roles " + roles + " cannot " + action + " artifact '" + artifact + "'")
-                .build();
+            return Response.status(403).entity("Forbidden").build();
         }
 
         String upstreamBase = fullPath.startsWith("/apis/registry/") ? apicurioUrl : xmlSchemaUrl;

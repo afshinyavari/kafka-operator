@@ -87,9 +87,7 @@ class JwtGroupFilter implements SaslAuthenticateRequestFilter {
             claimNode.forEach(g -> groups.add(g.asText()));
         }
 
-        if (!groups.isEmpty()) {
-            JwtGroupStore.put(sub, groups);
-        }
+        JwtGroupStore.put(sub, groups);
     }
 
     private static JsonNode resolveClaim(JsonNode root, String claimPath) {
