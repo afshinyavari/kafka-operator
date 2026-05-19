@@ -14,6 +14,7 @@ class IsrCheckerTest {
     @BeforeEach
     void setup() throws Exception {
         checker = new IsrChecker();
+        checker.timeoutSeconds = 1;
         var field = IsrChecker.class.getDeclaredField("metrics");
         field.setAccessible(true);
         field.set(checker, mock(OperatorMetrics.class));

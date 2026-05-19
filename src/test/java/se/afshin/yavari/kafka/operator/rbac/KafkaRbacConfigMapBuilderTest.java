@@ -1,0 +1,173 @@
+package se.afshin.yavari.kafka.operator.rbac;
+
+import io.fabric8.kubernetes.api.model.ConfigMap;
+import io.fabric8.kubernetes.api.model.ObjectMeta;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
+import se.afshin.yavari.kafka.operator.crd.KafkaRbacGroup;
+import se.afshin.yavari.kafka.operator.crd.KafkaRbacKafkaAccess;
+import se.afshin.yavari.kafka.operator.crd.KafkaRbacSchemaAccess;
+import se.afshin.yavari.kafka.operator.crd.KafkaRbacSpec;
+import se.afshin.yavari.kafka.operator.crd.KafkaRbacUser;
+
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+
+class KafkaRbacConfigMapBuilderTest {
+
+    private static final String NS = "kafka";
+    private static final String RBAC_NAME = "my-rbac";
+
+    private KafkaRbacConfigMapBuilder builder;
+
+    @BeforeEach
+    void setup() {
+        builder = new KafkaRbacConfigMapBuilder();
+    }
+
+    @Test
+    void buildKafkaRules_groupWithKafka_included() {
+        KafkaRbac rbac = rbac(List.of(groupWithKafka("admins", List.of("*"), List.of("READ", "WRITE"))), List.of());
+
+        ConfigMap cm = builder.buildKafkaRules(rbac, NS);
+        String yaml = cm.getData().get("rbac-rules.yaml");
+
+        assertThat(yaml).contains("- name: admins");
+        assertThat(yaml).contains("- *");  // topics (wildcard, no quoting in Kafka rules)
+        assertThat(yaml).contains("- READ");
+        assertThat(yaml).contains("- WRITE");
+    }
+
+    @Test
+    void buildKafkaRules_groupWithoutKafka_skipped() {
+        KafkaRbacGroup g = new KafkaRbacGroup();
+        g.setName("readers");
+        // kafka is null
+        KafkaRbac rbac = rbac(List.of(g), List.of());
+
+        ConfigMap cm = builder.buildKafkaRules(rbac, NS);
+        String yaml = cm.getData().get("rbac-rules.yaml");
+
+        assertThat(yaml).doesNotContain("readers");
+    }
+
+    @Test
+    void buildKafkaRules_userWithKafka_included() {
+        KafkaRbac rbac = rbac(List.of(), List.of(userWithKafka("alice", List.of("my-topic"), List.of("READ"))));
+
+        ConfigMap cm = builder.buildKafkaRules(rbac, NS);
+        String yaml = cm.getData().get("rbac-rules.yaml");
+
+        assertThat(yaml).contains("- name: alice");
+        assertThat(yaml).contains("- my-topic");
+        assertThat(yaml).contains("- READ");
+    }
+
+    @Test
+    void buildKafkaRules_cmNameAndKey() {
+        KafkaRbac rbac = rbac(List.of(), List.of());
+
+        ConfigMap cm = builder.buildKafkaRules(rbac, NS);
+
+        assertThat(cm.getMetadata().getName()).isEqualTo(RBAC_NAME + "-kafka-rules");
+        assertThat(cm.getMetadata().getNamespace()).isEqualTo(NS);
+        assertThat(cm.getData()).containsKey("rbac-rules.yaml");
+        assertThat(cm.getMetadata().getOwnerReferences()).hasSize(1);
+    }
+
+    @Test
+    void buildApicurioPolicy_groupWithSchemaRegistry_included() {
+        KafkaRbacGroup g = groupWithSchemaRegistry("devs", List.of("my-schema"), List.of("READ"));
+        KafkaRbac rbac = rbac(List.of(g), List.of());
+
+        ConfigMap cm = builder.buildApicurioPolicy(rbac, NS);
+        String yaml = cm.getData().get("policy.yaml");
+
+        assertThat(yaml).contains("- devs");
+        assertThat(yaml).contains("artifact: my-schema");
+        assertThat(yaml).contains("- READ");
+    }
+
+    @Test
+    void buildApicurioPolicy_wildcardArtifact_quoted() {
+        KafkaRbacGroup g = groupWithSchemaRegistry("all", List.of("*"), List.of("READ"));
+        KafkaRbac rbac = rbac(List.of(g), List.of());
+
+        ConfigMap cm = builder.buildApicurioPolicy(rbac, NS);
+        String yaml = cm.getData().get("policy.yaml");
+
+        assertThat(yaml).contains("artifact: '*'");
+    }
+
+    @Test
+    void buildApicurioPolicy_nonWildcard_notQuoted() {
+        KafkaRbacGroup g = groupWithSchemaRegistry("team", List.of("orders-schema"), List.of("READ"));
+        KafkaRbac rbac = rbac(List.of(g), List.of());
+
+        ConfigMap cm = builder.buildApicurioPolicy(rbac, NS);
+        String yaml = cm.getData().get("policy.yaml");
+
+        assertThat(yaml).contains("artifact: orders-schema");
+        assertThat(yaml).doesNotContain("artifact: 'orders-schema'");
+    }
+
+    @Test
+    void buildApicurioPolicy_cmNameAndKey() {
+        KafkaRbac rbac = rbac(List.of(), List.of());
+
+        ConfigMap cm = builder.buildApicurioPolicy(rbac, NS);
+
+        assertThat(cm.getMetadata().getName()).isEqualTo(RBAC_NAME + "-apicurio-policy");
+        assertThat(cm.getMetadata().getNamespace()).isEqualTo(NS);
+        assertThat(cm.getData()).containsKey("policy.yaml");
+        assertThat(cm.getMetadata().getOwnerReferences()).hasSize(1);
+    }
+
+    // --- helpers ---
+
+    private KafkaRbac rbac(List<KafkaRbacGroup> groups, List<KafkaRbacUser> users) {
+        KafkaRbac rbac = new KafkaRbac();
+        ObjectMeta meta = new ObjectMeta();
+        meta.setName(RBAC_NAME);
+        meta.setNamespace(NS);
+        meta.setUid("test-uid-1234");
+        rbac.setMetadata(meta);
+        KafkaRbacSpec spec = new KafkaRbacSpec();
+        spec.setGroups(groups);
+        spec.setUsers(users);
+        rbac.setSpec(spec);
+        return rbac;
+    }
+
+    private KafkaRbacGroup groupWithKafka(String name, List<String> topics, List<String> ops) {
+        KafkaRbacGroup g = new KafkaRbacGroup();
+        g.setName(name);
+        KafkaRbacKafkaAccess kafka = new KafkaRbacKafkaAccess();
+        kafka.setTopics(topics);
+        kafka.setOperations(ops);
+        g.setKafka(kafka);
+        return g;
+    }
+
+    private KafkaRbacGroup groupWithSchemaRegistry(String name, List<String> artifacts, List<String> actions) {
+        KafkaRbacGroup g = new KafkaRbacGroup();
+        g.setName(name);
+        KafkaRbacSchemaAccess schema = new KafkaRbacSchemaAccess();
+        schema.setArtifacts(artifacts);
+        schema.setActions(actions);
+        g.setSchemaRegistry(schema);
+        return g;
+    }
+
+    private KafkaRbacUser userWithKafka(String name, List<String> topics, List<String> ops) {
+        KafkaRbacUser u = new KafkaRbacUser();
+        u.setName(name);
+        KafkaRbacKafkaAccess kafka = new KafkaRbacKafkaAccess();
+        kafka.setTopics(topics);
+        kafka.setOperations(ops);
+        u.setKafka(kafka);
+        return u;
+    }
+}

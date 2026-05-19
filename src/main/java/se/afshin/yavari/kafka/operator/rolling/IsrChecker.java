@@ -20,7 +20,7 @@ import java.util.concurrent.TimeUnit;
 public class IsrChecker {
 
     private static final Logger LOG = Logger.getLogger(IsrChecker.class);
-    private static final int TIMEOUT_SECONDS = 30;
+    int timeoutSeconds = 30;
 
     @Inject OperatorMetrics metrics;
 
@@ -38,17 +38,17 @@ public class IsrChecker {
     public boolean isBrokerSafeToRestart(String bootstrapAddress, int nodeId) {
         Properties props = new Properties();
         props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapAddress);
-        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, String.valueOf(TIMEOUT_SECONDS * 1000));
-        props.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, String.valueOf(TIMEOUT_SECONDS * 1000));
+        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, String.valueOf(timeoutSeconds * 1000));
+        props.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, String.valueOf(timeoutSeconds * 1000));
 
         try (AdminClient admin = AdminClient.create(props)) {
-            Set<String> topicNames = admin.listTopics().names().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+            Set<String> topicNames = admin.listTopics().names().get(timeoutSeconds, TimeUnit.SECONDS);
             if (topicNames.isEmpty()) {
                 return true;
             }
 
             Map<String, TopicDescription> descriptions =
-                    admin.describeTopics(topicNames).allTopicNames().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    admin.describeTopics(topicNames).allTopicNames().get(timeoutSeconds, TimeUnit.SECONDS);
 
             for (TopicDescription td : descriptions.values()) {
                 for (TopicPartitionInfo tpi : td.partitions()) {
@@ -82,12 +82,12 @@ public class IsrChecker {
     public boolean isControllerSafeToRestart(String bootstrapControllerAddress, int nodeId) {
         Properties props = new Properties();
         props.put(AdminClientConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapControllerAddress);
-        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, String.valueOf(TIMEOUT_SECONDS * 1000));
-        props.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, String.valueOf(TIMEOUT_SECONDS * 1000));
+        props.put(AdminClientConfig.REQUEST_TIMEOUT_MS_CONFIG, String.valueOf(timeoutSeconds * 1000));
+        props.put(AdminClientConfig.DEFAULT_API_TIMEOUT_MS_CONFIG, String.valueOf(timeoutSeconds * 1000));
 
         try (AdminClient admin = AdminClient.create(props)) {
             QuorumInfo quorum = admin.describeMetadataQuorum()
-                    .quorumInfo().get(TIMEOUT_SECONDS, TimeUnit.SECONDS);
+                    .quorumInfo().get(timeoutSeconds, TimeUnit.SECONDS);
 
             Collection<QuorumInfo.ReplicaState> voters = quorum.voters();
             if (voters.size() < 2) {
