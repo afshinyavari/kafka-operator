@@ -1,4 +1,4 @@
-package se.afshin.yavari.kafka.operator.reconciler;
+package se.afshin.yavari.kafka.operator.nodepool;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
@@ -11,6 +11,7 @@ import io.fabric8.kubernetes.client.dsl.ServiceResource;
 import io.javaoperatorsdk.operator.api.reconciler.Context;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import se.afshin.yavari.kafka.operator.cluster.KafkaClusterReconciler;
 import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
 import se.afshin.yavari.kafka.operator.crd.ClusterEntry;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
@@ -21,10 +22,6 @@ import se.afshin.yavari.kafka.operator.crd.KafkaNodePoolStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSetStatus;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
-import se.afshin.yavari.kafka.operator.nodepool.ExternalAccessServiceBuilder;
-import se.afshin.yavari.kafka.operator.nodepool.HeadlessServiceBuilder;
-import se.afshin.yavari.kafka.operator.nodepool.PodTemplateFactory;
-import se.afshin.yavari.kafka.operator.nodepool.PoolConfigMapBuilder;
 
 import java.util.List;
 import java.util.Map;

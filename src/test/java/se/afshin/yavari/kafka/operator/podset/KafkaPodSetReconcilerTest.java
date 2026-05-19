@@ -1,4 +1,4 @@
-package se.afshin.yavari.kafka.operator.reconciler;
+package se.afshin.yavari.kafka.operator.podset;
 
 import io.fabric8.kubernetes.api.model.LabelSelector;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
@@ -22,8 +22,6 @@ import se.afshin.yavari.kafka.operator.crd.KafkaPodSetSpec;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
 import se.afshin.yavari.kafka.operator.metrics.OperatorMetrics;
-import se.afshin.yavari.kafka.operator.podset.PodSpecHasher;
-import se.afshin.yavari.kafka.operator.podset.PvcFactory;
 import se.afshin.yavari.kafka.operator.rolling.IsrChecker;
 import se.afshin.yavari.kafka.operator.rolling.RollingUpdateController;
 

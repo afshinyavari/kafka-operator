@@ -1,4 +1,4 @@
-package se.afshin.yavari.kafka.operator.reconciler;
+package se.afshin.yavari.kafka.operator.nodepool;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
@@ -29,6 +29,8 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
+import se.afshin.yavari.kafka.operator.cluster.CrValidator;
+import se.afshin.yavari.kafka.operator.cluster.KafkaClusterReconciler;
 import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
@@ -39,10 +41,6 @@ import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSetSpec;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
-import se.afshin.yavari.kafka.operator.nodepool.ExternalAccessServiceBuilder;
-import se.afshin.yavari.kafka.operator.nodepool.HeadlessServiceBuilder;
-import se.afshin.yavari.kafka.operator.nodepool.PodTemplateFactory;
-import se.afshin.yavari.kafka.operator.nodepool.PoolConfigMapBuilder;
 
 import java.util.List;
 import java.util.Map;

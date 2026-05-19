@@ -1,4 +1,4 @@
-package se.afshin.yavari.kafka.operator.reconciler;
+package se.afshin.yavari.kafka.operator.apicurio;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
@@ -22,10 +22,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
-import se.afshin.yavari.kafka.operator.apicurio.ApicurioDeploymentBuilder;
-import se.afshin.yavari.kafka.operator.apicurio.ApicurioProxyDeploymentBuilder;
-import se.afshin.yavari.kafka.operator.apicurio.ApicurioProxyServiceBuilder;
-import se.afshin.yavari.kafka.operator.apicurio.ApicurioServiceBuilder;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistry;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistryStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbac;

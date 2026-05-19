@@ -1,4 +1,4 @@
-package se.afshin.yavari.kafka.operator.reconciler;
+package se.afshin.yavari.kafka.operator.proxy;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ConfigMapBuilder;
@@ -28,9 +28,6 @@ import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
-import se.afshin.yavari.kafka.operator.proxy.KroxyliciousConfigBuilder;
-import se.afshin.yavari.kafka.operator.proxy.ProxyDeploymentBuilder;
-import se.afshin.yavari.kafka.operator.proxy.ProxyServiceBuilder;
 
 import java.time.Duration;
 import java.util.Map;

@@ -1,4 +1,4 @@
-package se.afshin.yavari.kafka.operator.reconciler;
+package se.afshin.yavari.kafka.operator.cluster;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ConfigMapBuilder;
@@ -19,7 +19,6 @@ import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
-import se.afshin.yavari.kafka.operator.cluster.ClusterStatusAggregator;
 import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterStatus;
@@ -40,7 +39,7 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
 
     private static final Logger LOG = Logger.getLogger(KafkaClusterReconciler.class);
 
-    static final String QUORUM_CONFIG_SUFFIX = "-quorum-config";
+    public static final String QUORUM_CONFIG_SUFFIX = "-quorum-config";
 
     @Inject
     KubernetesClient client;

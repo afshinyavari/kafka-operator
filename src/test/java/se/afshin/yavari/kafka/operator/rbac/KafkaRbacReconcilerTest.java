@@ -1,4 +1,4 @@
-package se.afshin.yavari.kafka.operator.reconciler;
+package se.afshin.yavari.kafka.operator.rbac;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
@@ -14,7 +14,6 @@ import org.junit.jupiter.api.Test;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbacSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbacStatus;
-import se.afshin.yavari.kafka.operator.rbac.KafkaRbacConfigMapBuilder;
 
 import java.util.List;
 

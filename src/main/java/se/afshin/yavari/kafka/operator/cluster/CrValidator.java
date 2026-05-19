@@ -1,4 +1,4 @@
-package se.afshin.yavari.kafka.operator.reconciler;
+package se.afshin.yavari.kafka.operator.cluster;
 
 import se.afshin.yavari.kafka.operator.crd.ClusterEntry;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
@@ -15,14 +15,14 @@ import java.util.stream.Collectors;
  * CRD schema rules (CEL / minimum constraints) catch structural errors at apply time;
  * this class catches semantic errors that require cross-field or external-state reasoning.
  */
-class CrValidator {
+public class CrValidator {
 
-    record ValidationResult(boolean valid, String message) {
-        static ValidationResult ok() { return new ValidationResult(true, null); }
-        static ValidationResult fail(String message) { return new ValidationResult(false, message); }
+    public record ValidationResult(boolean valid, String message) {
+        public static ValidationResult ok() { return new ValidationResult(true, null); }
+        public static ValidationResult fail(String message) { return new ValidationResult(false, message); }
     }
 
-    static ValidationResult validateKafkaCluster(KafkaCluster cr, String localClusterId) {
+    public static ValidationResult validateKafkaCluster(KafkaCluster cr, String localClusterId) {
         var spec = cr.getSpec();
 
         if (spec.getClusters() == null || spec.getClusters().isEmpty()) {
@@ -119,7 +119,7 @@ class CrValidator {
         }
     }
 
-    static ValidationResult validateKafkaNodePool(KafkaNodePool pool) {
+    public static ValidationResult validateKafkaNodePool(KafkaNodePool pool) {
         var spec = pool.getSpec();
 
         if (spec.getRoles() == null || spec.getRoles().isEmpty()) {

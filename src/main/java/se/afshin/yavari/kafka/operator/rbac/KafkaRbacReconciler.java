@@ -1,4 +1,4 @@
-package se.afshin.yavari.kafka.operator.reconciler;
+package se.afshin.yavari.kafka.operator.rbac;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -13,7 +13,6 @@ import jakarta.inject.Inject;
 import org.jboss.logging.Logger;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbacStatus;
-import se.afshin.yavari.kafka.operator.rbac.KafkaRbacConfigMapBuilder;
 
 @ControllerConfiguration
 @ApplicationScoped

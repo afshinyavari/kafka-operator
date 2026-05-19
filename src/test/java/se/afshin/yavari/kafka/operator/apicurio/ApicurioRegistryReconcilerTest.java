@@ -1,4 +1,4 @@
-package se.afshin.yavari.kafka.operator.reconciler;
+package se.afshin.yavari.kafka.operator.apicurio;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
@@ -16,10 +16,6 @@ import io.javaoperatorsdk.operator.api.reconciler.Context;
 import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import se.afshin.yavari.kafka.operator.apicurio.ApicurioDeploymentBuilder;
-import se.afshin.yavari.kafka.operator.apicurio.ApicurioProxyDeploymentBuilder;
-import se.afshin.yavari.kafka.operator.apicurio.ApicurioProxyServiceBuilder;
-import se.afshin.yavari.kafka.operator.apicurio.ApicurioServiceBuilder;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistry;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistrySpec;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistryStatus;
