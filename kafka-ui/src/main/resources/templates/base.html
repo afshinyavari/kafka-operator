@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{#insert title}Kafka UI{/}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <script src="/webjars/htmx.org/1.9.12/dist/htmx.min.js"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; background: #f7f7f9; color: #1f2328; }
+        header { background: #0f172a; color: #f8fafc; padding: 0.75rem 1.25rem; display: flex; align-items: center; gap: 1.5rem; }
+        header h1 { margin: 0; font-size: 1.05rem; font-weight: 600; }
+        header h1 a { color: #f8fafc; text-decoration: none; }
+        header nav a { color: #cbd5e1; text-decoration: none; margin-right: 1rem; font-size: 0.9rem; }
+        header nav a:hover { color: #f8fafc; }
+        header .user { margin-left: auto; color: #94a3b8; font-size: 0.85rem; }
+        main { padding: 1.5rem; max-width: 1200px; margin: 0 auto; }
+        h2 { margin-top: 0; }
+        .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 9999px; font-size: 0.75rem; background: #e2e8f0; color: #1e293b; }
+        .badge-apicurio { background: #dbeafe; color: #1e3a8a; }
+        .badge-confluent { background: #fef3c7; color: #92400e; }
+        .badge-json { background: #d1fae5; color: #065f46; }
+        .badge-string { background: #e2e8f0; color: #1e293b; }
+        .badge-binary { background: #fecaca; color: #7f1d1d; }
+        .badge-tombstone { background: #f3f4f6; color: #6b7280; font-style: italic; }
+        .badge-internal { background: #f3f4f6; color: #6b7280; }
+        table { border-collapse: collapse; width: 100%; background: white; border-radius: 6px; overflow: hidden; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+        th, td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #e5e7eb; text-align: left; font-size: 0.9rem; }
+        th { background: #f1f5f9; font-weight: 600; }
+        tr:last-child td { border-bottom: none; }
+        code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: 0.85rem; }
+        pre { background: #0f172a; color: #e2e8f0; padding: 1rem; border-radius: 6px; overflow-x: auto; }
+        .card { background: white; padding: 1rem 1.25rem; border-radius: 6px; box-shadow: 0 1px 2px rgba(0,0,0,.05); margin-bottom: 1rem; }
+        .grid { display: grid; gap: 1rem; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+        .muted { color: #64748b; }
+        a { color: #2563eb; }
+    </style>
+</head>
+<body>
+<header>
+    <h1><a href="/">Kafka UI</a></h1>
+    <nav>{#insert nav}{/}</nav>
+    <span class="user">{#insert user}{/}</span>
+</header>
+<main id="main">
+    {#insert body}{/}
+</main>
+</body>
+</html>

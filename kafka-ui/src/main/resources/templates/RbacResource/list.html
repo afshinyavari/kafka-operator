@@ -1,0 +1,47 @@
+{@se.afshin.yavari.kafka.ui.cluster.ClusterCoordinates cluster}
+{@java.util.List<se.afshin.yavari.kafka.ui.crd.KafkaRbacCr> rbacs}
+{@java.util.List<java.lang.String> userGroups}
+{@java.lang.String username}
+{#include base.html}
+{#title}Kafka UI · {cluster.id} · Access rules{/title}
+{#nav}{#include _clusternav.html cluster=cluster /}{/nav}
+{#user}Signed in as <strong>{username}</strong>{/user}
+{#body}
+<h2>Access rules in {cluster.id}</h2>
+<p class="muted">
+    These are <code>KafkaRbac</code> rules enforced by the KafkaProxy + apicurio-rbac-proxy.
+    Your groups: {#for g in userGroups}<span class="badge">{g}</span> {/for}
+    {#if userGroups.isEmpty}<em>none</em>{/if}
+</p>
+
+{#for rbac in rbacs}
+<div class="card">
+    <h3 style="margin-top:0;">{rbac.metadata.name}</h3>
+    {#if rbac.spec.groups.isEmpty}<p class="muted">No groups defined.</p>{/if}
+    {#for grp in rbac.spec.groups}
+    <h4 style="margin-bottom:0.25rem;">
+        Group <code>{grp.name}</code>
+        {#if userGroups.contains(grp.name)}<span class="badge badge-json">you</span>{/if}
+    </h4>
+    {#if grp.kafka && !grp.kafka.topics.isEmpty}
+    <p style="margin:0.25rem 0;">
+        <strong>Kafka:</strong> topics
+        {#for t in grp.kafka.topics}<code>{t}</code>{#if t_hasNext}, {/if}{/for}
+        — ops
+        {#for o in grp.kafka.operations}<span class="badge">{o}</span> {/for}
+    </p>
+    {/if}
+    {#if grp.schemaRegistry && !grp.schemaRegistry.artifacts.isEmpty}
+    <p style="margin:0.25rem 0;">
+        <strong>Schema registry:</strong> artifacts
+        {#for a in grp.schemaRegistry.artifacts}<code>{a}</code>{#if a_hasNext}, {/if}{/for}
+        — actions
+        {#for a in grp.schemaRegistry.actions}<span class="badge">{a}</span> {/for}
+    </p>
+    {/if}
+    {/for}
+</div>
+{/for}
+{#if rbacs.isEmpty}<p class="muted">No <code>KafkaRbac</code> CRs in this namespace.</p>{/if}
+{/body}
+{/include}

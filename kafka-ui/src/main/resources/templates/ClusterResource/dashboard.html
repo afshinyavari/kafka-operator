@@ -1,0 +1,48 @@
+{@se.afshin.yavari.kafka.ui.cluster.ClusterCoordinates cluster}
+{@se.afshin.yavari.kafka.ui.service.ClusterDashboardService$Dashboard dashboard}
+{@java.lang.String username}
+{#include base.html}
+{#title}Kafka UI · {cluster.id}{/title}
+{#nav}{#include _clusternav.html cluster=cluster /}{/nav}
+{#user}Signed in as <strong>{username}</strong>{/user}
+{#body}
+<h2>{cluster.id}</h2>
+
+<div class="grid">
+    <div class="card">
+        <div class="muted">Kafka cluster.id</div>
+        <code>{dashboard.kafkaClusterId}</code>
+    </div>
+    <div class="card">
+        <div class="muted">Brokers</div>
+        <strong style="font-size: 1.4rem;">{dashboard.brokers.size}</strong>
+    </div>
+    <div class="card">
+        <div class="muted">Controller</div>
+        {#if dashboard.controller}
+        <code>{dashboard.controller.host}:{dashboard.controller.port}</code>
+        <span class="muted">id={dashboard.controller.id}</span>
+        {#else}
+        <span class="muted">unknown</span>
+        {/if}
+    </div>
+</div>
+
+<div class="card">
+    <h3 style="margin-top:0;">Brokers</h3>
+    <table>
+        <thead><tr><th>ID</th><th>Host</th><th>Port</th><th>Rack</th></tr></thead>
+        <tbody>
+        {#for b in dashboard.brokers}
+        <tr>
+            <td><code>{b.id}</code></td>
+            <td>{b.host}</td>
+            <td>{b.port}</td>
+            <td>{b.rack ?: '—'}</td>
+        </tr>
+        {/for}
+        </tbody>
+    </table>
+</div>
+{/body}
+{/include}

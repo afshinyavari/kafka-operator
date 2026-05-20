@@ -1,0 +1,38 @@
+{@se.afshin.yavari.kafka.ui.messages.MessageBrowserService$Page page}
+<table>
+    <thead>
+    <tr>
+        <th>Offset</th>
+        <th>Partition</th>
+        <th>Timestamp</th>
+        <th>Key</th>
+        <th>Value</th>
+    </tr>
+    </thead>
+    <tbody>
+    {#for row in page.rows}
+    <tr>
+        <td><code>{row.offset}</code></td>
+        <td><code>{row.partition}</code></td>
+        <td class="muted">{row.timestamp}</td>
+        <td>
+            <span class="badge badge-{row.key.strategy.toLowerCase}">{row.key.strategy}{#if row.key.schemaRef}:{row.key.schemaRef}{/if}</span>
+            <pre style="margin:0.25rem 0; max-height:6rem; overflow:auto;">{row.key.text}</pre>
+        </td>
+        <td>
+            <span class="badge badge-{row.value.strategy.toLowerCase}">{row.value.strategy}{#if row.value.schemaRef}:{row.value.schemaRef}{/if}</span>
+            <pre style="margin:0.25rem 0; max-height:8rem; overflow:auto;">{row.value.text}</pre>
+            {#if !row.value.warnings.isEmpty}
+            <details><summary class="muted">{row.value.warnings.size} warning(s)</summary>
+                <ul>{#for w in row.value.warnings}<li class="muted">{w}</li>{/for}</ul>
+            </details>
+            {/if}
+        </td>
+    </tr>
+    {/for}
+    </tbody>
+</table>
+<p class="muted">
+    From offset <code>{page.startOffset}</code> → next <code>{page.nextOffset}</code>
+    {#if page.truncated} (truncated){/if}
+</p>

@@ -1,0 +1,17 @@
+{@se.afshin.yavari.kafka.ui.cluster.ClusterCoordinates cluster}
+{@se.afshin.yavari.kafka.ui.service.SchemaService$SchemaContent schema}
+{@java.lang.String username}
+{#include base.html}
+{#title}Kafka UI · {cluster.id} · {schema.id}{/title}
+{#nav}{#include _clusternav.html cluster=cluster /}{/nav}
+{#user}Signed in as <strong>{username}</strong>{/user}
+{#body}
+<h2>{schema.id} <span class="badge">{schema.type}</span></h2>
+<p class="muted">
+    Versions:
+    {#for v in schema.versions}<code>v{v}</code>{#if v_hasNext}, {/if}{/for}
+    {#if schema.versions.isEmpty}<em>none</em>{/if}
+</p>
+<pre style="white-space: pre-wrap; word-break: break-word;">{schema.content}</pre>
+{/body}
+{/include}

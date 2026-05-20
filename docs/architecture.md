@@ -324,3 +324,112 @@ apicurio-registry:8080     (Apicurio Registry, no auth)
 **Important:** HTTP/2 pseudo-headers (`:status`, `:path`) returned by the upstream Apicurio
 Registry are filtered out before forwarding the response to the client. Vert.x rejects these
 as invalid HTTP/1 header names.
+
+---
+
+## Kafka UI (Quarkus + htmx)
+
+The `kafka-ui` sibling module is a single-instance Quarkus web app that lets
+authenticated users browse the Kafka cluster(s) through a server-rendered HTML
+UI. It does **not** hold privileged credentials of its own; every request to
+the proxy or the schema registry carries the logged-in user's JWT, so the
+existing `GroupAwareAuthorizer` + `apicurio-rbac-proxy` enforce all access.
+
+```
+Browser ──OIDC code+PKCE──► Keycloak (realm "demo", client "kafka-ui-web")
+   │                            │
+   ▼                            ▼
+kafka-ui (Quarkus + Qute + htmx)
+   │
+   ├── AdminClient ─SASL_PLAINTEXT/OAUTHBEARER → KafkaProxy (per-CR Service)
+   ├── KafkaConsumer ─SASL_PLAINTEXT/OAUTHBEARER → KafkaProxy
+   ├── HTTP GET (Bearer JWT) ─────────────────► apicurio-rbac-proxy (per-CR Service)
+   └── KubernetesClient (read-only) ─────────► KafkaCluster / KafkaRbac CRs
+```
+
+### Endpoints
+
+| Path | Purpose |
+|---|---|
+| `GET /` | Cluster picker (lists `KafkaCluster` CRs) |
+| `GET /clusters/{id}` | Broker dashboard |
+| `GET /clusters/{id}/topics` | Topic list, filtered by KafkaRbac |
+| `GET /clusters/{id}/topics/{name}` | Topic configs + partitions |
+| `GET /clusters/{id}/topics/{name}/messages` | Paginated message browser with auto-deserializer |
+| `GET …/messages/stream` | SSE live tail |
+| `GET /clusters/{id}/groups` | Consumer groups |
+| `GET /clusters/{id}/acls` | KafkaRbac rules (header copy: "Access rules") |
+| `GET /clusters/{id}/schemas` | Apicurio artifact list |
+| `GET /clusters/{id}/schemas/{id}` | Artifact content + versions |
+
+### Smart deserializer
+
+Pure first-hit-wins detection on the value/key bytes:
+
+1. `null` payload → tombstone badge
+2. `0x00 || globalId:int64` → Apicurio V3 envelope, schema fetched by globalId
+3. `0x00 || schemaId:int32` → Confluent envelope, fetched by id
+4. Apicurio artifact lookup by `{topic}-{key|value}` naming convention
+5. JSON heuristic (starts with `{` or `[` and parses)
+6. UTF-8 heuristic (≥95% printable; strict decode — no replacement char accepted)
+7. Hex dump (first 256 bytes)
+
+Schema fetches are cached in-process (long TTL by globalId; 30 s for
+name-based lookups, including negative results). Avro decodes via
+`GenericDatumReader → JsonEncoder`; JSON schema artifacts pretty-print the
+payload; Protobuf renders as hex with a Phase-2 TODO.
+
+### Multi-cluster routing
+
+The UI lists *KafkaCluster CRs* — those are the logical clusters. The 3 MCS
+K8s clusters (kafka-a/b/c) backing one CR are invisible to the UI; Submariner's
+local-prefer routing through the aggregated `{service}.{ns}.svc.clusterset.local`
+DNS name picks a reachable replica. Per-CR Service names
+(`kafka-proxy-{crName}`, `apicurio-rbac-proxy-{crName}`) make different CRs
+addressable independently.
+
+### Multi-user JWT propagation
+
+The bearer token is carried inline in the kafka-clients `sasl.jaas.config`
+line as a `rawToken=` option, salted with a per-request UUID to defeat
+kafka-clients' login-subject cache. A custom `JwtCallbackHandler` reads the
+token at configure time and synthesises an `OAuthBearerToken`. No ThreadLocal
+is involved, so AdminClient's internal IO thread sees a stable per-instance
+identity even under concurrent requests from different users (covered by
+`JwtCallbackHandlerTest.concurrentHandlers_doNotCrossTokens`).
+
+### OIDC roles: read from the access token, not the ID token
+
+Quarkus OIDC in `application-type=web-app` extracts roles from the **ID
+token** by default. Keycloak puts `realm_access.roles` on the access token
+(and on the ID token only when a dedicated mapper is configured). The UI
+therefore sets:
+
+```properties
+quarkus.oidc.roles.source=accesstoken
+quarkus.oidc.roles.role-claim-path=realm_access/roles
+```
+
+Without `roles.source=accesstoken`, `SecurityIdentity.getRoles()` is empty
+even though the user is authenticated — every topic and schema list looks
+empty because the RBAC filter has nothing to allow. This was the single
+trickiest piece of OIDC wiring to get right.
+
+### Transport: SASL_SSL + mTLS to the proxy
+
+The KafkaProxy's gateway uses `CnSubjectBuilderService`, so the transport
+layer must be mTLS. The UI mounts the operator-generated
+`kafka-proxy-test-client-tls` Secret (PEM files: `tls.crt`, `tls.key`,
+`ca.crt`) at `/etc/kafka-tls` and `KafkaClientProvider` passes them inline
+via `ssl.keystore.type=PEM` + `ssl.keystore.certificate.chain` (and
+`ssl.truststore.certificates`), which avoids any PKCS12 conversion step.
+Authorization is still driven by the per-user SASL/OAUTHBEARER JWT — mTLS
+is just the transport gate.
+
+### Logout
+
+`quarkus.oidc.logout.path=/logout` exposes an RP-initiated logout endpoint
+that drops the Quarkus session cookie and redirects to Keycloak's
+end-session endpoint to terminate the SSO session too. Without this,
+clearing the local cookie alone leaves a Keycloak SSO cookie that silently
+re-logs the user back in.

@@ -1,0 +1,93 @@
+{@se.afshin.yavari.kafka.ui.cluster.ClusterCoordinates cluster}
+{@java.lang.String topic}
+{@java.util.List<java.lang.Integer> partitions}
+{@se.afshin.yavari.kafka.ui.messages.MessageBrowserService$Page page}
+{@java.lang.String seek}
+{@int partition}
+{@long value}
+{@int latestN}
+{@java.lang.String username}
+{#include base.html}
+{#title}Kafka UI · {cluster.id} · {topic} · messages{/title}
+{#nav}{#include _clusternav.html cluster=cluster /}{/nav}
+{#user}Signed in as <strong>{username}</strong>{/user}
+{#body}
+<h2>Messages — {topic}</h2>
+
+<form id="toolbar" hx-get="/clusters/{cluster.id}/topics/{topic}/messages"
+      hx-target="#rows" hx-swap="innerHTML" hx-vals='{"fragment": "true"}'
+      style="display:flex;flex-wrap:wrap;gap:0.75rem;align-items:end;margin-bottom:1rem;">
+    <label>Partition
+        <select name="partition">
+            {#for p in partitions}<option value="{p}" {#if p == partition}selected{/if}>{p}</option>{/for}
+        </select>
+    </label>
+    <label>Mode
+        <select name="seek">
+            <option value="LATEST" {#if seek == 'LATEST'}selected{/if}>Latest N</option>
+            <option value="OFFSET" {#if seek == 'OFFSET'}selected{/if}>By offset</option>
+            <option value="TIMESTAMP" {#if seek == 'TIMESTAMP'}selected{/if}>By timestamp (ms)</option>
+        </select>
+    </label>
+    <label>Offset / ts <input type="number" name="offset" value="{value}" style="width:10rem;"/></label>
+    <label>Latest N <input type="number" name="latestN" value="{latestN}" min="1" max="500" style="width:6rem;"/></label>
+    <label>Page size <input type="number" name="size" value="50" min="1" max="200" style="width:5rem;"/></label>
+    <button type="submit">Load</button>
+    <label style="margin-left:auto;">
+        <input type="checkbox" id="live-toggle"
+               data-stream-url="/clusters/{cluster.id}/topics/{topic}/messages/stream?partition={partition}"/>
+        Live tail
+        <span id="live-status" class="muted" style="margin-left:0.5rem;"></span>
+    </label>
+</form>
+
+<div id="live-feed"></div>
+
+<div id="rows">
+    {#include MessageBrowserResource/rows.html page=page /}
+</div>
+
+{|
+<script>
+(function() {
+    const toggle = document.getElementById("live-toggle");
+    const status = document.getElementById("live-status");
+    const feed = document.getElementById("live-feed");
+    let es = null;
+    let liveTable = null;
+
+    function ensureLiveTable() {
+        if (liveTable) return liveTable;
+        feed.innerHTML =
+            '<div class="card" style="border-left:4px solid #16a34a;">' +
+            '<h3 style="margin-top:0;">Live tail</h3>' +
+            '<table><thead><tr>' +
+            '<th>Offset</th><th>Partition</th><th>Timestamp</th><th>Key</th><th>Value</th>' +
+            '</tr></thead><tbody id="live-rows"></tbody></table></div>';
+        liveTable = document.getElementById("live-rows");
+        return liveTable;
+    }
+
+    toggle.addEventListener("change", function() {
+        if (toggle.checked) {
+            const url = toggle.getAttribute("data-stream-url");
+            es = new EventSource(url);
+            status.textContent = "connecting…";
+            es.onopen = function() { status.textContent = "live"; };
+            es.onerror = function() { status.textContent = "error (will retry)"; };
+            es.onmessage = function(ev) {
+                const tbody = ensureLiveTable();
+                tbody.insertAdjacentHTML("afterbegin", ev.data);
+            };
+        } else {
+            if (es) { es.close(); es = null; }
+            status.textContent = "";
+            feed.innerHTML = "";
+            liveTable = null;
+        }
+    });
+})();
+</script>
+|}
+{/body}
+{/include}
