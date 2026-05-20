@@ -7,12 +7,14 @@ KAFKA_IMAGE        := kafka-ubi:4.0.0
 KAFKA_VERSION      := 4.0.0
 KROXY_IMAGE        := kroxy-filters:dev
 APICURIO_PROXY_IMG := apicurio-rbac-proxy:dev
+KAFKA_UI_IMG       := kafka-ui:dev
 OPERATOR_DIR       := ..
 MANIFESTS_DIR      := manifests
 
 .PHONY: all setup mcs-setup teardown status quorum proxy-test xml-filter-test \
         logs-a logs-b logs-c build image \
         kroxy-image reload-kroxy-image apicurio-proxy-image reload-apicurio-proxy-image \
+        kafka-ui-image reload-kafka-ui-image kafka-ui-setup ui-test \
         keycloak-setup proxy-setup rbac-test apicurio-setup apicurio-rbac-test help
 
 all: setup  ## Full setup: build → image → clusters → deploy
@@ -108,6 +110,25 @@ reload-apicurio-proxy-image: apicurio-proxy-image  ## Rebuild + reload apicurio-
 	@for cluster in $(CLUSTERS); do \
 	  kind load docker-image $(APICURIO_PROXY_IMG) --name $$cluster; \
 	done
+
+kafka-ui-image:  ## Build the kafka-ui Docker image
+	cd $(OPERATOR_DIR)/kafka-ui && mvn package -DskipTests -q
+	docker build -t $(KAFKA_UI_IMG) $(OPERATOR_DIR)/kafka-ui
+
+reload-kafka-ui-image: kafka-ui-image  ## Rebuild + reload kafka-ui image into kafka-a (UI is single-instance)
+	kind load docker-image $(KAFKA_UI_IMG) --name kafka-a
+	-kubectl --context kind-kafka-a -n $(NAMESPACE) rollout restart deployment kafka-ui
+
+kafka-ui-setup:  ## Deploy kafka-ui to kafka-a (single-instance, multi-cluster via Submariner)
+	$(MAKE) reload-kafka-ui-image
+	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafka-ui.yaml
+	@echo "Waiting for kafka-ui pod to be Ready..."
+	kubectl --context kind-kafka-a -n $(NAMESPACE) wait --for=condition=Ready \
+	  pod -l app=kafka-ui --timeout=120s
+	@echo "kafka-ui ready: http://localhost:30808/ (kafka-a NodePort)"
+
+ui-test:  ## End-to-end UI smoke test (login + cluster listing + topic browse)
+	@chmod +x ui-test.sh && ./ui-test.sh
 
 keycloak-setup:  ## Deploy Keycloak to cluster-a (namespace: kafka) and wait for Ready
 	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/keycloak.yaml

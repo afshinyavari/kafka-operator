@@ -1,0 +1,28 @@
+{@java.util.List<se.afshin.yavari.kafka.ui.cluster.ClusterCoordinates> clusters}
+{@java.lang.String username}
+{#include base.html}
+{#title}Kafka UI · Home{/title}
+{#user}Signed in as <strong>{username}</strong>{/user}
+{#body}
+<h2>Kafka clusters</h2>
+{#if clusters.isEmpty}
+<p class="muted">No <code>KafkaCluster</code> CRs visible in this namespace yet.</p>
+{#else}
+<table>
+    <thead>
+    <tr><th>ID</th><th>Namespace</th><th>Proxy bootstrap</th><th>Schema registry</th></tr>
+    </thead>
+    <tbody>
+    {#for c in clusters}
+    <tr>
+        <td><a href="/clusters/{c.id}"><strong>{c.id}</strong></a></td>
+        <td>{c.namespace}</td>
+        <td><code>{c.bootstrapUrl}</code></td>
+        <td><code>{c.apicurioUrl}</code></td>
+    </tr>
+    {/for}
+    </tbody>
+</table>
+{/if}
+{/body}
+{/include}

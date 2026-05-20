@@ -1,0 +1,28 @@
+{@se.afshin.yavari.kafka.ui.cluster.ClusterCoordinates cluster}
+{@java.util.List<se.afshin.yavari.kafka.ui.service.SchemaService$SchemaSummary> schemas}
+{@java.lang.String username}
+{#include base.html}
+{#title}Kafka UI · {cluster.id} · Schemas{/title}
+{#nav}{#include _clusternav.html cluster=cluster /}{/nav}
+{#user}Signed in as <strong>{username}</strong>{/user}
+{#body}
+<h2>Schemas in {cluster.id}</h2>
+{#if schemas.isEmpty}
+<p class="muted">No schemas visible. Verify the apicurio-rbac-proxy is reachable at <code>{cluster.apicurioUrl}</code>.</p>
+{#else}
+<table>
+    <thead><tr><th>Artifact ID</th><th>Type</th><th>State</th><th>Created</th></tr></thead>
+    <tbody>
+    {#for s in schemas}
+    <tr>
+        <td><a href="/clusters/{cluster.id}/schemas/{s.id}"><strong>{s.id}</strong></a></td>
+        <td><span class="badge">{s.type}</span></td>
+        <td>{s.state}</td>
+        <td class="muted">{s.createdOn}</td>
+    </tr>
+    {/for}
+    </tbody>
+</table>
+{/if}
+{/body}
+{/include}

@@ -1,0 +1,50 @@
+{@se.afshin.yavari.kafka.ui.cluster.ClusterCoordinates cluster}
+{@se.afshin.yavari.kafka.ui.service.TopicService$TopicDetail topic}
+{@java.lang.String username}
+{#include base.html}
+{#title}Kafka UI · {cluster.id} · {topic.name}{/title}
+{#nav}{#include _clusternav.html cluster=cluster /}{/nav}
+{#user}Signed in as <strong>{username}</strong>{/user}
+{#body}
+<h2>{topic.name}{#if topic.internal} <span class="badge badge-internal">internal</span>{/if}</h2>
+<p><a href="/clusters/{cluster.id}/topics/{topic.name}/messages">Browse messages →</a></p>
+
+<div class="card">
+    <h3 style="margin-top:0;">Partitions</h3>
+    <table>
+        <thead><tr><th>ID</th><th>Leader</th><th>Replicas</th><th>ISR</th></tr></thead>
+        <tbody>
+        {#for p in topic.partitions}
+        <tr>
+            <td>{p.id}</td>
+            <td><code>{p.leader}</code></td>
+            <td><code>{p.replicas}</code></td>
+            <td><code>{p.isr}</code></td>
+        </tr>
+        {/for}
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <h3 style="margin-top:0;">Config</h3>
+    {#if topic.configs.isEmpty}
+    <p class="muted">Topic config not visible to your role
+        (needs the <code>DESCRIBE_CONFIGS</code> Kafka operation).</p>
+    {#else}
+    <table>
+        <thead><tr><th>Key</th><th>Value</th><th></th></tr></thead>
+        <tbody>
+        {#for c in topic.configs}
+        <tr>
+            <td><code>{c.key}</code></td>
+            <td><code>{c.sensitive ? '••••••' : (c.value ?: '')}</code></td>
+            <td>{#if c.isDefault}<span class="badge">default</span>{/if}</td>
+        </tr>
+        {/for}
+        </tbody>
+    </table>
+    {/if}
+</div>
+{/body}
+{/include}

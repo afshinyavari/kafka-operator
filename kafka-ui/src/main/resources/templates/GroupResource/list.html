@@ -1,0 +1,28 @@
+{@se.afshin.yavari.kafka.ui.cluster.ClusterCoordinates cluster}
+{@java.util.List<se.afshin.yavari.kafka.ui.service.GroupService$GroupSummary> groups}
+{@java.lang.String username}
+{#include base.html}
+{#title}Kafka UI · {cluster.id} · Consumer groups{/title}
+{#nav}{#include _clusternav.html cluster=cluster /}{/nav}
+{#user}Signed in as <strong>{username}</strong>{/user}
+{#body}
+<h2>Consumer groups in {cluster.id}</h2>
+{#if groups.isEmpty}
+<p class="muted">No consumer groups.</p>
+{#else}
+<table>
+    <thead><tr><th>Group ID</th><th>State</th><th>Members</th><th>Assignor</th></tr></thead>
+    <tbody>
+    {#for g in groups}
+    <tr>
+        <td><strong>{g.id}</strong></td>
+        <td><span class="badge">{g.state}</span></td>
+        <td>{g.members}</td>
+        <td>{g.partitionAssignor ?: '—'}</td>
+    </tr>
+    {/for}
+    </tbody>
+</table>
+{/if}
+{/body}
+{/include}

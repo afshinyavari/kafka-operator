@@ -33,8 +33,13 @@ import se.afshin.yavari.kafka.operator.crd.KafkaProxyMtlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
+import se.afshin.yavari.kafka.operator.rolling.CrossClusterRollCoordinator;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -50,6 +55,8 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
     @Inject KroxyliciousConfigBuilder configBuilder;
     @Inject ProxyDeploymentBuilder deploymentBuilder;
     @Inject ProxyServiceBuilder serviceBuilder;
+    @Inject CrossClusterRollCoordinator rollCoordinator;
+    @Inject ProxyRollTracker rollTracker;
 
     @ConfigProperty(name = "kafka.cluster.id")
     String localClusterId;
@@ -227,6 +234,7 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
 
             // Generate and apply config ConfigMap
             String configYaml = configBuilder.build(proxy, brokerCount, brokerNodeIdBase, namespace, mcsEnabled);
+            String configHash = sha256(configYaml);
             ConfigMap configMap = new ConfigMapBuilder()
                     .withNewMetadata()
                         .withName(name + "-config")
@@ -236,8 +244,36 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
                     .build();
             client.configMaps().inNamespace(namespace).resource(configMap).createOrReplace();
 
+            // Cross-cluster roll gate: if applying this Deployment would change the running
+            // image OR the generated Kroxylicious config, treat it as a roll and honour
+            // spec.clusterRollOrder so cluster A finishes before cluster B begins.
+            Deployment existing = client.apps().deployments()
+                    .inNamespace(namespace).withName(name).get();
+            if (existing != null
+                    && cluster.getSpec().getClusterRollOrder() != null
+                    && !cluster.getSpec().getClusterRollOrder().isEmpty()) {
+                boolean rollIsRequired = rollWillHappen(existing, proxy.getSpec().getImage(), configHash);
+                if (rollIsRequired
+                        && !rollCoordinator.isMyTurnToRoll(cluster.getSpec(), localClusterId)) {
+                    LOG.infof("KafkaProxy %s/%s: waiting for preceding cluster per clusterRollOrder %s",
+                            namespace, name, cluster.getSpec().getClusterRollOrder());
+                    status.setMessage("Waiting for preceding cluster per spec.clusterRollOrder "
+                            + "before rolling proxy (image or config change)");
+                    proxy.setStatus(status);
+                    return UpdateControl.patchStatus(proxy).rescheduleAfter(Duration.ofSeconds(15));
+                }
+            }
+
+            // Tell the local UpgradePhaseResource that a roll is imminent BEFORE we apply.
+            // Kubernetes' default rolling-update surge keeps the old pod Available while
+            // the new one starts, so the Deployment.status check alone can miss the entire
+            // roll window on fast rolls. The tracker closes that race.
+            if (rollWillHappen(existing, proxy.getSpec().getImage(), configHash)) {
+                rollTracker.markRolling(namespace, name);
+            }
+
             // Apply Deployment
-            Deployment deployment = deploymentBuilder.build(proxy, namespace);
+            Deployment deployment = deploymentBuilder.build(proxy, namespace, configHash);
             client.apps().deployments().inNamespace(namespace).resource(deployment).serverSideApply();
 
             // Apply Service
@@ -255,6 +291,9 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
             if (ready >= proxy.getSpec().getReplicas()) {
                 status.setPhase(KafkaProxyStatus.Phase.READY);
                 status.setMessage(null);
+                // The previous roll (if any) is now visibly converged — clear the in-memory
+                // marker so successor clusters polling our /operator/upgrade-phase get IDLE.
+                rollTracker.markComplete(namespace, name);
             } else {
                 status.setMessage("Waiting for proxy pods: " + ready + "/" + proxy.getSpec().getReplicas());
                 proxy.setStatus(status);
@@ -314,6 +353,40 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
                 })
                 .min()
                 .orElse(0);
+    }
+
+    /** Will applying a Deployment with the given desired image + config hash trigger an
+     *  actual roll? Returns true if anything material differs (or there's no existing
+     *  Deployment to compare against). Defensive against partially-populated Deployment
+     *  objects from mocks or stale informers. */
+    private static boolean rollWillHappen(Deployment existing, String desiredImage, String desiredHash) {
+        if (existing == null) return true;
+        if (existing.getSpec() == null || existing.getSpec().getTemplate() == null) return true;
+        var podSpec = existing.getSpec().getTemplate().getSpec();
+        String existingImage = (podSpec != null
+                && podSpec.getContainers() != null
+                && !podSpec.getContainers().isEmpty())
+            ? podSpec.getContainers().get(0).getImage()
+            : null;
+        if (!desiredImage.equals(existingImage)) return true;
+        var meta = existing.getSpec().getTemplate().getMetadata();
+        String existingHash = (meta != null && meta.getAnnotations() != null)
+            ? meta.getAnnotations().getOrDefault(ProxyDeploymentBuilder.CONFIG_HASH_ANNOTATION, "")
+            : "";
+        return !desiredHash.equals(existingHash);
+    }
+
+    /** Short SHA-256 of the generated config YAML — used as the PodTemplate annotation that
+     *  drives K8s rolling-updates on config change and as the reconciler's roll-detection
+     *  signal. 12 hex chars is enough collision-resistance for an annotation value. */
+    private static String sha256(String s) {
+        try {
+            MessageDigest md = MessageDigest.getInstance("SHA-256");
+            byte[] digest = md.digest(s.getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(digest).substring(0, 12);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("SHA-256 not available", e);
+        }
     }
 
     private int readyReplicas(String deploymentName, String namespace) {

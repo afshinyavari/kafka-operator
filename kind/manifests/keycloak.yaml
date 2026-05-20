@@ -32,6 +32,38 @@ data:
               }
             }
           ]
+        },
+        {
+          "clientId": "kafka-ui-web",
+          "enabled": true,
+          "publicClient": false,
+          "clientAuthenticatorType": "client-secret",
+          "secret": "kafka-ui-web-secret",
+          "standardFlowEnabled": true,
+          "directAccessGrantsEnabled": false,
+          "redirectUris": [
+            "http://localhost:*",
+            "http://kafka-ui.kafka.svc.cluster.local:*",
+            "http://kafka-ui.kafka.svc.clusterset.local:*",
+            "http://127.0.0.1:*"
+          ],
+          "webOrigins": ["+"],
+          "attributes": {
+            "pkce.code.challenge.method": "S256"
+          },
+          "protocolMappers": [
+            {
+              "name": "audience-rbac-proxy",
+              "protocol": "openid-connect",
+              "protocolMapper": "oidc-audience-mapper",
+              "consentRequired": false,
+              "config": {
+                "included.client.audience": "rbac-proxy",
+                "id.token.claim": "false",
+                "access.token.claim": "true"
+              }
+            }
+          ]
         }
       ],
       "requiredActions": [

@@ -17,7 +17,14 @@ import java.util.Map;
 @ApplicationScoped
 public class ProxyDeploymentBuilder {
 
-    public Deployment build(KafkaProxy proxy, String namespace) {
+    /** PodTemplate annotation that mirrors the SHA-256 of the generated Kroxylicious YAML.
+     *  Changing this value flips the PodTemplate hash, which makes Kubernetes auto-roll the
+     *  Deployment when the config changes (otherwise ConfigMap edits wouldn't restart pods).
+     *  KafkaProxyReconciler also reads it back to decide whether a roll is being triggered
+     *  and therefore whether the cross-cluster roll gate should fire. */
+    public static final String CONFIG_HASH_ANNOTATION = "kafka.yavari.afshin.se/config-hash";
+
+    public Deployment build(KafkaProxy proxy, String namespace, String configHash) {
         String name = proxy.getMetadata().getName();
         KafkaProxySpec spec = proxy.getSpec();
         Map<String, String> labels = labels(name);
@@ -88,7 +95,10 @@ public class ProxyDeploymentBuilder {
                         .withMatchLabels(labels)
                     .endSelector()
                     .withNewTemplate()
-                        .withNewMetadata().withLabels(labels).endMetadata()
+                        .withNewMetadata()
+                            .withLabels(labels)
+                            .withAnnotations(Map.of(CONFIG_HASH_ANNOTATION, configHash))
+                        .endMetadata()
                         .withNewSpec()
                             .withContainers(new ContainerBuilder()
                                     .withName("kroxylicious")

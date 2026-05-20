@@ -51,6 +51,7 @@ class KafkaProxyReconcilerTest {
     private KroxyliciousConfigBuilder configBuilder;
     private ProxyDeploymentBuilder deploymentBuilder;
     private ProxyServiceBuilder serviceBuilder;
+    private se.afshin.yavari.kafka.operator.rolling.CrossClusterRollCoordinator rollCoordinator;
     private Context<KafkaProxy> context;
     private KafkaProxyReconciler reconciler;
 
@@ -83,6 +84,10 @@ class KafkaProxyReconcilerTest {
         configBuilder = mock(KroxyliciousConfigBuilder.class);
         deploymentBuilder = mock(ProxyDeploymentBuilder.class);
         serviceBuilder = mock(ProxyServiceBuilder.class);
+        rollCoordinator = mock(se.afshin.yavari.kafka.operator.rolling.CrossClusterRollCoordinator.class);
+        // Default: every coordinator query returns "my turn", so tests that don't care about
+        // ordering behave exactly as before. The gate tests override this per-test.
+        when(rollCoordinator.isMyTurnToRoll(any(), anyString())).thenReturn(true);
         context = mock(Context.class);
         client = mock(KubernetesClient.class);
 
@@ -164,7 +169,7 @@ class KafkaProxyReconcilerTest {
 
         // Stubs
         when(configBuilder.build(any(), anyInt(), anyInt(), anyString(), anyBoolean())).thenReturn("config: {}");
-        when(deploymentBuilder.build(any(), anyString())).thenReturn(new Deployment());
+        when(deploymentBuilder.build(any(), anyString(), anyString())).thenReturn(new Deployment());
         when(serviceBuilder.build(any(), anyInt(), anyString())).thenReturn(new Service());
 
         reconciler = new KafkaProxyReconciler();
@@ -172,6 +177,8 @@ class KafkaProxyReconcilerTest {
         injectField(reconciler, "configBuilder", configBuilder);
         injectField(reconciler, "deploymentBuilder", deploymentBuilder);
         injectField(reconciler, "serviceBuilder", serviceBuilder);
+        injectField(reconciler, "rollCoordinator", rollCoordinator);
+        injectField(reconciler, "rollTracker", new ProxyRollTracker());
         injectField(reconciler, "localClusterId", "A");
     }
 
@@ -288,6 +295,100 @@ class KafkaProxyReconcilerTest {
     }
 
     @Test
+    void rollGate_clusterRollOrderUnset_proceedsWithoutGate() throws Exception {
+        // Even with an existing Deployment + image difference, the gate is dormant if
+        // clusterRollOrder isn't set. Coordinator should not even be consulted.
+        when(namedDep.get()).thenReturn(deploymentWithImage("kroxy-filters:OLD", "deadbeef00aa"));
+        KafkaProxy proxy = proxy(null);
+        proxy.getSpec().setImage("kroxy-filters:NEW");
+
+        reconciler.reconcile(proxy, context);
+
+        verify(rollCoordinator, org.mockito.Mockito.never()).isMyTurnToRoll(any(), anyString());
+        verify(depResource).serverSideApply();
+    }
+
+    @Test
+    void rollGate_firstTimeDeploy_proceedsBecauseNoExisting() throws Exception {
+        // No existing Deployment → initial deploy, not an upgrade → no gate.
+        when(client.resources(KafkaCluster.class).inNamespace(NS).withName(anyString()).get())
+                .thenReturn(clusterWithRollOrder("A", "B"));
+        when(namedDep.get()).thenReturn(null);
+        KafkaProxy proxy = proxy(null);
+
+        reconciler.reconcile(proxy, context);
+
+        verify(rollCoordinator, org.mockito.Mockito.never()).isMyTurnToRoll(any(), anyString());
+        verify(depResource).serverSideApply();
+    }
+
+    @Test
+    void rollGate_imageChange_myTurn_proceeds() throws Exception {
+        when(client.resources(KafkaCluster.class).inNamespace(NS).withName(anyString()).get())
+                .thenReturn(clusterWithRollOrder("A", "B"));
+        // existing image differs from the new spec.image → roll required.
+        when(namedDep.get()).thenReturn(deploymentWithImage("kroxy-filters:OLD", sha12("config: {}")));
+        when(rollCoordinator.isMyTurnToRoll(any(), anyString())).thenReturn(true);
+        KafkaProxy proxy = proxy(null);
+        proxy.getSpec().setImage("kroxy-filters:NEW");
+
+        reconciler.reconcile(proxy, context);
+
+        verify(rollCoordinator).isMyTurnToRoll(any(), anyString());
+        verify(depResource).serverSideApply();
+    }
+
+    @Test
+    void rollGate_imageChange_notMyTurn_reschedules() throws Exception {
+        when(client.resources(KafkaCluster.class).inNamespace(NS).withName(anyString()).get())
+                .thenReturn(clusterWithRollOrder("A", "B"));
+        when(namedDep.get()).thenReturn(deploymentWithImage("kroxy-filters:OLD", sha12("config: {}")));
+        when(rollCoordinator.isMyTurnToRoll(any(), anyString())).thenReturn(false);
+        KafkaProxy proxy = proxy(null);
+        proxy.getSpec().setImage("kroxy-filters:NEW");
+
+        var result = reconciler.reconcile(proxy, context);
+
+        assertThat(proxy.getStatus().getMessage()).contains("Waiting for preceding cluster");
+        assertThat(result.getScheduleDelay()).isPresent();
+        // Critically: no Deployment apply happened.
+        verify(depResource, org.mockito.Mockito.never()).serverSideApply();
+    }
+
+    @Test
+    void rollGate_configHashChange_notMyTurn_reschedules() throws Exception {
+        when(client.resources(KafkaCluster.class).inNamespace(NS).withName(anyString()).get())
+                .thenReturn(clusterWithRollOrder("A", "B"));
+        // Existing has same image but a stale hash → still a roll.
+        when(namedDep.get()).thenReturn(deploymentWithImage("kroxy-filters:dev", "stalehash00"));
+        when(configBuilder.build(any(), anyInt(), anyInt(), anyString(), anyBoolean()))
+                .thenReturn("config: {fresh}");
+        when(rollCoordinator.isMyTurnToRoll(any(), anyString())).thenReturn(false);
+        KafkaProxy proxy = proxy(null);
+        proxy.getSpec().setImage("kroxy-filters:dev");
+
+        reconciler.reconcile(proxy, context);
+
+        assertThat(proxy.getStatus().getMessage()).contains("Waiting for preceding cluster");
+        verify(depResource, org.mockito.Mockito.never()).serverSideApply();
+    }
+
+    @Test
+    void rollGate_imageAndHashUnchanged_proceedsWithoutConsultingCoordinator() throws Exception {
+        when(client.resources(KafkaCluster.class).inNamespace(NS).withName(anyString()).get())
+                .thenReturn(clusterWithRollOrder("A", "B"));
+        when(namedDep.get()).thenReturn(deploymentWithImage("kroxy-filters:dev", sha12("config: {}")));
+        KafkaProxy proxy = proxy(null);
+        proxy.getSpec().setImage("kroxy-filters:dev");
+
+        reconciler.reconcile(proxy, context);
+
+        // Idempotent reconcile: image and hash both match → rollIsRequired=false → gate skipped.
+        verify(rollCoordinator, org.mockito.Mockito.never()).isMyTurnToRoll(any(), anyString());
+        verify(depResource).serverSideApply();
+    }
+
+    @Test
     void mcsEnabled_skipPath_doesNotRequireLocalPool() {
         // SKIPPED clusters should not even try to look up the pool — this asserts the early-return.
         when(namedPoolOp.get()).thenReturn(null);
@@ -347,6 +448,57 @@ class KafkaProxyReconcilerTest {
         r.setStart(start);
         r.setEnd(end);
         return r;
+    }
+
+    private KafkaCluster clusterWithRollOrder(String... order) {
+        KafkaCluster c = clusterWithProxyMtls();
+        c.getSpec().setClusterRollOrder(java.util.Arrays.asList(order));
+        // clusters[] must include every id in clusterRollOrder for the rollCoordinator's
+        // map lookup. We populate ClusterEntries with non-empty addresses so the real
+        // coordinator (when used) would still work; mocked rollCoordinator ignores this.
+        java.util.List<se.afshin.yavari.kafka.operator.crd.ClusterEntry> entries = new java.util.ArrayList<>();
+        for (String id : order) {
+            se.afshin.yavari.kafka.operator.crd.ClusterEntry e = new se.afshin.yavari.kafka.operator.crd.ClusterEntry();
+            e.setId(id);
+            e.setOperatorAddress("kafka-operator-" + id.toLowerCase() + ".kafka.svc.clusterset.local:8080");
+            entries.add(e);
+        }
+        c.getSpec().setClusters(entries);
+        return c;
+    }
+
+    private Deployment deploymentWithImage(String image, String configHash) {
+        Deployment d = new Deployment();
+        d.setSpec(new io.fabric8.kubernetes.api.model.apps.DeploymentSpecBuilder()
+                .withReplicas(1)
+                .withNewTemplate()
+                    .withNewMetadata()
+                        .withAnnotations(java.util.Map.of(
+                                ProxyDeploymentBuilder.CONFIG_HASH_ANNOTATION, configHash))
+                    .endMetadata()
+                    .withNewSpec()
+                        .addToContainers(new io.fabric8.kubernetes.api.model.ContainerBuilder()
+                                .withName("kroxylicious")
+                                .withImage(image)
+                                .build())
+                    .endSpec()
+                .endTemplate()
+                .build());
+        DeploymentStatus s = new DeploymentStatus();
+        s.setReadyReplicas(1);
+        d.setStatus(s);
+        return d;
+    }
+
+    /** Mirror of the reconciler's private sha256() — same 12-char hex truncation. */
+    private static String sha12(String s) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
+                    .digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return java.util.HexFormat.of().formatHex(digest).substring(0, 12);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private KafkaCluster clusterWithProxyMtlsAndIds(String... ids) {

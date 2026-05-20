@@ -1,0 +1,33 @@
+{@se.afshin.yavari.kafka.ui.cluster.ClusterCoordinates cluster}
+{@java.util.List<se.afshin.yavari.kafka.ui.service.TopicService$TopicSummary> topics}
+{@java.lang.String username}
+{#include base.html}
+{#title}Kafka UI · {cluster.id} · Topics{/title}
+{#nav}{#include _clusternav.html cluster=cluster /}{/nav}
+{#user}Signed in as <strong>{username}</strong>{/user}
+{#body}
+<h2>Topics in {cluster.id}</h2>
+{#if topics.isEmpty}
+<p class="muted">No topics visible to your groups.</p>
+{#else}
+<table>
+    <thead>
+    <tr><th>Name</th><th>Partitions</th><th>Replication</th><th></th></tr>
+    </thead>
+    <tbody>
+    {#for t in topics}
+    <tr>
+        <td>
+            <a href="/clusters/{cluster.id}/topics/{t.name}"><strong>{t.name}</strong></a>
+            {#if t.internal}<span class="badge badge-internal">internal</span>{/if}
+        </td>
+        <td>{t.partitions}</td>
+        <td>{t.replication}</td>
+        <td><a href="/clusters/{cluster.id}/topics/{t.name}/messages">Browse messages →</a></td>
+    </tr>
+    {/for}
+    </tbody>
+</table>
+{/if}
+{/body}
+{/include}
