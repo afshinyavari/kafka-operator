@@ -33,6 +33,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
@@ -162,7 +163,7 @@ class KafkaProxyReconcilerTest {
         when(labeledPodOp.list()).thenReturn(emptyPodList);
 
         // Stubs
-        when(configBuilder.build(any(), anyInt(), anyInt(), anyString())).thenReturn("config: {}");
+        when(configBuilder.build(any(), anyInt(), anyInt(), anyString(), anyBoolean())).thenReturn("config: {}");
         when(deploymentBuilder.build(any(), anyString())).thenReturn(new Deployment());
         when(serviceBuilder.build(any(), anyInt(), anyString())).thenReturn(new Service());
 
@@ -171,7 +172,7 @@ class KafkaProxyReconcilerTest {
         injectField(reconciler, "configBuilder", configBuilder);
         injectField(reconciler, "deploymentBuilder", deploymentBuilder);
         injectField(reconciler, "serviceBuilder", serviceBuilder);
-        injectField(reconciler, "mcsEnabled", false);
+        injectField(reconciler, "localClusterId", "A");
     }
 
     @Test
@@ -209,6 +210,94 @@ class KafkaProxyReconcilerTest {
         verify(namedSvc).delete();
     }
 
+    @Test
+    void mcsEnabled_clusterInTargets_reconcilesNormally() {
+        // localClusterId="A" (injected in setup), targets include A → deploy.
+        KafkaProxy proxy = mcsProxy(List.of("A", "B"), List.of(
+                range("brokers-a", 0, 0),
+                range("brokers-b", 1000, 1000)));
+        // Cluster CR must list A & B for the cross-ref check to pass.
+        when(client.resources(KafkaCluster.class).inNamespace(NS).withName(anyString()).get())
+                .thenReturn(clusterWithProxyMtlsAndIds("A", "B"));
+
+        UpdateControl<KafkaProxy> result = reconciler.reconcile(proxy, context);
+
+        assertThat(proxy.getStatus().getPhase()).isEqualTo(KafkaProxyStatus.Phase.READY);
+        verify(cmResource).createOrReplace();
+        verify(depResource).serverSideApply();
+        verify(svcResource).serverSideApply();
+    }
+
+    @Test
+    void mcsEnabled_clusterNotInTargets_setsSkipped() {
+        // localClusterId="A", targets only B → skip, no resources reconciled.
+        KafkaProxy proxy = mcsProxy(List.of("B"), List.of(range("brokers-b", 1000, 1000)));
+
+        UpdateControl<KafkaProxy> result = reconciler.reconcile(proxy, context);
+
+        assertThat(proxy.getStatus().getPhase()).isEqualTo(KafkaProxyStatus.Phase.SKIPPED);
+        assertThat(proxy.getStatus().getMessage()).contains("'A' is not a target");
+        // No deployment/service/configmap creation calls.
+        verify(cmResource, org.mockito.Mockito.never()).createOrReplace();
+        verify(depResource, org.mockito.Mockito.never()).serverSideApply();
+        verify(svcResource, org.mockito.Mockito.never()).serverSideApply();
+    }
+
+    @Test
+    void mcsEnabled_emptyTargetClusters_fails() {
+        KafkaProxy proxy = mcsProxy(List.of(), List.of(range("brokers-a", 0, 0)));
+
+        reconciler.reconcile(proxy, context);
+
+        assertThat(proxy.getStatus().getPhase()).isEqualTo(KafkaProxyStatus.Phase.FAILED);
+        assertThat(proxy.getStatus().getMessage()).contains("targetClusters");
+    }
+
+    @Test
+    void mcsEnabled_emptyBrokerNodeIdRanges_fails() {
+        KafkaProxy proxy = mcsProxy(List.of("A"), List.of());
+
+        reconciler.reconcile(proxy, context);
+
+        assertThat(proxy.getStatus().getPhase()).isEqualTo(KafkaProxyStatus.Phase.FAILED);
+        assertThat(proxy.getStatus().getMessage()).contains("brokerNodeIdRanges");
+    }
+
+    @Test
+    void mcsEnabled_unknownTargetClusterId_fails() {
+        KafkaProxy proxy = mcsProxy(List.of("A", "ZZ"), List.of(range("brokers-a", 0, 0)));
+        when(client.resources(KafkaCluster.class).inNamespace(NS).withName(anyString()).get())
+                .thenReturn(clusterWithProxyMtlsAndIds("A", "B"));
+
+        reconciler.reconcile(proxy, context);
+
+        assertThat(proxy.getStatus().getPhase()).isEqualTo(KafkaProxyStatus.Phase.FAILED);
+        assertThat(proxy.getStatus().getMessage()).contains("'ZZ'");
+    }
+
+    @Test
+    void targetClustersSetButMcsDisabled_fails() {
+        KafkaProxy proxy = proxy(null);
+        proxy.getSpec().setTargetClusters(List.of("A"));
+        // mcs is null/disabled (proxy() helper does not set it).
+
+        reconciler.reconcile(proxy, context);
+
+        assertThat(proxy.getStatus().getPhase()).isEqualTo(KafkaProxyStatus.Phase.FAILED);
+        assertThat(proxy.getStatus().getMessage()).contains("spec.targetClusters");
+    }
+
+    @Test
+    void mcsEnabled_skipPath_doesNotRequireLocalPool() {
+        // SKIPPED clusters should not even try to look up the pool — this asserts the early-return.
+        when(namedPoolOp.get()).thenReturn(null);
+        KafkaProxy proxy = mcsProxy(List.of("B"), List.of(range("brokers-b", 1000, 1000)));
+
+        reconciler.reconcile(proxy, context);
+
+        assertThat(proxy.getStatus().getPhase()).isEqualTo(KafkaProxyStatus.Phase.SKIPPED);
+    }
+
     // --- helpers ---
 
     private KafkaProxy proxy(String apicurioRef) {
@@ -239,6 +328,36 @@ class KafkaProxyReconcilerTest {
         pm.setProxyPrincipal("kafka-proxy");
         spec.setProxyMtls(pm);
         c.setSpec(spec);
+        return c;
+    }
+
+    private KafkaProxy mcsProxy(List<String> targetClusters, List<se.afshin.yavari.kafka.operator.crd.BrokerNodeIdRange> ranges) {
+        KafkaProxy p = proxy(null);
+        se.afshin.yavari.kafka.operator.crd.KafkaProxyMcsConfig mcs = new se.afshin.yavari.kafka.operator.crd.KafkaProxyMcsConfig();
+        mcs.setEnabled(true);
+        p.getSpec().setMcs(mcs);
+        p.getSpec().setTargetClusters(targetClusters);
+        p.getSpec().setBrokerNodeIdRanges(ranges);
+        return p;
+    }
+
+    private se.afshin.yavari.kafka.operator.crd.BrokerNodeIdRange range(String name, int start, int end) {
+        se.afshin.yavari.kafka.operator.crd.BrokerNodeIdRange r = new se.afshin.yavari.kafka.operator.crd.BrokerNodeIdRange();
+        r.setName(name);
+        r.setStart(start);
+        r.setEnd(end);
+        return r;
+    }
+
+    private KafkaCluster clusterWithProxyMtlsAndIds(String... ids) {
+        KafkaCluster c = clusterWithProxyMtls();
+        java.util.List<se.afshin.yavari.kafka.operator.crd.ClusterEntry> entries = new java.util.ArrayList<>();
+        for (String id : ids) {
+            se.afshin.yavari.kafka.operator.crd.ClusterEntry e = new se.afshin.yavari.kafka.operator.crd.ClusterEntry();
+            e.setId(id);
+            entries.add(e);
+        }
+        c.getSpec().setClusters(entries);
         return c;
     }
 

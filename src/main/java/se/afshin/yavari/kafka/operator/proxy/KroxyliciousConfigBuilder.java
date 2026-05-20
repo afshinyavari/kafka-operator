@@ -16,9 +16,10 @@ import java.util.Map;
 public class KroxyliciousConfigBuilder {
 
     public String build(KafkaProxy proxy, int brokerCount, int brokerNodeIdBase,
-                        String namespace) {
+                        String namespace, boolean mcsEnabled) {
         KafkaProxySpec spec = proxy.getSpec();
-        String poolHeadless = spec.getPoolRef() + "-headless." + namespace + ".svc.cluster.local";
+        String dnsSuffix = mcsEnabled ? "clusterset.local" : "cluster.local";
+        String poolHeadless = spec.getPoolRef() + "-headless." + namespace + ".svc." + dnsSuffix;
 
         StringBuilder cfg = new StringBuilder();
         List<String> activeFilters = new ArrayList<>();
@@ -39,7 +40,7 @@ public class KroxyliciousConfigBuilder {
         String serviceName = proxy.getMetadata().getName();
         cfg.append("        portIdentifiesNode:\n");
         cfg.append("          bootstrapAddress: 0.0.0.0:").append(spec.getClientPort()).append("\n");
-        cfg.append("          advertisedBrokerAddressPattern: ").append(serviceName).append(".").append(namespace).append(".svc.cluster.local\n");
+        cfg.append("          advertisedBrokerAddressPattern: ").append(serviceName).append(".").append(namespace).append(".svc.").append(dnsSuffix).append("\n");
         cfg.append("          nodeIdRanges:\n");
         List<BrokerNodeIdRange> ranges = spec.getBrokerNodeIdRanges();
         if (ranges != null && !ranges.isEmpty()) {

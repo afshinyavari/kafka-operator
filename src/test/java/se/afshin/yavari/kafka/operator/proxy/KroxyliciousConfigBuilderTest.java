@@ -33,7 +33,7 @@ class KroxyliciousConfigBuilderTest {
 
     @Test
     void minimalConfig_noTls_noFilters() {
-        String cfg = builder.build(proxy(), 3, 0, NS);
+        String cfg = builder.build(proxy(), 3, 0, NS, false);
 
         assertThat(cfg).contains("virtualClusters:");
         assertThat(cfg).contains("bootstrapAddress: 0.0.0.0:" + CLIENT_PORT);
@@ -50,7 +50,7 @@ class KroxyliciousConfigBuilderTest {
         BrokerNodeIdRange r2 = range("cluster-b", 1000, 1002);
         p.getSpec().setBrokerNodeIdRanges(List.of(r1, r2));
 
-        String cfg = builder.build(p, 3, 0, NS);
+        String cfg = builder.build(p, 3, 0, NS, false);
 
         assertThat(cfg).contains("- name: cluster-a");
         assertThat(cfg).contains("start: 0");
@@ -62,7 +62,7 @@ class KroxyliciousConfigBuilderTest {
 
     @Test
     void noBrokerNodeIdRanges_usesBrokerCount() {
-        String cfg = builder.build(proxy(), 3, 500, NS);
+        String cfg = builder.build(proxy(), 3, 500, NS, false);
 
         assertThat(cfg).contains("start: 500");
         assertThat(cfg).contains("end: 502");  // 500 + 3 - 1
@@ -73,7 +73,7 @@ class KroxyliciousConfigBuilderTest {
         KafkaProxy p = proxy();
         p.getSpec().setOidc(oidc("https://keycloak/certs", null, null));
 
-        String cfg = builder.build(p, 1, 0, NS);
+        String cfg = builder.build(p, 1, 0, NS, false);
 
         assertThat(cfg).contains("jwt-groups");
         assertThat(cfg).contains("oauth-bearer-validation");
@@ -93,7 +93,7 @@ class KroxyliciousConfigBuilderTest {
         KafkaProxy p = proxy();
         p.getSpec().setOidc(oidc("https://keycloak/certs", null, null));
 
-        String cfg = builder.build(p, 1, 0, NS);
+        String cfg = builder.build(p, 1, 0, NS, false);
 
         assertThat(cfg).doesNotContain("expectedIssuer:");
         assertThat(cfg).doesNotContain("expectedAudience:");
@@ -104,7 +104,7 @@ class KroxyliciousConfigBuilderTest {
         KafkaProxy p = proxy();
         p.getSpec().setOidc(oidc("https://keycloak/certs", "https://issuer", "my-audience"));
 
-        String cfg = builder.build(p, 1, 0, NS);
+        String cfg = builder.build(p, 1, 0, NS, false);
 
         assertThat(cfg).contains("expectedIssuer: https://issuer");
         assertThat(cfg).contains("expectedAudience: my-audience");
@@ -115,7 +115,7 @@ class KroxyliciousConfigBuilderTest {
         KafkaProxy p = proxy();
         p.getSpec().setRbacRef("my-rbac");
 
-        String cfg = builder.build(p, 1, 0, NS);
+        String cfg = builder.build(p, 1, 0, NS, false);
 
         assertThat(cfg).contains("- name: authorization");
         assertThat(cfg).contains("GroupAwareAuthorizerService");
@@ -130,7 +130,7 @@ class KroxyliciousConfigBuilderTest {
         xmlCfg.setSchemaTopic("xml-schemas");
         p.getSpec().getFilters().setXmlValidation(xmlCfg);
 
-        String cfg = builder.build(p, 1, 0, NS);
+        String cfg = builder.build(p, 1, 0, NS, false);
 
         assertThat(cfg).contains("- name: xml-validation");
         assertThat(cfg).contains("schemaTopic: xml-schemas");
@@ -147,7 +147,7 @@ class KroxyliciousConfigBuilderTest {
         custom.setConfig(Map.of("key1", "val1"));
         p.getSpec().setCustomFilters(List.of(custom));
 
-        String cfg = builder.build(p, 1, 0, NS);
+        String cfg = builder.build(p, 1, 0, NS, false);
 
         assertThat(cfg).contains("- name: my-filter");
         assertThat(cfg).contains("type: MyFilterFactory");
@@ -165,7 +165,7 @@ class KroxyliciousConfigBuilderTest {
         xmlCfg.setSchemaTopic("schemas");
         p.getSpec().getFilters().setXmlValidation(xmlCfg);
 
-        String cfg = builder.build(p, 1, 0, NS);
+        String cfg = builder.build(p, 1, 0, NS, false);
 
         // Extract defaultFilters section
         int defaultFiltersIdx = cfg.indexOf("\ndefaultFilters:");
@@ -190,7 +190,7 @@ class KroxyliciousConfigBuilderTest {
         // and gateway (client→proxy) mTLS at /etc/proxy/server-tls — paths are fixed by
         // ProxyDeploymentBuilder's volume mounts, regardless of any KafkaProxyTlsConfig
         // override (the override only changes the SECRET behind those mounts).
-        String cfg = builder.build(proxy(), 1, 0, NS);
+        String cfg = builder.build(proxy(), 1, 0, NS, false);
 
         // Target (upstream to brokers)
         assertThat(cfg).contains("/etc/proxy/kafka-tls/tls.key");
@@ -200,6 +200,29 @@ class KroxyliciousConfigBuilderTest {
         assertThat(cfg).contains("/etc/proxy/server-tls/tls.key");
         assertThat(cfg).contains("/etc/proxy/server-tls/tls.crt");
         assertThat(cfg).contains("/etc/proxy/server-tls/ca.crt");
+    }
+
+    @Test
+    void mcsEnabled_usesClustersetLocalForBootstrapAndAdvertisedPattern() {
+        String cfg = builder.build(proxy(), 3, 0, NS, true);
+
+        // Upstream proxy→broker
+        assertThat(cfg).contains(POOL_REF + "-headless." + NS + ".svc.clusterset.local:9092");
+        assertThat(cfg).doesNotContain(POOL_REF + "-headless." + NS + ".svc.cluster.local");
+
+        // Downstream advertised pattern
+        assertThat(cfg).contains("advertisedBrokerAddressPattern: " + PROXY_NAME + "." + NS + ".svc.clusterset.local");
+        assertThat(cfg).doesNotContain("advertisedBrokerAddressPattern: " + PROXY_NAME + "." + NS + ".svc.cluster.local");
+    }
+
+    @Test
+    void mcsDisabled_keepsClusterLocal() {
+        // Default behaviour — confirms the flag default is the non-MCS suffix.
+        String cfg = builder.build(proxy(), 3, 0, NS, false);
+
+        assertThat(cfg).contains(POOL_REF + "-headless." + NS + ".svc.cluster.local:9092");
+        assertThat(cfg).contains("advertisedBrokerAddressPattern: " + PROXY_NAME + "." + NS + ".svc.cluster.local");
+        assertThat(cfg).doesNotContain("clusterset.local");
     }
 
     // --- helpers ---

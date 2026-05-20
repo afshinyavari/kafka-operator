@@ -109,6 +109,17 @@ spec:
               value: "admin"
             - name: KC_HTTP_PORT
               value: "8080"
+            # Pin the issuer URL so JWT `iss` is identical regardless of whether a client
+            # reaches Keycloak via `cluster.local` (local) or `clusterset.local` (cross-cluster
+            # via Submariner). Without this, `iss` varies by the URL the client used, and the
+            # proxy's expectedIssuer rejects one of them. Pinning to clusterset.local is what
+            # makes the multi-cluster KafkaProxy work end-to-end.
+            - name: KC_HOSTNAME
+              value: "keycloak.kafka.svc.clusterset.local"
+            - name: KC_HOSTNAME_STRICT
+              value: "false"
+            - name: KC_HOSTNAME_STRICT_HTTPS
+              value: "false"
           ports:
             - containerPort: 8080
               name: http
@@ -144,12 +155,14 @@ metadata:
 spec:
   selector:
     app: keycloak
-  type: NodePort
+  # ClusterIP so Submariner Lighthouse can ServiceExport it (NodePort is "UnsupportedServiceType"
+  # for ServiceExport per the MCS spec). The previous NodePort was only used for browser access
+  # from the host; in-cluster + cross-cluster traffic doesn't need it.
+  type: ClusterIP
   ports:
     - name: http
       port: 8080
       targetPort: 8080
-      nodePort: 30800
       protocol: TCP
 ---
 apiVersion: multicluster.x-k8s.io/v1alpha1

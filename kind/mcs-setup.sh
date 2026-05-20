@@ -15,6 +15,10 @@ APICURIO_PROXY_IMAGE_NAME="apicurio-rbac-proxy:dev"
 KAFKA_VERSION="4.0.0"
 CLUSTERS=(kafka-a kafka-b kafka-c)
 CLUSTER_IDS=(A B C)
+# Clusters that host a KafkaProxy. The same KafkaProxy CR is applied to each;
+# the operator on every cluster reads spec.targetClusters and only deploys if
+# its own KAFKA_CLUSTER_ID is listed.
+PROXY_CLUSTERS=(kafka-a kafka-b)
 CLUSTER_CONFIGS=(cluster-a.yaml cluster-b.yaml cluster-c.yaml)
 POD_SUBNETS=(10.244.0.0/16 10.245.0.0/16 10.246.0.0/16)
 NAMESPACE=kafka
@@ -421,14 +425,16 @@ for cluster in "${CLUSTERS[@]}"; do
 done
 wait_pids "Broker TLS secrets" "${PIDS[@]}"
 
-info "Applying proxy client/server/test-client TLS secrets to cluster-a..."
-PROXY_CTX="kind-kafka-a"
-apply_tls_secret "${PROXY_CTX}" "${PROXY_PRINCIPAL}-client-tls" \
-  "${CA_DIR}/${PROXY_PRINCIPAL}-client.crt" "${CA_DIR}/${PROXY_PRINCIPAL}-client.key" &>/dev/null
-apply_tls_secret "${PROXY_CTX}" "${PROXY_PRINCIPAL}-server-tls" \
-  "${CA_DIR}/${PROXY_PRINCIPAL}-server.crt" "${CA_DIR}/${PROXY_PRINCIPAL}-server.key" &>/dev/null
-apply_tls_secret "${PROXY_CTX}" "${PROXY_PRINCIPAL}-test-client-tls" \
-  "${CA_DIR}/${PROXY_PRINCIPAL}-test-client.crt" "${CA_DIR}/${PROXY_PRINCIPAL}-test-client.key" &>/dev/null
+info "Applying proxy client/server/test-client TLS secrets to: ${PROXY_CLUSTERS[*]}..."
+for cluster in "${PROXY_CLUSTERS[@]}"; do
+  PROXY_CTX="kind-${cluster}"
+  apply_tls_secret "${PROXY_CTX}" "${PROXY_PRINCIPAL}-client-tls" \
+    "${CA_DIR}/${PROXY_PRINCIPAL}-client.crt" "${CA_DIR}/${PROXY_PRINCIPAL}-client.key" &>/dev/null
+  apply_tls_secret "${PROXY_CTX}" "${PROXY_PRINCIPAL}-server-tls" \
+    "${CA_DIR}/${PROXY_PRINCIPAL}-server.crt" "${CA_DIR}/${PROXY_PRINCIPAL}-server.key" &>/dev/null
+  apply_tls_secret "${PROXY_CTX}" "${PROXY_PRINCIPAL}-test-client-tls" \
+    "${CA_DIR}/${PROXY_PRINCIPAL}-test-client.crt" "${CA_DIR}/${PROXY_PRINCIPAL}-test-client.key" &>/dev/null
+done
 ok "All mTLS secrets provisioned"
 
 # ── Step 12: Deploy operator in parallel ──────────────────────────────────────
@@ -518,8 +524,10 @@ ok "Keycloak ready"
 # Order matters: ApicurioRegistry needs the KafkaRbac-generated policy ConfigMap,
 # and the KafkaProxy reads ApicurioRegistry.status.registryUrl to wire the
 # record-validation filter, so deploy in dependency order to avoid status churn.
-info "Deploying KafkaRbac on kafka-a..."
-kubectl --context kind-kafka-a apply -f "${MANIFESTS_DIR}/kafkarbac.yaml" --server-side &>/dev/null
+info "Deploying KafkaRbac on: ${PROXY_CLUSTERS[*]}..."
+for cluster in "${PROXY_CLUSTERS[@]}"; do
+  kubectl --context "kind-${cluster}" apply -f "${MANIFESTS_DIR}/kafkarbac.yaml" --server-side &>/dev/null
+done
 
 info "Deploying ApicurioRegistry (registry + rbac-proxy) on kafka-a..."
 kubectl --context kind-kafka-a apply -f "${MANIFESTS_DIR}/apicurioregistry.yaml" --server-side &>/dev/null
@@ -528,12 +536,16 @@ until kubectl --context kind-kafka-a -n "${NAMESPACE}" get apicurioregistry apic
     -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
 ok "ApicurioRegistry READY"
 
-info "Deploying KafkaProxy (mTLS + OIDC + RBAC + XML/schema-registry filters) on kafka-a..."
-kubectl --context kind-kafka-a apply -f "${MANIFESTS_DIR}/kafkaproxy.yaml" --server-side &>/dev/null
-info "Waiting for KafkaProxy kafka-proxy to reach READY (up to 5 min)..."
-until kubectl --context kind-kafka-a -n "${NAMESPACE}" get kafkaproxy kafka-proxy \
-    -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
-ok "KafkaProxy READY"
+info "Deploying KafkaProxy CR to: ${PROXY_CLUSTERS[*]} (each operator decides whether to deploy locally based on spec.targetClusters)..."
+for cluster in "${PROXY_CLUSTERS[@]}"; do
+  kubectl --context "kind-${cluster}" apply -f "${MANIFESTS_DIR}/kafkaproxy.yaml" --server-side &>/dev/null
+done
+info "Waiting for KafkaProxy to reach READY on each target cluster (up to 5 min)..."
+for cluster in "${PROXY_CLUSTERS[@]}"; do
+  until kubectl --context "kind-${cluster}" -n "${NAMESPACE}" get kafkaproxy kafka-proxy \
+      -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
+  ok "KafkaProxy READY on ${cluster}"
+done
 
 echo ""
 echo "────────────────────────────────────────────────────────────────────────"

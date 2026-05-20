@@ -9,6 +9,15 @@ spec:
   replicas: 1
   image: kroxy-filters:dev
   clientPort: 9094
+  # MCS mode: the same CR is applied to every cluster in PROXY_CLUSTERS in mcs-setup.sh.
+  # Each cluster's operator only deploys the proxy if its KAFKA_CLUSTER_ID is listed in
+  # targetClusters; others reach status.phase=SKIPPED. The proxy Service is exported via
+  # Submariner ServiceExport so cross-cluster clients resolve `kafka-proxy.kafka.svc.clusterset.local`.
+  mcs:
+    enabled: true
+  targetClusters:
+    - A
+    - B
   brokerNodeIdRanges:
     - name: brokers-a
       start: 0
@@ -30,9 +39,11 @@ spec:
   #   clientCertSecretRef: kafka-proxy-client-tls   # default = "{proxyName}-client-tls"
   #   serverCertSecretRef: kafka-proxy-server-tls   # default = "{proxyName}-server-tls"
   oidc:
-    jwksEndpointUrl: http://keycloak.kafka.svc.cluster.local:8080/realms/demo/protocol/openid-connect/certs
+    # clusterset.local so the proxy in any target cluster can reach Keycloak via Submariner.
+    # expectedIssuer must match Keycloak's KC_HOSTNAME (keycloak.yaml pins it to clusterset.local).
+    jwksEndpointUrl: http://keycloak.kafka.svc.clusterset.local:8080/realms/demo/protocol/openid-connect/certs
     groupsClaim: realm_access.roles
-    expectedIssuer: http://keycloak.kafka.svc.cluster.local:8080/realms/demo
+    expectedIssuer: http://keycloak.kafka.svc.clusterset.local:8080/realms/demo
     expectedAudience: rbac-proxy
   filters:
     # XML filter validates produce payloads on `schemaTopic`-registered topics

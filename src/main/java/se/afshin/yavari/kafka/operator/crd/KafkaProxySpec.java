@@ -12,9 +12,11 @@ public class KafkaProxySpec {
     private String apicurioRef;
     private KafkaProxyTlsConfig tls;
     private KafkaProxyOidcConfig oidc;
+    private KafkaProxyMcsConfig mcs;
     private KafkaProxyFiltersConfig filters = new KafkaProxyFiltersConfig();
     private List<KafkaProxyCustomFilter> customFilters = List.of();
     private List<BrokerNodeIdRange> brokerNodeIdRanges = List.of();
+    private List<String> targetClusters = List.of();
 
     public String getClusterRef() { return clusterRef; }
     public void setClusterRef(String clusterRef) { this.clusterRef = clusterRef; }
@@ -43,6 +45,9 @@ public class KafkaProxySpec {
     public KafkaProxyOidcConfig getOidc() { return oidc; }
     public void setOidc(KafkaProxyOidcConfig oidc) { this.oidc = oidc; }
 
+    public KafkaProxyMcsConfig getMcs() { return mcs; }
+    public void setMcs(KafkaProxyMcsConfig mcs) { this.mcs = mcs; }
+
     public KafkaProxyFiltersConfig getFilters() { return filters; }
     public void setFilters(KafkaProxyFiltersConfig filters) { this.filters = filters; }
 
@@ -51,4 +56,7 @@ public class KafkaProxySpec {
 
     public List<BrokerNodeIdRange> getBrokerNodeIdRanges() { return brokerNodeIdRanges; }
     public void setBrokerNodeIdRanges(List<BrokerNodeIdRange> brokerNodeIdRanges) { this.brokerNodeIdRanges = brokerNodeIdRanges; }
+
+    public List<String> getTargetClusters() { return targetClusters; }
+    public void setTargetClusters(List<String> targetClusters) { this.targetClusters = targetClusters; }
 }

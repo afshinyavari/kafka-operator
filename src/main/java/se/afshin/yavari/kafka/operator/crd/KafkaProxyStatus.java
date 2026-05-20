@@ -2,7 +2,7 @@ package se.afshin.yavari.kafka.operator.crd;
 
 public class KafkaProxyStatus {
 
-    public enum Phase { RECONCILING, READY, FAILED }
+    public enum Phase { RECONCILING, READY, FAILED, SKIPPED }
 
     private Phase phase = Phase.RECONCILING;
     private String message;

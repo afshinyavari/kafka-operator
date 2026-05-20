@@ -35,6 +35,9 @@ quorum:  ## Verify KRaft controller quorum health
 proxy-test:  ## Quick end-to-end produce/consume test through proxy (mTLS + OIDC)
 	@chmod +x proxy-test.sh && ./proxy-test.sh
 
+mcs-proxy-test:  ## Cross-cluster proxy test: produce/consume from kafka-b via clusterset.local
+	@chmod +x mcs-proxy-test.sh && ./mcs-proxy-test.sh
+
 xml-filter-test:  ## End-to-end test of the XML validation filter (valid + invalid XML)
 	@chmod +x xml-filter-test.sh && ./xml-filter-test.sh
 

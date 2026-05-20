@@ -12,7 +12,7 @@ NS="kafka"
 REGISTRY_LOCAL_PORT="18080"
 REGISTRY_DIRECT="http://127.0.0.1:${REGISTRY_LOCAL_PORT}"
 REGISTRY_PROXY="http://apicurio-rbac-proxy.${NS}.svc.cluster.local:8082"
-KEYCLOAK_TOKEN_URL="http://keycloak.${NS}.svc.cluster.local:8080/realms/demo/protocol/openid-connect/token"
+KEYCLOAK_TOKEN_URL="http://keycloak.${NS}.svc.clusterset.local:8080/realms/demo/protocol/openid-connect/token"
 CLIENT_ID="rbac-proxy"
 CLIENT_SECRET="rbac-proxy-secret"
 

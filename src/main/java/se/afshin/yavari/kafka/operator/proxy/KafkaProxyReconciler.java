@@ -24,15 +24,18 @@ import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistry;
+import se.afshin.yavari.kafka.operator.crd.BrokerNodeIdRange;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
+import se.afshin.yavari.kafka.operator.crd.KafkaProxyMcsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyMtlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -48,8 +51,8 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
     @Inject ProxyDeploymentBuilder deploymentBuilder;
     @Inject ProxyServiceBuilder serviceBuilder;
 
-    @ConfigProperty(name = "kafka.networking.mcs-enabled")
-    boolean mcsEnabled;
+    @ConfigProperty(name = "kafka.cluster.id")
+    String localClusterId;
 
     @Override
     public Map<String, EventSource> prepareEventSources(EventSourceContext<KafkaProxy> context) {
@@ -107,16 +110,66 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
         KafkaProxyStatus status = proxy.getStatus() != null ? proxy.getStatus() : new KafkaProxyStatus();
         status.setPhase(KafkaProxyStatus.Phase.RECONCILING);
 
-        // Resolve KafkaNodePool for broker count
-        KafkaNodePool pool = client.resources(KafkaNodePool.class)
-                .inNamespace(namespace).withName(proxy.getSpec().getPoolRef()).get();
-        if (pool == null) {
-            status.setMessage("KafkaNodePool '" + proxy.getSpec().getPoolRef() + "' not found");
+        KafkaProxyMcsConfig mcsCfg = proxy.getSpec().getMcs();
+        boolean mcsEnabled = mcsCfg != null && mcsCfg.isEnabled();
+        List<String> targetClusters = proxy.getSpec().getTargetClusters();
+
+        // Reject inconsistent intent: targetClusters only makes sense in MCS mode.
+        if (!mcsEnabled && targetClusters != null && !targetClusters.isEmpty()) {
+            status.setPhase(KafkaProxyStatus.Phase.FAILED);
+            status.setMessage("spec.targetClusters is set but spec.mcs.enabled is false");
             proxy.setStatus(status);
-            return UpdateControl.patchStatus(proxy).rescheduleAfter(Duration.ofSeconds(15));
+            return UpdateControl.patchStatus(proxy);
         }
-        int brokerCount = pool.getSpec().getReplicas();
-        int brokerNodeIdBase = resolveNodeIdBase(pool.getMetadata().getName(), namespace);
+
+        // In MCS mode the same CR is applied to every cluster in the topology, but the proxy
+        // only deploys on the clusters listed in spec.targetClusters. Other clusters reach SKIPPED
+        // with no resources reconciled — same idempotent reconcile shape, different outcome.
+        if (mcsEnabled) {
+            if (targetClusters == null || targetClusters.isEmpty()) {
+                status.setPhase(KafkaProxyStatus.Phase.FAILED);
+                status.setMessage("spec.mcs.enabled requires spec.targetClusters to be non-empty");
+                proxy.setStatus(status);
+                return UpdateControl.patchStatus(proxy);
+            }
+            if (!targetClusters.contains(localClusterId)) {
+                LOG.infof("KafkaProxy %s/%s: cluster '%s' not in targetClusters %s — skipping",
+                        namespace, name, localClusterId, targetClusters);
+                status.setPhase(KafkaProxyStatus.Phase.SKIPPED);
+                status.setMessage("Cluster '" + localClusterId + "' is not a target for this proxy");
+                status.setReadyReplicas(0);
+                proxy.setStatus(status);
+                return UpdateControl.patchStatus(proxy);
+            }
+        }
+
+        // Resolve broker count + node id base.
+        int brokerCount;
+        int brokerNodeIdBase;
+        if (mcsEnabled) {
+            // The pool CR may not exist on this cluster (it lives only on the broker's home cluster
+            // in MCS topologies). Derive both values from spec.brokerNodeIdRanges, which the user
+            // must populate in MCS mode (validated below).
+            List<BrokerNodeIdRange> ranges = proxy.getSpec().getBrokerNodeIdRanges();
+            if (ranges == null || ranges.isEmpty()) {
+                status.setPhase(KafkaProxyStatus.Phase.FAILED);
+                status.setMessage("spec.mcs.enabled requires spec.brokerNodeIdRanges to be non-empty");
+                proxy.setStatus(status);
+                return UpdateControl.patchStatus(proxy);
+            }
+            brokerCount = ranges.stream().mapToInt(r -> r.getEnd() - r.getStart() + 1).sum();
+            brokerNodeIdBase = ranges.stream().mapToInt(BrokerNodeIdRange::getStart).min().orElse(0);
+        } else {
+            KafkaNodePool pool = client.resources(KafkaNodePool.class)
+                    .inNamespace(namespace).withName(proxy.getSpec().getPoolRef()).get();
+            if (pool == null) {
+                status.setMessage("KafkaNodePool '" + proxy.getSpec().getPoolRef() + "' not found");
+                proxy.setStatus(status);
+                return UpdateControl.patchStatus(proxy).rescheduleAfter(Duration.ofSeconds(15));
+            }
+            brokerCount = pool.getSpec().getReplicas();
+            brokerNodeIdBase = resolveNodeIdBase(pool.getMetadata().getName(), namespace);
+        }
 
         // Resolve the parent KafkaCluster to confirm spec.proxyMtls.enabled. The operator does
         // NOT sign certs; it only mounts pre-provisioned secrets (cert-manager / mcs-setup).
@@ -133,6 +186,24 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
                     + "' spec.proxyMtls.enabled must be true");
             proxy.setStatus(status);
             return UpdateControl.patchStatus(proxy).rescheduleAfter(Duration.ofSeconds(15));
+        }
+
+        // Cross-reference: every targetClusters entry must name a real ClusterEntry on the
+        // referenced KafkaCluster. Catches typos that would otherwise produce silent skips on
+        // every operator.
+        if (mcsEnabled && cluster.getSpec().getClusters() != null) {
+            java.util.Set<String> knownIds = cluster.getSpec().getClusters().stream()
+                    .map(se.afshin.yavari.kafka.operator.crd.ClusterEntry::getId)
+                    .collect(Collectors.toSet());
+            for (String t : targetClusters) {
+                if (!knownIds.contains(t)) {
+                    status.setPhase(KafkaProxyStatus.Phase.FAILED);
+                    status.setMessage("spec.targetClusters contains unknown cluster id '" + t
+                            + "' — not in KafkaCluster.spec.clusters " + knownIds);
+                    proxy.setStatus(status);
+                    return UpdateControl.patchStatus(proxy);
+                }
+            }
         }
 
         // Resolve proxy client + server cert secret names (spec overrides, else defaults).
@@ -155,7 +226,7 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
         try {
 
             // Generate and apply config ConfigMap
-            String configYaml = configBuilder.build(proxy, brokerCount, brokerNodeIdBase, namespace);
+            String configYaml = configBuilder.build(proxy, brokerCount, brokerNodeIdBase, namespace, mcsEnabled);
             ConfigMap configMap = new ConfigMapBuilder()
                     .withNewMetadata()
                         .withName(name + "-config")
@@ -209,7 +280,8 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
         client.services().inNamespace(namespace).withName(name).delete();
         // TLS secrets are NOT operator-owned (cert-manager / mcs-setup provisions them);
         // leave them in place on KafkaProxy delete.
-        if (mcsEnabled) {
+        KafkaProxyMcsConfig mcsCfg = proxy.getSpec().getMcs();
+        if (mcsCfg != null && mcsCfg.isEnabled()) {
             client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
                     .inNamespace(namespace).withName(name).delete();
         }
