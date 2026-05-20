@@ -261,7 +261,7 @@ public class PodTemplateFactory {
                                    boolean hasMetrics, List<KafkaListenerSpec> listeners, int ordinal) {
         List<EnvVar> env = new ArrayList<>();
         env.add(new EnvVarBuilder().withName("KAFKA_HEAP_OPTS")
-                .withValue(isController ? "-Xmx512m -Xms512m" : "-Xmx1g -Xms1g").build());
+                .withValue("-XX:MaxRAMPercentage=50.0 -XX:InitialRAMPercentage=50.0").build());
         env.add(new EnvVarBuilder().withName("KAFKA_CLUSTER_ID").withValue(kafkaClusterId).build());
         env.add(new EnvVarBuilder().withName("KAFKA_VERSION").withValue(kafkaVersion).build());
         env.add(new EnvVarBuilder().withName("KAFKA_CONFIG_HASH").withValue(configHash).build());

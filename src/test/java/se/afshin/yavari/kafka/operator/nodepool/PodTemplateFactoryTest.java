@@ -58,7 +58,7 @@ class PodTemplateFactoryTest {
     }
 
     @Test
-    void controller_hasControllerPortAndSmallHeap() {
+    void controller_hasControllerPortAndCgroupSizedHeap() {
         List<PodEntry> pods = factory.build(pool(1, NodeRole.CONTROLLER), cluster(), NS, 0, "cid", "hash", false, true, null);
 
         assertThat(pods).hasSize(1);
@@ -71,7 +71,9 @@ class PodTemplateFactoryTest {
         var heapEnv = container.getEnv().stream()
                 .filter(e -> "KAFKA_HEAP_OPTS".equals(e.getName()))
                 .findFirst().orElseThrow();
-        assertThat(heapEnv.getValue()).contains("512m");
+        assertThat(heapEnv.getValue())
+                .contains("MaxRAMPercentage")
+                .contains("InitialRAMPercentage");
     }
 
     @Test
