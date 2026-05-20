@@ -23,6 +23,9 @@ rules:
       - kafkarbacs
       - kafkarbacs/status
       - kafkarbacs/finalizers
+      - kafkatopics
+      - kafkatopics/status
+      - kafkatopics/finalizers
       - kafkaproxies
       - kafkaproxies/status
       - kafkaproxies/finalizers

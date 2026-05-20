@@ -43,7 +43,9 @@ KafkaRbac  (user-managed)
                   {name}-rbac-proxy Deployment + Service
 ```
 
-Users create `KafkaRbac`, `KafkaProxy`, and `ApicurioRegistry`. The operator creates and owns all downstream resources.
+Users create `KafkaRbac`, `KafkaProxy`, `ApicurioRegistry`, and `KafkaTopic`. The operator creates and owns all downstream resources.
+
+`KafkaTopic` is structurally different from the other CRs — it doesn't produce Kubernetes objects but instead reconciles a single shared Kafka object (a topic in the cluster metadata) against an AdminClient. See [KafkaTopic — primary-cluster model](#kafkatopic--primary-cluster-model) below.
 
 ---
 
@@ -57,6 +59,7 @@ Users create `KafkaRbac`, `KafkaProxy`, and `ApicurioRegistry`. The operator cre
 | `KafkaRbacReconciler` | `KafkaRbac` | `{name}-kafka-rules` ConfigMap, `{name}-apicurio-policy` ConfigMap | `KafkaRbac` changes |
 | `KafkaProxyReconciler` | `KafkaProxy` | `{name}-config` ConfigMap (Kroxylicious YAML), Deployment, Service | `KafkaProxy`, `KafkaNodePool`, `KafkaRbac`, `ApicurioRegistry` changes |
 | `ApicurioRegistryReconciler` | `ApicurioRegistry` | `{name}-registry` Deployment + Service, `{name}-rbac-proxy` Deployment + Service | `ApicurioRegistry`, `KafkaRbac` changes |
+| `KafkaTopicReconciler` | `KafkaTopic` | Kafka topics via `AdminClient` (createTopics, incrementalAlterConfigs, createPartitions, deleteTopics) | `KafkaTopic` changes; periodic resync every 5 min for external-drift detection |
 
 All reconcilers use JOSDK's `UpdateControl.patchStatus().rescheduleAfter(15s)` when work is still in progress, creating a self-healing loop.
 
@@ -231,6 +234,32 @@ Downgrade protection: `CrValidator` rejects a `targetMetadataVersion` lower than
 | `KafkaRbacConfigMapBuilder` | `proxy` | Generates `rbac-rules.yaml` and `policy.yaml` from `KafkaRbac` spec |
 | `GroupAwareAuthorizerService` | `filters/…/rbac` | Kroxylicious `AuthorizerService` plugin; enforces topic RBAC |
 | `PolicyEngine` | `apicurio-proxy/…/rbac` | YAML policy loader with `WatchService` hot-reload; enforces artifact RBAC |
+| `KafkaTopicService` | `topic` | AdminClient ops + pure diff logic (`computeConfigDiff`, `computePartitionAction`) |
+| `BrokerBootstrapResolver` | `topic` | Picks the alphabetically-first broker `KafkaNodePool` and builds its headless bootstrap address |
+| `TopicReconcileLeader` / `StaticPrimaryClusterLeader` | `topic` | Cross-cluster single-writer gate. v1 impl returns `localClusterId == spec.clusters[0].id`; v2 will swap in a Kafka consumer-group leader implementation |
+| `AdminClientTlsLoader` | `topic` | Reads a cert-manager TLS Secret (PEM) and returns Kafka client SSL properties using `ssl.keystore.type=PEM` (no PKCS12 conversion) |
+
+---
+
+## KafkaTopic — primary-cluster model
+
+The `KafkaTopic` CRD reconciles a *shared* object (a Kafka topic in the cluster's metadata), not a per-K8s-cluster Kubernetes resource. In MCS deployments, three operator instances all watch the same CR; we must elect a single writer to avoid AdminClient races.
+
+**v1 model: static primary.** The operator instance whose `KAFKA_CLUSTER_ID` matches `spec.clusters[0].id` on the referenced `KafkaCluster` is the leader. Peer operators look up the CR, mark `status.phase=SKIPPED`, and do nothing else. This means:
+
+- The CR can be deployed via GitOps to every K8s cluster identically — only one operator acts on it.
+- Status in non-primary clusters always shows `SKIPPED`. The authoritative `READY` only appears in the primary cluster's view of the CR. This is a known v1 trait.
+- Failover is manual: if the primary cluster is down, reorder `spec.clusters[]` on the `KafkaCluster` CR.
+
+The leadership check sits behind `TopicReconcileLeader`; a future `KafkaConsumerGroupLeader` impl will use a 1-partition coordination topic + consumer-group rebalance for dynamic failover, with passive operators consuming the leader's reconciled-status messages to fan status out to all K8s clusters. CRD surface unchanged.
+
+**Bootstrap resolution.** `BrokerBootstrapResolver` picks the alphabetically-first `KafkaNodePool` labeled `kafka.yavari.afshin.se/cluster=<clusterRef>` with role `BROKER`, and addresses it as `<pool>-headless.<ns>.svc.cluster.local:9092`. AdminClient only needs one reachable broker — Kafka metadata discovery handles the rest.
+
+**Reconcile flow** (leader only): describe → create-if-missing OR (RF-mismatch → FAIL | partition-decrease → FAIL | partition-increase → expand | config-diff → incremental-alter) → re-describe → patch status. Reschedule every 5 min for external-drift detection.
+
+**Cleanup.** `Cleaner` honours `spec.deletionPolicy`: `DELETE` runs `deleteTopics` (swallows `UnknownTopicOrPartitionException`); `RETAIN` just releases the finalizer. If Kafka is unreachable during a `DELETE` cleanup, the finalizer is held and the operation is retried — we won't let the CR finalize while leaving the topic up.
+
+**AdminClient transport:** When `KafkaCluster.spec.proxyMtls.enabled=false`, the AdminClient connects plaintext. When `proxyMtls.enabled=true`, the operator reads a cert-manager-style PEM Secret (default name `kafka-operator-client-tls`, overridable via `spec.proxyMtls.adminClientCertSecretRef`) and passes `tls.crt`/`tls.key`/`ca.crt` directly to the Kafka client via PEM source mode (no PKCS12 conversion). The cert's CN must be in broker `super.users` — by convention reuse the existing `proxyPrincipal` so brokers don't need a config change. `IsrChecker` still uses the plaintext path (its "treat unreachable as safe" behaviour means rolling updates aren't blocked by mTLS); migrating it to the same loader is straightforward future work.
 
 ---
 

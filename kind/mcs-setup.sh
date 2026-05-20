@@ -311,6 +311,7 @@ for cluster in "${CLUSTERS[@]}"; do
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkaproxies.kafka.yavari.afshin.se-v1.yml" --server-side
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkauis.kafka.yavari.afshin.se-v1.yml" --server-side
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/apicurioregistries.kafka.yavari.afshin.se-v1.yml" --server-side
+    kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkatopics.kafka.yavari.afshin.se-v1.yml" --server-side
   ) &>/dev/null &
   PIDS+=($!)
 done
@@ -400,6 +401,10 @@ mint_cert "${PROXY_PRINCIPAL}-server" "${PROXY_PRINCIPAL}" \
   "${PROXY_PRINCIPAL}.${NAMESPACE}.svc.cluster.local,${PROXY_PRINCIPAL}.${NAMESPACE}.svc.clusterset.local"
 # Test client cert — extracted by proxy-test.sh / rbac-test.sh for SASL_SSL mTLS handshake.
 mint_cert "${PROXY_PRINCIPAL}-test-client" "test-client" ""
+# Operator AdminClient cert — used by the KafkaTopic reconciler to reach broker
+# INTERNAL listener over mTLS. CN reuses PROXY_PRINCIPAL so it inherits the proxy's
+# super.users entry without requiring a broker config change.
+mint_cert "kafka-operator-client" "${PROXY_PRINCIPAL}" ""
 
 # Helper: apply a 3-key kubernetes.io/tls-style secret (cert-manager convention).
 apply_tls_secret() {
@@ -435,6 +440,12 @@ for cluster in "${PROXY_CLUSTERS[@]}"; do
     "${CA_DIR}/${PROXY_PRINCIPAL}-server.crt" "${CA_DIR}/${PROXY_PRINCIPAL}-server.key" &>/dev/null
   apply_tls_secret "${PROXY_CTX}" "${PROXY_PRINCIPAL}-test-client-tls" \
     "${CA_DIR}/${PROXY_PRINCIPAL}-test-client.crt" "${CA_DIR}/${PROXY_PRINCIPAL}-test-client.key" &>/dev/null
+done
+
+info "Applying operator AdminClient TLS secret (kafka-operator-client-tls) to all clusters..."
+for cluster in "${CLUSTERS[@]}"; do
+  apply_tls_secret "kind-${cluster}" "kafka-operator-client-tls" \
+    "${CA_DIR}/kafka-operator-client.crt" "${CA_DIR}/kafka-operator-client.key" &>/dev/null
 done
 ok "All mTLS secrets provisioned"
 

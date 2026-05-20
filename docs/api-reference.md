@@ -13,6 +13,7 @@ All CRDs are in group `kafka.yavari.afshin.se`, version `v1alpha1`.
 | [KafkaRbac](#kafkarbac) | `kra` | Declarative topic ACLs and schema-registry artifact ACLs in a single CR. The operator turns this into ConfigMaps for Kroxylicious and the Apicurio RBAC proxy. | — |
 | [ApicurioRegistry](#apicurioregistry) | `apr` | Apicurio Registry deployment with an optional JWT-aware RBAC proxy. | KafkaRbac |
 | [KafkaUI](#kafkaui) | `kui` | Web UI Deployment + Service + RBAC (Role/RoleBinding/SA) for browsing Kafka clusters through Keycloak SSO. | KafkaCluster (read-only at runtime, no CRD-level ref) |
+| [KafkaTopic](#kafkatopic) | `kt` | Declarative Kafka topic — partitions, replication factor, dynamic config. Reconciled by the operator instance running on the primary K8s cluster (`spec.clusters[0].id` on the referenced `KafkaCluster`); peer instances mark the CR `SKIPPED`. | KafkaCluster |
 
 ---
 
@@ -773,3 +774,93 @@ spec:
 ```
 
 Toggling `ingress.enabled` back to `false` makes the reconciler delete the Ingress on the next reconcile.
+
+---
+
+## KafkaTopic
+
+Declarative Kafka topic. The CR's `metadata.name` is the Kafka topic name by default; set `spec.topicName` only when you need characters K8s names can't express (uppercase, underscore).
+
+In MCS deployments where one `KafkaCluster` spans multiple K8s clusters, only the operator instance running on the primary cluster (`spec.clusters[0].id`) executes AdminClient writes. Other instances see the CR and set `status.phase=SKIPPED` with a message pointing at the primary — apply the CR identically on every cluster (e.g. via GitOps); only one instance acts.
+
+### spec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `clusterRef` | string | **yes** | — | Name of the `KafkaCluster` CR in the same namespace this topic belongs to. |
+| `topicName` | string | no | `metadata.name` | Override the Kafka topic name. Must match `^[a-zA-Z0-9._-]{1,249}$`. |
+| `partitions` | integer | no | `1` | Desired partition count. Increasing is supported; **decreasing is rejected** (Kafka doesn't support shrinking) and sets `status.phase=FAILED`. |
+| `replicationFactor` | integer (short) | no | `1` | Desired replication factor. **Changing RF on an existing topic is rejected** (RF changes require partition reassignment, out of scope for the topic reconciler) and sets `status.phase=FAILED`. |
+| `config` | map[string]string | no | `{}` | Dynamic topic-level config (e.g. `retention.ms`, `cleanup.policy`). Declarative: any key present on the topic but absent from `spec.config` is reset to broker default on reconcile. |
+| `deletionPolicy` | `DELETE` \| `RETAIN` | no | `DELETE` | What happens to the Kafka topic when the CR is deleted. `RETAIN` leaves the topic in place. |
+
+### status
+
+| Field | Description |
+|-------|-------------|
+| `phase` | `RECONCILING`, `READY`, `SKIPPED` (peer cluster), or `FAILED`. |
+| `message` | Human-readable detail for the current phase. |
+| `observedGeneration` | `metadata.generation` last reconciled. |
+| `topicId` | Kafka-assigned topic UUID. |
+| `observedPartitions` | Partition count last observed on the broker. |
+| `observedReplicationFactor` | Replication factor last observed on the broker. |
+| `lastReconcileTime` | Timestamp of last reconciliation pass. |
+
+### Reconcile cadence
+
+The reconciler re-checks every 5 minutes to detect external drift (e.g. someone runs `kafka-configs.sh` directly). Edits to the CR fire reconciles immediately.
+
+### Configuration recipes
+
+#### Minimal (zero-config)
+
+```yaml
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaTopic
+metadata:
+  name: orders
+  namespace: kafka
+spec:
+  clusterRef: my-kafka
+  partitions: 3
+  replicationFactor: 3
+```
+
+`metadata.name` is also the topic name. Default `deletionPolicy: DELETE` means deleting the CR removes the Kafka topic.
+
+#### Retained data on CR deletion
+
+```yaml
+spec:
+  clusterRef: my-kafka
+  partitions: 6
+  replicationFactor: 3
+  config:
+    cleanup.policy: compact
+  deletionPolicy: RETAIN
+```
+
+`RETAIN` is appropriate for any topic whose data should survive a misclicked `kubectl delete`. The operator still removes its finalizer cleanly; only the Kafka topic stays.
+
+#### Topic name override
+
+```yaml
+metadata:
+  name: legacy-orders-v2
+spec:
+  clusterRef: my-kafka
+  topicName: Legacy_Orders_V2   # uppercase + underscore not allowed in metadata.name
+  partitions: 1
+  replicationFactor: 3
+```
+
+### AdminClient transport
+
+- When `KafkaCluster.spec.proxyMtls.enabled=false` (or absent), the reconciler connects plaintext to `<first-broker-pool>-headless.<ns>.svc.cluster.local:9092`.
+- When `proxyMtls.enabled=true`, the reconciler connects with **mTLS using a PEM Secret** named by convention `kafka-operator-client-tls` (overridable via `KafkaCluster.spec.proxyMtls.adminClientCertSecretRef`). The Secret must follow the cert-manager convention: keys `tls.crt`, `tls.key` (PKCS#8 PEM), `ca.crt`. The cert's CN must be in broker `super.users` — by convention reuse `proxyPrincipal` (default `kafka-proxy`), so no broker config change is needed.
+- If the Secret is missing when `proxyMtls=true`, the reconciler fails fast with a clear status message rather than blocking on an SSL-handshake-against-plaintext retry loop.
+
+### Known limitations (v1)
+
+- **Static primary cluster.** Failover requires reordering `spec.clusters` on the `KafkaCluster` CR. A future Kafka-consumer-group-based leader election will replace this without changing the CRD surface.
+- **RF changes not driven.** Reassign partitions externally (or use Cruise Control once integrated) and the next reconcile will pick up the new state.

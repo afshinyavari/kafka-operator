@@ -28,6 +28,8 @@ spec:
               value: "${KAFKA_NETWORKING_MCS_ENABLED}"
             - name: QUARKUS_OPERATOR_SDK_ACTIVATE_LEADER_ELECTION_FOR_PROFILES
               value: "prod"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=75.0 -XX:InitialRAMPercentage=50.0"
           readinessProbe:
             httpGet:
               path: /healthz/ready
@@ -43,7 +45,7 @@ spec:
           resources:
             requests:
               cpu: 200m
-              memory: 256Mi
+              memory: 512Mi
             limits:
               cpu: 500m
-              memory: 512Mi
+              memory: 1536Mi
