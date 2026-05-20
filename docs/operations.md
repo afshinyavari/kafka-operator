@@ -188,6 +188,76 @@ kubectl --context kind-kafka-a -n kafka exec "${BROKER_POD}" -- bash -c "
     --producer.config /tmp/client.properties"
 ```
 
+### Exposing the proxy externally
+
+`KafkaProxy.spec.externalAccess` switches the proxy Service from ClusterIP to a publicly
+reachable endpoint. Three modes are supported; each can be set independently on the same CR
+and they all coexist with MCS — every targeted K8s cluster gets its own external endpoint
+(the reconciler substitutes `${clusterId}` in `advertisedHostTemplate` per cluster).
+
+Kroxylicious uses two different gateway schemes depending on mode:
+
+| Mode | Gateway scheme | Listen ports | Client lookup |
+|---|---|---|---|
+| `LOADBALANCER` | `portIdentifiesNode` | `clientPort` + one per broker | Port |
+| `GATEWAY` / `INGRESS` | `sniHostIdentifiesNode` | `clientPort` only | TLS SNI hostname |
+
+#### LoadBalancer
+
+```yaml
+spec:
+  externalAccess:
+    type: LOADBALANCER
+    # advertisedHostTemplate: ""   # optional; leave empty to auto-resolve from Service status
+```
+
+The reconciler creates the Service as `type: LoadBalancer`, watches
+`Service.status.loadBalancer.ingress[0]` on each cluster, and rewrites the Kroxylicious
+`advertisedBrokerAddressPattern` to the resolved LB hostname/IP. While the IP is still pending
+the reconciler reschedules after 15s with a status hint.
+
+Clients connect to `<lb-host>:<clientPort>`; the LB forwards each per-broker port to the
+matching Kroxylicious listener.
+
+#### Gateway API
+
+```yaml
+spec:
+  externalAccess:
+    type: GATEWAY
+    advertisedHostTemplate: "${clusterId}.kafka.example.com"
+    gateway:
+      parentGatewayName: kafka-gateway
+      parentGatewayNamespace: gateway-system
+      # sectionName: tls-listener   # optional Listener name on the parent Gateway
+```
+
+The reconciler renders Kroxylicious with `sniHostIdentifiesNode` (single listen port,
+SNI-based dispatch) and creates a `gateway.networking.k8s.io/v1alpha2 TLSRoute` that lists one
+hostname per broker (`bootstrap.<host>`, `broker-0.<host>`, …) — all routed to the proxy
+Service. The Gateway must have a TLS listener with `mode: Passthrough` so it forwards the
+TLS handshake intact.
+
+DNS: each cluster's hostname must resolve to that cluster's Gateway address — typically
+`a.kafka.example.com → cluster-A gateway IP`, `b.kafka.example.com → cluster-B gateway IP`,
+and so on.
+
+#### Ingress (nginx-ingress ssl-passthrough)
+
+```yaml
+spec:
+  externalAccess:
+    type: INGRESS
+    advertisedHostTemplate: "${clusterId}.kafka.example.com"
+    ingress:
+      ingressClassName: nginx
+```
+
+Same SNI-passthrough idea but using a stock `networking.k8s.io/v1 Ingress` with
+`nginx.ingress.kubernetes.io/ssl-passthrough: "true"`. The ingress controller must run with
+`--enable-ssl-passthrough` enabled. Each broker host gets its own rule pointing at the proxy
+Service on `clientPort`.
+
 ---
 
 ## Schema Registry (Apicurio)

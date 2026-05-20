@@ -4,6 +4,7 @@ import io.fabric8.kubernetes.api.model.ObjectMeta;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import se.afshin.yavari.kafka.operator.crd.BrokerNodeIdRange;
+import se.afshin.yavari.kafka.operator.crd.ExternalAccessType;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyCustomFilter;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyFiltersConfig;
@@ -223,6 +224,70 @@ class KroxyliciousConfigBuilderTest {
         assertThat(cfg).contains(POOL_REF + "-headless." + NS + ".svc.cluster.local:9092");
         assertThat(cfg).contains("advertisedBrokerAddressPattern: " + PROXY_NAME + "." + NS + ".svc.cluster.local");
         assertThat(cfg).doesNotContain("clusterset.local");
+    }
+
+    @Test
+    void loadBalancer_externalHostInAdvertisedPattern() {
+        String cfg = builder.build(proxy(), 1, 0, NS, false,
+                ExternalAccessResolution.resolved(ExternalAccessType.LOADBALANCER, "192.0.2.10"));
+
+        assertThat(cfg).contains("advertisedBrokerAddressPattern: 192.0.2.10");
+        // Should not also fall back to the internal DNS pattern.
+        assertThat(cfg).doesNotContain("advertisedBrokerAddressPattern: " + PROXY_NAME + "." + NS + ".svc.cluster.local");
+    }
+
+    @Test
+    void loadBalancer_pendingFallsBackToInternalDns() {
+        // When the LB ingress isn't ready, the resolver returns pending and we render the
+        // internal DNS pattern; the reconciler reschedules and rewrites the ConfigMap next pass.
+        String cfg = builder.build(proxy(), 1, 0, NS, false,
+                ExternalAccessResolution.pending(ExternalAccessType.LOADBALANCER));
+
+        assertThat(cfg).contains("advertisedBrokerAddressPattern: " + PROXY_NAME + "." + NS + ".svc.cluster.local");
+    }
+
+    @Test
+    void gateway_emitsSniHostIdentifiesNode() {
+        String cfg = builder.build(proxy(), 2, 0, NS, false,
+                ExternalAccessResolution.resolved(ExternalAccessType.GATEWAY, "a.kafka.example.com"));
+
+        assertThat(cfg).contains("sniHostIdentifiesNode:");
+        assertThat(cfg).doesNotContain("portIdentifiesNode:");
+        assertThat(cfg).contains("bootstrapAddress: bootstrap.a.kafka.example.com:" + CLIENT_PORT);
+        assertThat(cfg).contains("advertisedBrokerAddressPattern: broker-$(nodeId).a.kafka.example.com");
+    }
+
+    @Test
+    void ingress_emitsSniHostIdentifiesNode() {
+        String cfg = builder.build(proxy(), 2, 0, NS, false,
+                ExternalAccessResolution.resolved(ExternalAccessType.INGRESS, "b.kafka.example.com"));
+
+        assertThat(cfg).contains("sniHostIdentifiesNode:");
+        assertThat(cfg).contains("bootstrapAddress: bootstrap.b.kafka.example.com");
+        assertThat(cfg).contains("advertisedBrokerAddressPattern: broker-$(nodeId).b.kafka.example.com");
+    }
+
+    @Test
+    void gateway_omitsNodeIdRangesBlock() {
+        // sniHostIdentifiesNode derives node IDs from SNI hostnames, so the strategy block
+        // accepts only bootstrapAddress + advertisedBrokerAddressPattern. The nodeIdRanges
+        // block must not appear under it (Kroxylicious 0.21 throws UnrecognizedPropertyException).
+        KafkaProxy p = proxy();
+        p.getSpec().setBrokerNodeIdRanges(List.of(range("brokers-a", 0, 1), range("brokers-b", 1000, 1000)));
+
+        String cfg = builder.build(p, 0, 0, NS, true,
+                ExternalAccessResolution.resolved(ExternalAccessType.GATEWAY, "a.kafka.example.com"));
+
+        assertThat(cfg).doesNotContain("nodeIdRanges");
+        assertThat(cfg).doesNotContain("- name: brokers-a");
+    }
+
+    @Test
+    void internalResolution_keepsLegacyAdvertisedPattern() {
+        // The new 6-arg build() with internal resolution matches the old 5-arg behaviour.
+        String cfg = builder.build(proxy(), 1, 0, NS, false, ExternalAccessResolution.internal());
+
+        assertThat(cfg).contains("advertisedBrokerAddressPattern: " + PROXY_NAME + "." + NS + ".svc.cluster.local");
     }
 
     // --- helpers ---

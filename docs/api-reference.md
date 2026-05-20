@@ -332,6 +332,35 @@ Deploys a Kroxylicious proxy in front of a broker pool. Clients connect to the p
 | `targetClusters` | []string | no | `[]` | List of cluster IDs (matching `KafkaCluster.spec.clusters[].id`) on which to deploy this proxy. Operators on other clusters set `status.phase=SKIPPED`. Used in MCS mode where the same CR is applied to every cluster. |
 | `filters` | KafkaProxyFiltersConfig | no | (defaults) | Built-in filter toggles (XML validation, schema-registry payload validation). |
 | `customFilters` | []KafkaProxyCustomFilter | no | `[]` | Arbitrary Kroxylicious filter entries appended verbatim to `config.yaml`. |
+| `externalAccess` | KafkaProxyExternalAccessConfig | no | — | When set, the Service is exposed via LoadBalancer, Gateway API TLSRoute, or Ingress (ssl-passthrough). See section below. |
+
+### spec.externalAccess — KafkaProxyExternalAccessConfig
+
+Exposes the proxy outside the K8s cluster. All three modes resolve a per-cluster advertised
+host (LoadBalancer auto-resolves from `Service.status.loadBalancer.ingress`; Gateway/Ingress
+substitute `${clusterId}` in `advertisedHostTemplate`). For Gateway/Ingress the proxy switches
+from `portIdentifiesNode` to `sniHostIdentifiesNode` and dispatches by TLS SNI hostname.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `type` | enum | **yes** | — | `LOADBALANCER`, `GATEWAY`, or `INGRESS`. |
+| `advertisedHostTemplate` | string | LB: no, GATEWAY/INGRESS: **yes** | — | Hostname the proxy advertises to clients. Supports `${clusterId}` substitution (lowercased). For LOADBALANCER, leave empty to auto-resolve from Service status. |
+| `gateway` | KafkaProxyGatewayConfig | when `type=GATEWAY` | — | Parent Gateway reference. |
+| `ingress` | KafkaProxyIngressConfig | no | — | Ingress controller hints (only used for `type=INGRESS`). |
+
+#### spec.externalAccess.gateway — KafkaProxyGatewayConfig
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `parentGatewayName` | string | **yes** | — | Name of the existing `gateway.networking.k8s.io` Gateway resource. |
+| `parentGatewayNamespace` | string | no | proxy namespace | Namespace of the parent Gateway. |
+| `sectionName` | string | no | — | Optional Listener `sectionName` on the parent Gateway. |
+
+#### spec.externalAccess.ingress — KafkaProxyIngressConfig
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `ingressClassName` | string | no | cluster default | Ingress class. The controller must support ssl-passthrough (e.g. nginx-ingress with `--enable-ssl-passthrough`). |
 
 ### spec.oidc — KafkaProxyOidcConfig
 

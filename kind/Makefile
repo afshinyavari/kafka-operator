@@ -15,7 +15,9 @@ MANIFESTS_DIR      := manifests
         logs-a logs-b logs-c build image \
         kroxy-image reload-kroxy-image apicurio-proxy-image reload-apicurio-proxy-image \
         kafka-ui-image reload-kafka-ui-image kafka-ui-setup ui-test \
-        keycloak-setup proxy-setup rbac-test apicurio-setup apicurio-rbac-test help
+        keycloak-setup proxy-setup rbac-test apicurio-setup apicurio-rbac-test \
+        setup-external proxy-external-lb-test proxy-external-gateway-test \
+        proxy-external-ingress-test help
 
 all: setup  ## Full setup: build → image → clusters → deploy
 
@@ -39,6 +41,18 @@ proxy-test:  ## Quick end-to-end produce/consume test through proxy (mTLS + OIDC
 
 mcs-proxy-test:  ## Cross-cluster proxy test: produce/consume from kafka-b via clusterset.local
 	@chmod +x mcs-proxy-test.sh && ./mcs-proxy-test.sh
+
+setup-external:  ## Install MetalLB + Envoy Gateway + nginx-ingress on all Kind clusters
+	@chmod +x setup-external.sh && ./setup-external.sh
+
+proxy-external-lb-test:  ## E2E: KafkaProxy externalAccess.type=LOADBALANCER (MetalLB)
+	@chmod +x proxy-external-lb-test.sh && ./proxy-external-lb-test.sh
+
+proxy-external-gateway-test:  ## E2E: KafkaProxy externalAccess.type=GATEWAY (Envoy Gateway TLSRoute)
+	@chmod +x proxy-external-gateway-test.sh && ./proxy-external-gateway-test.sh
+
+proxy-external-ingress-test:  ## E2E: KafkaProxy externalAccess.type=INGRESS (nginx ssl-passthrough)
+	@chmod +x proxy-external-ingress-test.sh && ./proxy-external-ingress-test.sh
 
 xml-filter-test:  ## End-to-end test of the XML validation filter (valid + invalid XML)
 	@chmod +x xml-filter-test.sh && ./xml-filter-test.sh

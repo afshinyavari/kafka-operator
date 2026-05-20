@@ -17,6 +17,7 @@ public class KafkaProxySpec {
     private List<KafkaProxyCustomFilter> customFilters = List.of();
     private List<BrokerNodeIdRange> brokerNodeIdRanges = List.of();
     private List<String> targetClusters = List.of();
+    private KafkaProxyExternalAccessConfig externalAccess;
 
     public String getClusterRef() { return clusterRef; }
     public void setClusterRef(String clusterRef) { this.clusterRef = clusterRef; }
@@ -59,4 +60,7 @@ public class KafkaProxySpec {
 
     public List<String> getTargetClusters() { return targetClusters; }
     public void setTargetClusters(List<String> targetClusters) { this.targetClusters = targetClusters; }
+
+    public KafkaProxyExternalAccessConfig getExternalAccess() { return externalAccess; }
+    public void setExternalAccess(KafkaProxyExternalAccessConfig externalAccess) { this.externalAccess = externalAccess; }
 }

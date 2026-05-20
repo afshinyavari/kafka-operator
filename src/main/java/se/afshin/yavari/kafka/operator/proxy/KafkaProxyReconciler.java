@@ -55,6 +55,9 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
     @Inject KroxyliciousConfigBuilder configBuilder;
     @Inject ProxyDeploymentBuilder deploymentBuilder;
     @Inject ProxyServiceBuilder serviceBuilder;
+    @Inject ExternalAccessResolver externalAccessResolver;
+    @Inject TLSRouteBuilder tlsRouteBuilder;
+    @Inject IngressBuilder ingressBuilder;
     @Inject CrossClusterRollCoordinator rollCoordinator;
     @Inject ProxyRollTracker rollTracker;
 
@@ -230,10 +233,23 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
             }
         }
 
+        // Resolve external access (LB ingress / Gateway / Ingress hostname). The Service must
+        // exist first for LB auto-resolve, but on the very first reconcile no Service is up yet —
+        // we apply the Service further down, then a subsequent reconcile picks up the LB ingress.
+        ExternalAccessResolution external;
+        try {
+            external = externalAccessResolver.resolve(proxy, localClusterId, namespace, client);
+        } catch (IllegalStateException e) {
+            status.setPhase(KafkaProxyStatus.Phase.FAILED);
+            status.setMessage(e.getMessage());
+            proxy.setStatus(status);
+            return UpdateControl.patchStatus(proxy);
+        }
+
         try {
 
             // Generate and apply config ConfigMap
-            String configYaml = configBuilder.build(proxy, brokerCount, brokerNodeIdBase, namespace, mcsEnabled);
+            String configYaml = configBuilder.build(proxy, brokerCount, brokerNodeIdBase, namespace, mcsEnabled, external);
             String configHash = sha256(configYaml);
             ConfigMap configMap = new ConfigMapBuilder()
                     .withNewMetadata()
@@ -277,12 +293,35 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
             client.apps().deployments().inNamespace(namespace).resource(deployment).serverSideApply();
 
             // Apply Service
-            Service service = serviceBuilder.build(proxy, brokerCount, namespace);
+            Service service = serviceBuilder.build(proxy, brokerCount, namespace, external);
             client.services().inNamespace(namespace).resource(service).serverSideApply();
 
             // Apply ServiceExport if MCS enabled
             if (mcsEnabled) {
                 applyServiceExport(name, namespace);
+            }
+
+            // Apply Gateway-API TLSRoute when externalAccess.type=GATEWAY. The hostnames advertise
+            // the proxy to clients via the Gateway, which does TLS SNI passthrough to the proxy's
+            // single listen port (sniHostIdentifiesNode dispatches to the right broker).
+            if (external.type() == se.afshin.yavari.kafka.operator.crd.ExternalAccessType.GATEWAY) {
+                applyTlsRoute(proxy, brokerCount, namespace, external);
+            }
+
+            // Apply Ingress when externalAccess.type=INGRESS. Ingress controller must support
+            // ssl-passthrough (nginx-ingress with --enable-ssl-passthrough).
+            if (external.type() == se.afshin.yavari.kafka.operator.crd.ExternalAccessType.INGRESS) {
+                applyIngress(proxy, brokerCount, namespace, external);
+            }
+
+            // If LB ingress not yet allocated, the config we just wrote uses the fallback
+            // internal DNS. Reschedule so the next pass picks up the real LB hostname/IP.
+            if (external.isPending()) {
+                LOG.infof("KafkaProxy %s/%s: LoadBalancer ingress not yet assigned — rescheduling",
+                        namespace, name);
+                status.setMessage("Waiting for LoadBalancer ingress address...");
+                proxy.setStatus(status);
+                return UpdateControl.patchStatus(proxy).rescheduleAfter(Duration.ofSeconds(15));
             }
 
             // Update status from Deployment readiness
@@ -324,6 +363,20 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
             client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
                     .inNamespace(namespace).withName(name).delete();
         }
+        // Best-effort TLSRoute cleanup. Mirrors the ServiceExport pattern: we don't know
+        // whether the cluster has the Gateway API CRDs installed, so swallow CRD-missing errors.
+        try {
+            client.genericKubernetesResources(TLSRouteBuilder.API_VERSION, TLSRouteBuilder.KIND)
+                    .inNamespace(namespace).withName(name).delete();
+        } catch (Exception e) {
+            LOG.warnf("TLSRoute cleanup skipped for %s/%s: %s", namespace, name, e.getMessage());
+        }
+        // Best-effort Ingress cleanup.
+        try {
+            client.network().v1().ingresses().inNamespace(namespace).withName(name).delete();
+        } catch (Exception e) {
+            LOG.warnf("Ingress cleanup skipped for %s/%s: %s", namespace, name, e.getMessage());
+        }
         return DeleteControl.defaultDelete();
     }
 
@@ -340,6 +393,31 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
                     .inNamespace(namespace).resource(export).serverSideApply();
         } catch (Exception e) {
             LOG.warnf("ServiceExport CRD not available — skipped for %s: %s", serviceName, e.getMessage());
+        }
+    }
+
+    private void applyTlsRoute(KafkaProxy proxy, int brokerCount, String namespace,
+                                ExternalAccessResolution external) {
+        try {
+            GenericKubernetesResource route = tlsRouteBuilder.build(proxy, brokerCount, namespace, external);
+            client.genericKubernetesResources(TLSRouteBuilder.API_VERSION, TLSRouteBuilder.KIND)
+                    .inNamespace(namespace).resource(route).serverSideApply();
+        } catch (Exception e) {
+            LOG.warnf("TLSRoute CRD not available — skipped for %s/%s: %s",
+                    namespace, proxy.getMetadata().getName(), e.getMessage());
+        }
+    }
+
+    private void applyIngress(KafkaProxy proxy, int brokerCount, String namespace,
+                               ExternalAccessResolution external) {
+        try {
+            io.fabric8.kubernetes.api.model.networking.v1.Ingress ingress =
+                    ingressBuilder.build(proxy, brokerCount, namespace, external);
+            client.network().v1().ingresses().inNamespace(namespace)
+                    .resource(ingress).serverSideApply();
+        } catch (Exception e) {
+            LOG.warnf("Ingress apply failed for %s/%s: %s",
+                    namespace, proxy.getMetadata().getName(), e.getMessage());
         }
     }
 

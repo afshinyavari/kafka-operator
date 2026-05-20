@@ -51,6 +51,9 @@ class KafkaProxyReconcilerTest {
     private KroxyliciousConfigBuilder configBuilder;
     private ProxyDeploymentBuilder deploymentBuilder;
     private ProxyServiceBuilder serviceBuilder;
+    private ExternalAccessResolver externalAccessResolver;
+    private TLSRouteBuilder tlsRouteBuilder;
+    private IngressBuilder ingressBuilder;
     private se.afshin.yavari.kafka.operator.rolling.CrossClusterRollCoordinator rollCoordinator;
     private Context<KafkaProxy> context;
     private KafkaProxyReconciler reconciler;
@@ -168,15 +171,28 @@ class KafkaProxyReconcilerTest {
         when(labeledPodOp.list()).thenReturn(emptyPodList);
 
         // Stubs
-        when(configBuilder.build(any(), anyInt(), anyInt(), anyString(), anyBoolean())).thenReturn("config: {}");
+        when(configBuilder.build(any(), anyInt(), anyInt(), anyString(), anyBoolean(),
+                any(ExternalAccessResolution.class))).thenReturn("config: {}");
         when(deploymentBuilder.build(any(), anyString(), anyString())).thenReturn(new Deployment());
-        when(serviceBuilder.build(any(), anyInt(), anyString())).thenReturn(new Service());
+        when(serviceBuilder.build(any(), anyInt(), anyString(), any(ExternalAccessResolution.class)))
+                .thenReturn(new Service());
+
+        // Default resolver: no externalAccess → internal.
+        externalAccessResolver = mock(ExternalAccessResolver.class);
+        when(externalAccessResolver.resolve(any(), anyString(), anyString(), any()))
+                .thenReturn(ExternalAccessResolution.internal());
+
+        tlsRouteBuilder = mock(TLSRouteBuilder.class);
+        ingressBuilder = mock(IngressBuilder.class);
 
         reconciler = new KafkaProxyReconciler();
         injectField(reconciler, "client", client);
         injectField(reconciler, "configBuilder", configBuilder);
         injectField(reconciler, "deploymentBuilder", deploymentBuilder);
         injectField(reconciler, "serviceBuilder", serviceBuilder);
+        injectField(reconciler, "externalAccessResolver", externalAccessResolver);
+        injectField(reconciler, "tlsRouteBuilder", tlsRouteBuilder);
+        injectField(reconciler, "ingressBuilder", ingressBuilder);
         injectField(reconciler, "rollCoordinator", rollCoordinator);
         injectField(reconciler, "rollTracker", new ProxyRollTracker());
         injectField(reconciler, "localClusterId", "A");
@@ -203,6 +219,71 @@ class KafkaProxyReconcilerTest {
         assertThat(proxy.getStatus().getPhase()).isEqualTo(KafkaProxyStatus.Phase.READY);
         verify(cmResource).createOrReplace();
         verify(depResource).serverSideApply();
+        verify(svcResource).serverSideApply();
+    }
+
+    @Test
+    void gatewayMode_invokesTlsRouteBuilder() {
+        // External access type=GATEWAY → reconciler calls TLSRouteBuilder. Missing CRD on the
+        // mock client is swallowed by applyTlsRoute (mirrors ServiceExport pattern), so the
+        // build invocation is the signal we verify.
+        when(externalAccessResolver.resolve(any(), anyString(), anyString(), any()))
+                .thenReturn(ExternalAccessResolution.resolved(
+                        se.afshin.yavari.kafka.operator.crd.ExternalAccessType.GATEWAY,
+                        "a.kafka.example.com"));
+        KafkaProxy proxy = proxy(null);
+
+        reconciler.reconcile(proxy, context);
+
+        verify(tlsRouteBuilder).build(any(), anyInt(), anyString(), any(ExternalAccessResolution.class));
+    }
+
+    @Test
+    void ingressMode_invokesIngressBuilder() {
+        when(externalAccessResolver.resolve(any(), anyString(), anyString(), any()))
+                .thenReturn(ExternalAccessResolution.resolved(
+                        se.afshin.yavari.kafka.operator.crd.ExternalAccessType.INGRESS,
+                        "a.kafka.example.com"));
+        KafkaProxy proxy = proxy(null);
+
+        reconciler.reconcile(proxy, context);
+
+        verify(ingressBuilder).build(any(), anyInt(), anyString(), any(ExternalAccessResolution.class));
+        verify(tlsRouteBuilder, org.mockito.Mockito.never())
+                .build(any(), anyInt(), anyString(), any(ExternalAccessResolution.class));
+    }
+
+    @Test
+    void loadBalancerMode_doesNotInvokeRouteOrIngressBuilders() {
+        // Only GATEWAY/INGRESS modes trigger the route/ingress paths.
+        when(externalAccessResolver.resolve(any(), anyString(), anyString(), any()))
+                .thenReturn(ExternalAccessResolution.resolved(
+                        se.afshin.yavari.kafka.operator.crd.ExternalAccessType.LOADBALANCER,
+                        "10.0.0.5"));
+        KafkaProxy proxy = proxy(null);
+
+        reconciler.reconcile(proxy, context);
+
+        verify(tlsRouteBuilder, org.mockito.Mockito.never())
+                .build(any(), anyInt(), anyString(), any(ExternalAccessResolution.class));
+        verify(ingressBuilder, org.mockito.Mockito.never())
+                .build(any(), anyInt(), anyString(), any(ExternalAccessResolution.class));
+    }
+
+    @Test
+    void loadBalancerPending_appliesServiceAndReschedules() {
+        // External access configured but LB ingress not yet allocated. We still apply the
+        // Service (so cloud-controller starts provisioning) and reschedule with a status hint.
+        when(externalAccessResolver.resolve(any(), anyString(), anyString(), any()))
+                .thenReturn(ExternalAccessResolution.pending(
+                        se.afshin.yavari.kafka.operator.crd.ExternalAccessType.LOADBALANCER));
+        KafkaProxy proxy = proxy(null);
+
+        UpdateControl<KafkaProxy> result = reconciler.reconcile(proxy, context);
+
+        assertThat(result.getScheduleDelay()).isPresent();
+        assertThat(proxy.getStatus().getMessage()).contains("LoadBalancer");
+        // Service must still be applied so the LB starts provisioning.
         verify(svcResource).serverSideApply();
     }
 
@@ -361,8 +442,8 @@ class KafkaProxyReconcilerTest {
                 .thenReturn(clusterWithRollOrder("A", "B"));
         // Existing has same image but a stale hash → still a roll.
         when(namedDep.get()).thenReturn(deploymentWithImage("kroxy-filters:dev", "stalehash00"));
-        when(configBuilder.build(any(), anyInt(), anyInt(), anyString(), anyBoolean()))
-                .thenReturn("config: {fresh}");
+        when(configBuilder.build(any(), anyInt(), anyInt(), anyString(), anyBoolean(),
+                any(ExternalAccessResolution.class))).thenReturn("config: {fresh}");
         when(rollCoordinator.isMyTurnToRoll(any(), anyString())).thenReturn(false);
         KafkaProxy proxy = proxy(null);
         proxy.getSpec().setImage("kroxy-filters:dev");

@@ -66,3 +66,26 @@ spec:
   #     type: com.example.MyFilterFactory
   #     config:
   #       someKey: someValue
+  # External access — uncomment ONE of:
+  #
+  # LoadBalancer (each cluster auto-resolves its LB IP from Service.status.loadBalancer.ingress):
+  #   externalAccess:
+  #     type: LOADBALANCER
+  #     # advertisedHostTemplate: ""    # optional override; supports ${clusterId}
+  #
+  # Gateway API (sniHostIdentifiesNode + TLSRoute SNI passthrough):
+  #   externalAccess:
+  #     type: GATEWAY
+  #     advertisedHostTemplate: "${clusterId}.kafka.example.com"
+  #     gateway:
+  #       parentGatewayName: kafka-gateway
+  #       parentGatewayNamespace: gateway-system
+  #       # sectionName: tls-listener   # optional Listener sectionName on the parent Gateway
+  #
+  # Ingress (sniHostIdentifiesNode + nginx-ingress ssl-passthrough). Controller must run with
+  # --enable-ssl-passthrough.
+  #   externalAccess:
+  #     type: INGRESS
+  #     advertisedHostTemplate: "${clusterId}.kafka.example.com"
+  #     ingress:
+  #       ingressClassName: nginx

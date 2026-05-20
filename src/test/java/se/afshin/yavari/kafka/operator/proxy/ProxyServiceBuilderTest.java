@@ -6,6 +6,7 @@ import io.fabric8.kubernetes.api.model.ServicePort;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import se.afshin.yavari.kafka.operator.crd.BrokerNodeIdRange;
+import se.afshin.yavari.kafka.operator.crd.ExternalAccessType;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxySpec;
 
@@ -70,6 +71,55 @@ class ProxyServiceBuilderTest {
         assertThat(svc.getMetadata().getNamespace()).isEqualTo(NS);
         // selector should be the ProxyDeploymentBuilder labels (app=PROXY_NAME)
         assertThat(svc.getSpec().getSelector()).containsValue(PROXY_NAME);
+    }
+
+    @Test
+    void defaultBuild_isClusterIp() {
+        Service svc = builder.build(proxy(null), 1, NS);
+
+        // No spec.type set → defaults to ClusterIP downstream.
+        assertThat(svc.getSpec().getType()).isNull();
+    }
+
+    @Test
+    void loadBalancer_setsServiceTypeAndKeepsPerBrokerPorts() {
+        Service svc = builder.build(proxy(null), 3, NS,
+                ExternalAccessResolution.resolved(ExternalAccessType.LOADBALANCER, "10.0.0.1"));
+
+        assertThat(svc.getSpec().getType()).isEqualTo("LoadBalancer");
+        // bootstrap + 3 broker ports (portIdentifiesNode mode kept for LB).
+        assertThat(svc.getSpec().getPorts()).hasSize(4);
+    }
+
+    @Test
+    void gateway_singlePort_clusterIp() {
+        Service svc = builder.build(proxy(null), 3, NS,
+                ExternalAccessResolution.resolved(ExternalAccessType.GATEWAY, "a.kafka.example.com"));
+
+        // sniHostIdentifiesNode → one bootstrap port only.
+        assertThat(svc.getSpec().getPorts()).hasSize(1);
+        assertThat(svc.getSpec().getPorts().get(0).getName()).isEqualTo("bootstrap");
+        // Gateway routes to the proxy via ClusterIP — no LoadBalancer/NodePort type.
+        assertThat(svc.getSpec().getType()).isNull();
+    }
+
+    @Test
+    void ingress_singlePort_clusterIp() {
+        Service svc = builder.build(proxy(null), 3, NS,
+                ExternalAccessResolution.resolved(ExternalAccessType.INGRESS, "a.kafka.example.com"));
+
+        assertThat(svc.getSpec().getPorts()).hasSize(1);
+        assertThat(svc.getSpec().getType()).isNull();
+    }
+
+    @Test
+    void pendingLb_stillSetsLoadBalancerType() {
+        // Even before the LB ingress is allocated, we want Type=LoadBalancer so the cloud
+        // controller starts provisioning. The reconciler reschedules until the ingress shows up.
+        Service svc = builder.build(proxy(null), 1, NS,
+                ExternalAccessResolution.pending(ExternalAccessType.LOADBALANCER));
+
+        assertThat(svc.getSpec().getType()).isEqualTo("LoadBalancer");
     }
 
     // --- helpers ---

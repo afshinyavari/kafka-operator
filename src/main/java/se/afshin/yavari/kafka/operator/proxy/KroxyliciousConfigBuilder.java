@@ -17,6 +17,12 @@ public class KroxyliciousConfigBuilder {
 
     public String build(KafkaProxy proxy, int brokerCount, int brokerNodeIdBase,
                         String namespace, boolean mcsEnabled) {
+        return build(proxy, brokerCount, brokerNodeIdBase, namespace, mcsEnabled,
+                ExternalAccessResolution.internal());
+    }
+
+    public String build(KafkaProxy proxy, int brokerCount, int brokerNodeIdBase,
+                        String namespace, boolean mcsEnabled, ExternalAccessResolution external) {
         KafkaProxySpec spec = proxy.getSpec();
         String dnsSuffix = mcsEnabled ? "clusterset.local" : "cluster.local";
         String poolHeadless = spec.getPoolRef() + "-headless." + namespace + ".svc." + dnsSuffix;
@@ -38,21 +44,39 @@ public class KroxyliciousConfigBuilder {
         cfg.append("    gateways:\n");
         cfg.append("      - name: gateway\n");
         String serviceName = proxy.getMetadata().getName();
-        cfg.append("        portIdentifiesNode:\n");
-        cfg.append("          bootstrapAddress: 0.0.0.0:").append(spec.getClientPort()).append("\n");
-        cfg.append("          advertisedBrokerAddressPattern: ").append(serviceName).append(".").append(namespace).append(".svc.").append(dnsSuffix).append("\n");
-        cfg.append("          nodeIdRanges:\n");
-        List<BrokerNodeIdRange> ranges = spec.getBrokerNodeIdRanges();
-        if (ranges != null && !ranges.isEmpty()) {
-            for (BrokerNodeIdRange r : ranges) {
-                cfg.append("            - name: ").append(r.getName()).append("\n");
-                cfg.append("              start: ").append(r.getStart()).append("\n");
-                cfg.append("              end: ").append(r.getEnd()).append("\n");
-            }
+        // Gateway API and Ingress with SSL passthrough use a single external port and dispatch
+        // to the right broker by TLS SNI hostname. That requires Kroxylicious' sniHostIdentifiesNode
+        // mode (single listen port + per-broker hostnames via $(nodeId)). LoadBalancer and the
+        // default ClusterIP keep portIdentifiesNode (one port per broker).
+        boolean sniMode = external.type() == se.afshin.yavari.kafka.operator.crd.ExternalAccessType.GATEWAY
+                || external.type() == se.afshin.yavari.kafka.operator.crd.ExternalAccessType.INGRESS;
+        String advertisedHost = (external.advertisedHost() != null)
+                ? external.advertisedHost()
+                : serviceName + "." + namespace + ".svc." + dnsSuffix;
+        if (sniMode) {
+            // Kroxylicious 0.21 SniHostIdentifiesNodeIdentificationStrategy accepts only
+            // bootstrapAddress + advertisedBrokerAddressPattern. Node IDs are derived from the
+            // SNI hostname matching the pattern (e.g. broker-7.<host> → nodeId=7).
+            cfg.append("        sniHostIdentifiesNode:\n");
+            cfg.append("          bootstrapAddress: bootstrap.").append(advertisedHost).append(":").append(spec.getClientPort()).append("\n");
+            cfg.append("          advertisedBrokerAddressPattern: broker-$(nodeId).").append(advertisedHost).append("\n");
         } else {
-            cfg.append("            - name: brokers\n");
-            cfg.append("              start: ").append(brokerNodeIdBase).append("\n");
-            cfg.append("              end: ").append(brokerNodeIdBase + brokerCount - 1).append("\n");
+            cfg.append("        portIdentifiesNode:\n");
+            cfg.append("          bootstrapAddress: 0.0.0.0:").append(spec.getClientPort()).append("\n");
+            cfg.append("          advertisedBrokerAddressPattern: ").append(advertisedHost).append("\n");
+            cfg.append("          nodeIdRanges:\n");
+            List<BrokerNodeIdRange> ranges = spec.getBrokerNodeIdRanges();
+            if (ranges != null && !ranges.isEmpty()) {
+                for (BrokerNodeIdRange r : ranges) {
+                    cfg.append("            - name: ").append(r.getName()).append("\n");
+                    cfg.append("              start: ").append(r.getStart()).append("\n");
+                    cfg.append("              end: ").append(r.getEnd()).append("\n");
+                }
+            } else {
+                cfg.append("            - name: brokers\n");
+                cfg.append("              start: ").append(brokerNodeIdBase).append("\n");
+                cfg.append("              end: ").append(brokerNodeIdBase + brokerCount - 1).append("\n");
+            }
         }
 
         appendGatewayTls(cfg);
