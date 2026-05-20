@@ -546,7 +546,6 @@ echo "  make -C kind proxy-test               # quick mTLS + OIDC produce/consum
 echo "  make -C kind rbac-test                # RBAC allow/deny test via mTLS + OIDC"
 echo "  make -C kind apicurio-rbac-test       # Apicurio rbac-proxy HTTP authz test"
 echo "  make -C kind xml-filter-test          # XML validation filter accept/reject test"
-echo "  make -C kind schema-validation-test   # Apicurio schema-registry filter accept/reject test"
 echo "  make -C kind teardown                 # destroy all clusters"
 echo "  make -C kind reload-image  # hot-swap operator only (~30s, no cluster rebuild)"
 echo "  FORCE_BUILD=1 make -C kind mcs-setup  # force rebuild even if image exists"
