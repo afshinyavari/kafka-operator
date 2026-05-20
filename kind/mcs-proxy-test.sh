@@ -124,7 +124,7 @@ kubectl --context "${ADMIN_CTX}" -n "${NS}" exec "${ADMIN_BROKER}" -- bash -c "
     --bootstrap-server 'brokers-a-headless.${NS}.svc.clusterset.local:9092' \
     --create --if-not-exists \
     --topic '${TOPIC}' \
-    --partitions 1 --replication-factor 1 \
+    --partitions 1 --replication-factor 3 \
     --command-config /tmp/admin.properties 2>/dev/null
 " 2>/dev/null
 

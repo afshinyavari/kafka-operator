@@ -20,10 +20,16 @@ spec:
   config:
     log.retention.hours: "168"
     num.partitions: "1"
-    offsets.topic.replication.factor: "1"
-    transaction.state.log.replication.factor: "1"
-    transaction.state.log.min.isr: "1"
-    default.replication.factor: "1"
+    # RF=3 and min.insync.replicas=2 mean every produce with acks=all has to be
+    # acknowledged by at least one *other* broker — i.e. exercises the
+    # Submariner cross-cluster network on every write. Requires all 3 brokers
+    # (one per K8s cluster) READY before topic creation; a single broker
+    # outage will stall writes (by design — that's what we want to detect).
+    offsets.topic.replication.factor: "3"
+    transaction.state.log.replication.factor: "3"
+    transaction.state.log.min.isr: "2"
+    default.replication.factor: "3"
+    min.insync.replicas: "2"
   # Cross-cluster proxy mTLS. The operator does NOT sign certs; it just expects
   # pre-provisioned secrets to exist (cert-manager in production, mcs-setup.sh in
   # tests). Each broker pool reads "{poolName}-broker-tls" (overridable per pool

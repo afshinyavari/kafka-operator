@@ -89,9 +89,9 @@ kubectl --context "${CTX}" -n "${NS}" exec "${BROKER_POD}" -- bash -c "
     'ssl.endpoint.identification.algorithm=' > /tmp/admin.properties
   export KAFKA_HEAP_OPTS='-Xmx64m -Xms32m'
   /opt/kafka/bin/kafka-topics.sh --bootstrap-server '${DIRECT_BOOTSTRAP}' --create --if-not-exists \
-    --topic '${TOPIC}' --partitions 1 --replication-factor 1 --command-config /tmp/admin.properties 2>/dev/null
+    --topic '${TOPIC}' --partitions 1 --replication-factor 3 --command-config /tmp/admin.properties 2>/dev/null
   /opt/kafka/bin/kafka-topics.sh --bootstrap-server '${DIRECT_BOOTSTRAP}' --create --if-not-exists \
-    --topic '${SCHEMA_TOPIC}' --partitions 1 --replication-factor 1 \
+    --topic '${SCHEMA_TOPIC}' --partitions 1 --replication-factor 3 \
     --config cleanup.policy=compact --command-config /tmp/admin.properties 2>/dev/null
 " 2>/dev/null
 

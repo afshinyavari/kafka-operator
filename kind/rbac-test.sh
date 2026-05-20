@@ -77,7 +77,7 @@ for topic in orders orders-dlq invoices invoices-dlq; do
       --bootstrap-server '${DIRECT_BOOTSTRAP}' \
       --create --if-not-exists \
       --topic '${topic}' \
-      --partitions 1 --replication-factor 1 \
+      --partitions 1 --replication-factor 3 \
       --command-config /tmp/admin.properties 2>/dev/null
   " 2>/dev/null \
     && echo "  topic ${topic}: ready" || echo "  topic ${topic}: already exists"
