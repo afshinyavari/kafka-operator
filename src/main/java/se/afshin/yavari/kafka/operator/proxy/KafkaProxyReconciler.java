@@ -118,22 +118,6 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
         int brokerCount = pool.getSpec().getReplicas();
         int brokerNodeIdBase = resolveNodeIdBase(pool.getMetadata().getName(), namespace);
 
-        // Resolve Apicurio registry URL if referenced
-        String apicurioRegistryUrl = null;
-        String apicurioRef = proxy.getSpec().getApicurioRef();
-        if (apicurioRef != null) {
-            ApicurioRegistry apicurio = client.resources(ApicurioRegistry.class)
-                    .inNamespace(namespace).withName(apicurioRef).get();
-            if (apicurio != null && apicurio.getStatus() != null) {
-                apicurioRegistryUrl = apicurio.getStatus().getRegistryUrl();
-            }
-            if (apicurioRegistryUrl == null) {
-                status.setMessage("Waiting for ApicurioRegistry '" + apicurioRef + "' to be ready");
-                proxy.setStatus(status);
-                return UpdateControl.patchStatus(proxy).rescheduleAfter(Duration.ofSeconds(10));
-            }
-        }
-
         // Resolve the parent KafkaCluster to confirm spec.proxyMtls.enabled. The operator does
         // NOT sign certs; it only mounts pre-provisioned secrets (cert-manager / mcs-setup).
         KafkaCluster cluster = client.resources(KafkaCluster.class)
@@ -171,7 +155,7 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
         try {
 
             // Generate and apply config ConfigMap
-            String configYaml = configBuilder.build(proxy, brokerCount, brokerNodeIdBase, apicurioRegistryUrl, namespace);
+            String configYaml = configBuilder.build(proxy, brokerCount, brokerNodeIdBase, namespace);
             ConfigMap configMap = new ConfigMapBuilder()
                     .withNewMetadata()
                         .withName(name + "-config")

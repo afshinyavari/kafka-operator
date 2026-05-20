@@ -8,7 +8,6 @@ import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyCustomFilter;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyFiltersConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyOidcConfig;
-import se.afshin.yavari.kafka.operator.crd.KafkaProxySchemaRegistryConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxySpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyXmlFilterConfig;
 
@@ -34,7 +33,7 @@ class KroxyliciousConfigBuilderTest {
 
     @Test
     void minimalConfig_noTls_noFilters() {
-        String cfg = builder.build(proxy(), 3, 0, null, NS);
+        String cfg = builder.build(proxy(), 3, 0, NS);
 
         assertThat(cfg).contains("virtualClusters:");
         assertThat(cfg).contains("bootstrapAddress: 0.0.0.0:" + CLIENT_PORT);
@@ -51,7 +50,7 @@ class KroxyliciousConfigBuilderTest {
         BrokerNodeIdRange r2 = range("cluster-b", 1000, 1002);
         p.getSpec().setBrokerNodeIdRanges(List.of(r1, r2));
 
-        String cfg = builder.build(p, 3, 0, null, NS);
+        String cfg = builder.build(p, 3, 0, NS);
 
         assertThat(cfg).contains("- name: cluster-a");
         assertThat(cfg).contains("start: 0");
@@ -63,7 +62,7 @@ class KroxyliciousConfigBuilderTest {
 
     @Test
     void noBrokerNodeIdRanges_usesBrokerCount() {
-        String cfg = builder.build(proxy(), 3, 500, null, NS);
+        String cfg = builder.build(proxy(), 3, 500, NS);
 
         assertThat(cfg).contains("start: 500");
         assertThat(cfg).contains("end: 502");  // 500 + 3 - 1
@@ -74,7 +73,7 @@ class KroxyliciousConfigBuilderTest {
         KafkaProxy p = proxy();
         p.getSpec().setOidc(oidc("https://keycloak/certs", null, null));
 
-        String cfg = builder.build(p, 1, 0, null, NS);
+        String cfg = builder.build(p, 1, 0, NS);
 
         assertThat(cfg).contains("jwt-groups");
         assertThat(cfg).contains("oauth-bearer-validation");
@@ -94,7 +93,7 @@ class KroxyliciousConfigBuilderTest {
         KafkaProxy p = proxy();
         p.getSpec().setOidc(oidc("https://keycloak/certs", null, null));
 
-        String cfg = builder.build(p, 1, 0, null, NS);
+        String cfg = builder.build(p, 1, 0, NS);
 
         assertThat(cfg).doesNotContain("expectedIssuer:");
         assertThat(cfg).doesNotContain("expectedAudience:");
@@ -105,7 +104,7 @@ class KroxyliciousConfigBuilderTest {
         KafkaProxy p = proxy();
         p.getSpec().setOidc(oidc("https://keycloak/certs", "https://issuer", "my-audience"));
 
-        String cfg = builder.build(p, 1, 0, null, NS);
+        String cfg = builder.build(p, 1, 0, NS);
 
         assertThat(cfg).contains("expectedIssuer: https://issuer");
         assertThat(cfg).contains("expectedAudience: my-audience");
@@ -116,7 +115,7 @@ class KroxyliciousConfigBuilderTest {
         KafkaProxy p = proxy();
         p.getSpec().setRbacRef("my-rbac");
 
-        String cfg = builder.build(p, 1, 0, null, NS);
+        String cfg = builder.build(p, 1, 0, NS);
 
         assertThat(cfg).contains("- name: authorization");
         assertThat(cfg).contains("GroupAwareAuthorizerService");
@@ -131,41 +130,12 @@ class KroxyliciousConfigBuilderTest {
         xmlCfg.setSchemaTopic("xml-schemas");
         p.getSpec().getFilters().setXmlValidation(xmlCfg);
 
-        String cfg = builder.build(p, 1, 0, null, NS);
+        String cfg = builder.build(p, 1, 0, NS);
 
         assertThat(cfg).contains("- name: xml-validation");
         assertThat(cfg).contains("schemaTopic: xml-schemas");
         assertThat(cfg).contains(POOL_REF + "-headless." + NS + ".svc.cluster.local:9092");
         assertThat(cfg).contains("- xml-validation");
-    }
-
-    @Test
-    void schemaRegistry_addsRecordValidationFilter() {
-        KafkaProxy p = proxy();
-        KafkaProxySchemaRegistryConfig srCfg = new KafkaProxySchemaRegistryConfig();
-        srCfg.setEnabled(true);
-        srCfg.setTopics(List.of("orders", "events"));
-        p.getSpec().getFilters().setSchemaRegistry(srCfg);
-
-        String cfg = builder.build(p, 1, 0, "http://apicurio:8080", NS);
-
-        assertThat(cfg).contains("- name: record-validation");
-        assertThat(cfg).contains("http://apicurio:8080/apis/registry/v2");
-        assertThat(cfg).contains("- orders");
-        assertThat(cfg).contains("- events");
-        assertThat(cfg).contains("- record-validation");
-    }
-
-    @Test
-    void schemaRegistry_nullApicurioUrl_filterNotAdded() {
-        KafkaProxy p = proxy();
-        KafkaProxySchemaRegistryConfig srCfg = new KafkaProxySchemaRegistryConfig();
-        srCfg.setEnabled(true);
-        p.getSpec().getFilters().setSchemaRegistry(srCfg);
-
-        String cfg = builder.build(p, 1, 0, null, NS);
-
-        assertThat(cfg).doesNotContain("record-validation");
     }
 
     @Test
@@ -177,7 +147,7 @@ class KroxyliciousConfigBuilderTest {
         custom.setConfig(Map.of("key1", "val1"));
         p.getSpec().setCustomFilters(List.of(custom));
 
-        String cfg = builder.build(p, 1, 0, null, NS);
+        String cfg = builder.build(p, 1, 0, NS);
 
         assertThat(cfg).contains("- name: my-filter");
         assertThat(cfg).contains("type: MyFilterFactory");
@@ -194,12 +164,8 @@ class KroxyliciousConfigBuilderTest {
         xmlCfg.setEnabled(true);
         xmlCfg.setSchemaTopic("schemas");
         p.getSpec().getFilters().setXmlValidation(xmlCfg);
-        KafkaProxySchemaRegistryConfig srCfg = new KafkaProxySchemaRegistryConfig();
-        srCfg.setEnabled(true);
-        srCfg.setTopics(List.of("T"));
-        p.getSpec().getFilters().setSchemaRegistry(srCfg);
 
-        String cfg = builder.build(p, 1, 0, "http://apicurio", NS);
+        String cfg = builder.build(p, 1, 0, NS);
 
         // Extract defaultFilters section
         int defaultFiltersIdx = cfg.indexOf("\ndefaultFilters:");
@@ -211,13 +177,11 @@ class KroxyliciousConfigBuilderTest {
         int sasl = defaultSection.indexOf("- sasl-handshake-synthesizer");
         int auth = defaultSection.indexOf("- authorization");
         int xml = defaultSection.indexOf("- xml-validation");
-        int rec = defaultSection.indexOf("- record-validation");
 
         assertThat(oauth).isLessThan(jwt);
         assertThat(jwt).isLessThan(sasl);
         assertThat(sasl).isLessThan(auth);
         assertThat(auth).isLessThan(xml);
-        assertThat(xml).isLessThan(rec);
     }
 
     @Test
@@ -226,7 +190,7 @@ class KroxyliciousConfigBuilderTest {
         // and gateway (client→proxy) mTLS at /etc/proxy/server-tls — paths are fixed by
         // ProxyDeploymentBuilder's volume mounts, regardless of any KafkaProxyTlsConfig
         // override (the override only changes the SECRET behind those mounts).
-        String cfg = builder.build(proxy(), 1, 0, null, NS);
+        String cfg = builder.build(proxy(), 1, 0, NS);
 
         // Target (upstream to brokers)
         assertThat(cfg).contains("/etc/proxy/kafka-tls/tls.key");

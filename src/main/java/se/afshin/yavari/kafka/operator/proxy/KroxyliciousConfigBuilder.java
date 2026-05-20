@@ -16,7 +16,7 @@ import java.util.Map;
 public class KroxyliciousConfigBuilder {
 
     public String build(KafkaProxy proxy, int brokerCount, int brokerNodeIdBase,
-                        String apicurioRegistryUrl, String namespace) {
+                        String namespace) {
         KafkaProxySpec spec = proxy.getSpec();
         String poolHeadless = spec.getPoolRef() + "-headless." + namespace + ".svc.cluster.local";
 
@@ -91,12 +91,6 @@ public class KroxyliciousConfigBuilder {
         if (filters != null && filters.getXmlValidation() != null && filters.getXmlValidation().isEnabled()) {
             appendXmlValidationFilter(cfg, filters, poolHeadless);
             activeFilters.add("xml-validation");
-        }
-
-        if (filters != null && filters.getSchemaRegistry() != null && filters.getSchemaRegistry().isEnabled()
-                && apicurioRegistryUrl != null) {
-            appendRecordValidationFilter(cfg, filters, apicurioRegistryUrl);
-            activeFilters.add("record-validation");
         }
 
         for (KafkaProxyCustomFilter custom : spec.getCustomFilters()) {
@@ -184,22 +178,6 @@ public class KroxyliciousConfigBuilder {
         cfg.append("      sslKeystoreCertPath: /etc/proxy/kafka-tls/tls.crt\n");
         cfg.append("      sslKeystoreKeyPath: /etc/proxy/kafka-tls/tls.key\n");
         cfg.append("      sslTruststoreCertPath: /etc/proxy/kafka-tls/ca.crt\n");
-    }
-
-    private void appendRecordValidationFilter(StringBuilder cfg, KafkaProxyFiltersConfig filters,
-                                               String registryUrl) {
-        cfg.append("  - name: record-validation\n");
-        cfg.append("    type: RecordValidation\n");
-        cfg.append("    config:\n");
-        cfg.append("      rules:\n");
-        cfg.append("        - topicNames:\n");
-        filters.getSchemaRegistry().getTopics()
-                .forEach(t -> cfg.append("            - ").append(t).append("\n"));
-        cfg.append("          valueRule:\n");
-        cfg.append("            schemaValidationConfig:\n");
-        cfg.append("              apicurioRegistryUrl: ").append(registryUrl).append("/apis/registry/v2\n");
-        cfg.append("              schemaType: ").append(filters.getSchemaRegistry().getSchemaType()).append("\n");
-        cfg.append("              wireFormatVersion: V3\n");
     }
 
     private void appendCustomFilter(StringBuilder cfg, KafkaProxyCustomFilter custom) {

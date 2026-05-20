@@ -19,9 +19,6 @@ import io.javaoperatorsdk.operator.api.reconciler.Context;
 import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.mockito.ArgumentCaptor;
-import se.afshin.yavari.kafka.operator.crd.ApicurioRegistry;
-import se.afshin.yavari.kafka.operator.crd.ApicurioRegistryStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
@@ -39,7 +36,6 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -49,7 +45,6 @@ class KafkaProxyReconcilerTest {
     private static final String NS = "kafka";
     private static final String PROXY_NAME = "my-proxy";
     private static final String POOL_NAME = "brokers-a";
-    private static final String APICURIO_NAME = "my-apicurio";
 
     private KubernetesClient client;
     private KroxyliciousConfigBuilder configBuilder;
@@ -62,10 +57,6 @@ class KafkaProxyReconcilerTest {
     private MixedOperation poolOp;
     private NonNamespaceOperation nsPoolOp;
     private Resource namedPoolOp;
-
-    private MixedOperation apicurioOp;
-    private NonNamespaceOperation nsApicurioOp;
-    private Resource namedApicurioOp;
 
     private MixedOperation cmOp;
     private NonNamespaceOperation nsCmOp;
@@ -121,15 +112,6 @@ class KafkaProxyReconcilerTest {
         when(nsSecretsOp.withName(anyString())).thenReturn(secretResource);
         when(secretResource.get()).thenReturn(new io.fabric8.kubernetes.api.model.Secret());
 
-        // ApicurioRegistry chain
-        apicurioOp = mock(MixedOperation.class);
-        nsApicurioOp = mock(NonNamespaceOperation.class);
-        namedApicurioOp = mock(Resource.class);
-        when(client.resources(ApicurioRegistry.class)).thenReturn(apicurioOp);
-        when(apicurioOp.inNamespace(NS)).thenReturn(nsApicurioOp);
-        when(nsApicurioOp.withName(APICURIO_NAME)).thenReturn(namedApicurioOp);
-        when(namedApicurioOp.get()).thenReturn(null);
-
         // ConfigMap chain
         cmOp = mock(MixedOperation.class);
         nsCmOp = mock(NonNamespaceOperation.class);
@@ -180,7 +162,7 @@ class KafkaProxyReconcilerTest {
         when(labeledPodOp.list()).thenReturn(emptyPodList);
 
         // Stubs
-        when(configBuilder.build(any(), anyInt(), anyInt(), any(), anyString())).thenReturn("config: {}");
+        when(configBuilder.build(any(), anyInt(), anyInt(), anyString())).thenReturn("config: {}");
         when(deploymentBuilder.build(any(), anyString())).thenReturn(new Deployment());
         when(serviceBuilder.build(any(), anyInt(), anyString())).thenReturn(new Service());
 
@@ -205,19 +187,6 @@ class KafkaProxyReconcilerTest {
     }
 
     @Test
-    void apicurioRefSet_registryNotReady_reschedules() {
-        KafkaProxy proxy = proxy(APICURIO_NAME);
-        // namedApicurioOp.get() returns null (not found) or no URL
-
-        UpdateControl<KafkaProxy> result = reconciler.reconcile(proxy, context);
-
-        assertThat(proxy.getStatus().getPhase()).isEqualTo(KafkaProxyStatus.Phase.RECONCILING);
-        assertThat(proxy.getStatus().getMessage()).contains(APICURIO_NAME);
-        assertThat(result.getScheduleDelay()).isPresent();
-        verify(configBuilder, never()).build(any(), anyInt(), anyInt(), any(), anyString());
-    }
-
-    @Test
     void happyPath_noApicurio_setsReady() {
         KafkaProxy proxy = proxy(null);
 
@@ -227,22 +196,6 @@ class KafkaProxyReconcilerTest {
         verify(cmResource).createOrReplace();
         verify(depResource).serverSideApply();
         verify(svcResource).serverSideApply();
-    }
-
-    @Test
-    void happyPath_withApicurio_passesUrlToConfigBuilder() {
-        ApicurioRegistry apicurio = new ApicurioRegistry();
-        ApicurioRegistryStatus aprStatus = new ApicurioRegistryStatus();
-        aprStatus.setRegistryUrl("http://apicurio:8080");
-        apicurio.setStatus(aprStatus);
-        when(namedApicurioOp.get()).thenReturn(apicurio);
-
-        KafkaProxy proxy = proxy(APICURIO_NAME);
-        reconciler.reconcile(proxy, context);
-
-        ArgumentCaptor<String> urlCaptor = ArgumentCaptor.forClass(String.class);
-        verify(configBuilder).build(any(), anyInt(), anyInt(), urlCaptor.capture(), anyString());
-        assertThat(urlCaptor.getValue()).isEqualTo("http://apicurio:8080");
     }
 
     @Test

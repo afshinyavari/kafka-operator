@@ -6,7 +6,11 @@ export PATH="${HOME}/.local/bin:${PATH}"
 
 CTX="kind-kafka-a"
 NS="kafka"
-REGISTRY_DIRECT="http://apicurio-registry.${NS}.svc.cluster.local:8080"
+# The registry has no in-cluster Service — only the rbac-proxy is exposed. For the pre-flight
+# (which seeds artifacts directly into the registry, bypassing authz) we port-forward the
+# registry container locally and talk to it from the host.
+REGISTRY_LOCAL_PORT="18080"
+REGISTRY_DIRECT="http://127.0.0.1:${REGISTRY_LOCAL_PORT}"
 REGISTRY_PROXY="http://apicurio-rbac-proxy.${NS}.svc.cluster.local:8082"
 KEYCLOAK_TOKEN_URL="http://keycloak.${NS}.svc.cluster.local:8080/realms/demo/protocol/openid-connect/token"
 CLIENT_ID="rbac-proxy"
@@ -28,16 +32,25 @@ SCHEMA='{"type":"object","properties":{"id":{"type":"string"}}}'
 
 echo ""
 echo "══ Pre-flight: register artifacts directly on registry (bypasses RBAC proxy) ══"
+kubectl --context "${CTX}" -n "${NS}" port-forward deploy/apicurio-registry \
+  "${REGISTRY_LOCAL_PORT}:8080" > /dev/null 2>&1 &
+PF_PID=$!
+trap 'kill ${PF_PID} 2>/dev/null || true' EXIT
+# Wait up to 6s for the local port to start accepting connections
+for _ in $(seq 1 30); do
+  curl -sf -o /dev/null "${REGISTRY_DIRECT}/health/ready" 2>/dev/null && break
+  sleep 0.2
+done
 for artifact in orders invoices; do
-  kubectl --context "${CTX}" -n "${NS}" exec "${BROKER_POD}" -- bash -c "
-    curl -sf -X POST '${REGISTRY_DIRECT}/apis/registry/v2/groups/default/artifacts' \
-      -H 'X-Registry-ArtifactId: ${artifact}' \
-      -H 'X-Registry-ArtifactType: JSON' \
-      -H 'Content-Type: application/json' \
-      -d '${SCHEMA}' > /dev/null 2>&1 || true
-  "
+  curl -sf -X POST "${REGISTRY_DIRECT}/apis/registry/v2/groups/default/artifacts" \
+    -H "X-Registry-ArtifactId: ${artifact}" \
+    -H 'X-Registry-ArtifactType: JSON' \
+    -H 'Content-Type: application/json' \
+    -d "${SCHEMA}" > /dev/null 2>&1 || true
   echo "  artifact '${artifact}': ready"
 done
+kill ${PF_PID} 2>/dev/null || true
+trap - EXIT
 
 # Fetch JWT for user and call RBAC proxy.
 # method=GET → READ test; method=POST → WRITE test (posts a new version).

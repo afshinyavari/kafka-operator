@@ -1,8 +1,10 @@
 package se.afshin.yavari.kafka.operator.apicurio;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
+import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.Service;
+import io.fabric8.kubernetes.api.model.Volume;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
 import io.fabric8.kubernetes.api.model.apps.DeploymentStatus;
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -24,6 +26,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -36,9 +39,8 @@ class ApicurioRegistryReconcilerTest {
     private static final String RBAC_REF = "my-rbac";
 
     private KubernetesClient client;
-    private ApicurioDeploymentBuilder registryDeploymentBuilder;
-    private ApicurioServiceBuilder registryServiceBuilder;
-    private ApicurioProxyDeploymentBuilder proxyDeploymentBuilder;
+    private ApicurioDeploymentBuilder deploymentBuilder;
+    private ApicurioProxyContainerBuilder proxyContainerBuilder;
     private ApicurioProxyServiceBuilder proxyServiceBuilder;
     private Context<ApicurioRegistry> context;
     private ApicurioRegistryReconciler reconciler;
@@ -61,9 +63,8 @@ class ApicurioRegistryReconcilerTest {
 
     @BeforeEach
     void setup() throws Exception {
-        registryDeploymentBuilder = mock(ApicurioDeploymentBuilder.class);
-        registryServiceBuilder = mock(ApicurioServiceBuilder.class);
-        proxyDeploymentBuilder = mock(ApicurioProxyDeploymentBuilder.class);
+        deploymentBuilder = mock(ApicurioDeploymentBuilder.class);
+        proxyContainerBuilder = mock(ApicurioProxyContainerBuilder.class);
         proxyServiceBuilder = mock(ApicurioProxyServiceBuilder.class);
         context = mock(Context.class);
         client = mock(KubernetesClient.class);
@@ -91,7 +92,7 @@ class ApicurioRegistryReconcilerTest {
         when(nsDepOp.resource(any(Deployment.class))).thenReturn(depResource);
         when(nsDepOp.withName(anyString())).thenReturn(namedDep);
 
-        // readyReplicas — registry deployment has 1 ready replica
+        // readyReplicas — merged deployment has 1 ready replica
         Deployment readyDep = new Deployment();
         DeploymentStatus ds = new DeploymentStatus();
         ds.setReadyReplicas(1);
@@ -109,16 +110,15 @@ class ApicurioRegistryReconcilerTest {
         when(nsSvcOp.withName(anyString())).thenReturn(namedSvc);
 
         // Stubs
-        when(registryDeploymentBuilder.build(any(), anyString())).thenReturn(new Deployment());
-        when(registryServiceBuilder.build(any(), anyString())).thenReturn(new Service());
-        when(proxyDeploymentBuilder.build(any(), anyString())).thenReturn(new Deployment());
+        when(deploymentBuilder.build(any(), anyString(), any(), any())).thenReturn(new Deployment());
+        when(proxyContainerBuilder.build(any())).thenReturn(new Container());
+        when(proxyContainerBuilder.policyVolume(anyString())).thenReturn(new Volume());
         when(proxyServiceBuilder.build(any(), anyString())).thenReturn(new Service());
 
         reconciler = new ApicurioRegistryReconciler();
         injectField(reconciler, "client", client);
-        injectField(reconciler, "registryDeploymentBuilder", registryDeploymentBuilder);
-        injectField(reconciler, "registryServiceBuilder", registryServiceBuilder);
-        injectField(reconciler, "proxyDeploymentBuilder", proxyDeploymentBuilder);
+        injectField(reconciler, "deploymentBuilder", deploymentBuilder);
+        injectField(reconciler, "proxyContainerBuilder", proxyContainerBuilder);
         injectField(reconciler, "proxyServiceBuilder", proxyServiceBuilder);
         injectField(reconciler, "mcsEnabled", false);
     }
@@ -136,51 +136,67 @@ class ApicurioRegistryReconcilerTest {
     }
 
     @Test
-    void happyPath_noProxy_deploysRegistryOnly() {
-        // No rbacProxyImage → proxy builders not called
+    void noProxy_deploysSingleContainerNoProxyService() {
+        // No rbacProxyImage → registry-only pod, no proxy Container, no proxy Service
         ApicurioRegistry registry = registry(null, null);
 
         reconciler.reconcile(registry, context);
 
-        verify(registryDeploymentBuilder).build(any(), anyString());
-        verify(registryServiceBuilder).build(any(), anyString());
-        verify(proxyDeploymentBuilder, org.mockito.Mockito.never()).build(any(), anyString());
+        verify(proxyContainerBuilder, never()).build(any());
+        verify(proxyContainerBuilder, never()).policyVolume(anyString());
+        verify(proxyServiceBuilder, never()).build(any(), anyString());
+        verify(depResource, times(1)).serverSideApply();   // exactly one Deployment
+        verify(svcResource, never()).serverSideApply();    // no Service
     }
 
     @Test
-    void withProxy_deploysProxyDeploymentAndService() {
-        // rbacRef + rbacProxyImage → proxy builders called
+    void withProxy_deploysMergedPodAndProxyService() {
+        // rbacRef + rbacProxyImage → merged Deployment (built with Container + Volume),
+        // plus the rbac-proxy Service.
         ApicurioRegistry registry = registry(RBAC_REF, "proxy-image:latest");
 
         reconciler.reconcile(registry, context);
 
-        verify(proxyDeploymentBuilder).build(any(), anyString());
+        verify(proxyContainerBuilder).build(any());
+        verify(proxyContainerBuilder).policyVolume(RBAC_REF);
+        verify(deploymentBuilder).build(any(), anyString(), any(Container.class), any(Volume.class));
         verify(proxyServiceBuilder).build(any(), anyString());
-        // total: registry dep + proxy dep = 2 serverSideApply on deployments
-        verify(depResource, times(2)).serverSideApply();
+        verify(depResource, times(1)).serverSideApply();   // single merged Deployment
+        verify(svcResource, times(1)).serverSideApply();   // only proxy Service
     }
 
     @Test
-    void registryReady_setsRegistryUrl() {
-        ApicurioRegistry registry = registry(null, null);
+    void withProxy_setsProxyUrlInStatus() {
+        ApicurioRegistry registry = registry(RBAC_REF, "proxy-image:latest");
 
         reconciler.reconcile(registry, context);
 
-        assertThat(registry.getStatus().getRegistryUrl())
-                .contains(REGISTRY_NAME + "-registry")
+        assertThat(registry.getStatus().getProxyUrl())
+                .contains(REGISTRY_NAME + "-rbac-proxy")
                 .contains(NS)
-                .contains(String.valueOf(ApicurioDeploymentBuilder.REGISTRY_PORT));
+                .contains(String.valueOf(ApicurioProxyContainerBuilder.PROXY_PORT));
         assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.READY);
     }
 
     @Test
-    void cleanup_deletesRegistryAndProxy() {
+    void noProxy_doesNotSetProxyUrl() {
+        ApicurioRegistry registry = registry(null, null);
+
+        reconciler.reconcile(registry, context);
+
+        assertThat(registry.getStatus().getProxyUrl()).isNull();
+        assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.READY);
+    }
+
+    @Test
+    void cleanup_deletesMergedDeploymentAndProxyService() {
         ApicurioRegistry registry = registry(null, null);
 
         reconciler.cleanup(registry, context);
 
-        verify(namedDep, times(2)).delete(); // registry + proxy deployments
-        verify(namedSvc, times(2)).delete(); // registry + proxy services
+        // One Deployment (merged) and one Service (proxy only) get deleted
+        verify(namedDep, times(1)).delete();
+        verify(namedSvc, times(1)).delete();
     }
 
     // --- helpers ---

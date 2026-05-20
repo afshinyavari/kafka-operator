@@ -1,9 +1,11 @@
 package se.afshin.yavari.kafka.operator.apicurio;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
+import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.Service;
+import io.fabric8.kubernetes.api.model.Volume;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.javaoperatorsdk.operator.api.config.informer.InformerConfiguration;
@@ -38,9 +40,8 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
     private static final Logger LOG = Logger.getLogger(ApicurioRegistryReconciler.class);
 
     @Inject KubernetesClient client;
-    @Inject ApicurioDeploymentBuilder registryDeploymentBuilder;
-    @Inject ApicurioServiceBuilder registryServiceBuilder;
-    @Inject ApicurioProxyDeploymentBuilder proxyDeploymentBuilder;
+    @Inject ApicurioDeploymentBuilder deploymentBuilder;
+    @Inject ApicurioProxyContainerBuilder proxyContainerBuilder;
     @Inject ApicurioProxyServiceBuilder proxyServiceBuilder;
 
     @ConfigProperty(name = "kafka.networking.mcs-enabled")
@@ -77,6 +78,8 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
         status.setPhase(ApicurioRegistryStatus.Phase.RECONCILING);
 
         String rbacRef = registry.getSpec().getRbacRef();
+        boolean proxyEnabled = rbacRef != null && registry.getSpec().getRbacProxyImage() != null;
+
         if (rbacRef != null) {
             ConfigMap policyMap = client.configMaps().inNamespace(namespace)
                     .withName(rbacRef + "-apicurio-policy").get();
@@ -88,34 +91,30 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
         }
 
         try {
-            Deployment registryDep = registryDeploymentBuilder.build(registry, namespace);
-            client.apps().deployments().inNamespace(namespace).resource(registryDep).serverSideApply();
+            Container proxyContainer = null;
+            Volume policyVolume = null;
+            if (proxyEnabled) {
+                proxyContainer = proxyContainerBuilder.build(registry);
+                policyVolume = proxyContainerBuilder.policyVolume(rbacRef);
+            }
 
-            Service registrySvc = registryServiceBuilder.build(registry, namespace);
-            client.services().inNamespace(namespace).resource(registrySvc).serverSideApply();
+            Deployment dep = deploymentBuilder.build(registry, namespace, proxyContainer, policyVolume);
+            client.apps().deployments().inNamespace(namespace).resource(dep).serverSideApply();
 
-            if (rbacRef != null && registry.getSpec().getRbacProxyImage() != null) {
-                Deployment proxyDep = proxyDeploymentBuilder.build(registry, namespace);
-                client.apps().deployments().inNamespace(namespace).resource(proxyDep).serverSideApply();
-
+            if (proxyEnabled) {
                 Service proxySvc = proxyServiceBuilder.build(registry, namespace);
                 client.services().inNamespace(namespace).resource(proxySvc).serverSideApply();
             }
 
-            if (registry.getSpec().isExportService()) {
-                applyServiceExport(name + "-registry", namespace);
-                if (rbacRef != null && registry.getSpec().getRbacProxyImage() != null) {
-                    applyServiceExport(name + "-rbac-proxy", namespace);
-                }
+            if (registry.getSpec().isExportService() && proxyEnabled) {
+                applyServiceExport(name + "-rbac-proxy", namespace);
             }
 
-            String registryUrl = "http://" + name + "-registry." + namespace
-                    + ".svc.cluster.local:" + ApicurioDeploymentBuilder.REGISTRY_PORT;
-            String proxyUrl = "http://" + name + "-rbac-proxy." + namespace
-                    + ".svc.cluster.local:" + ApicurioProxyDeploymentBuilder.PROXY_PORT;
-
-            status.setRegistryUrl(registryUrl);
-            status.setProxyUrl(proxyUrl);
+            if (proxyEnabled) {
+                String proxyUrl = "http://" + name + "-rbac-proxy." + namespace
+                        + ".svc.cluster.local:" + ApicurioProxyContainerBuilder.PROXY_PORT;
+                status.setProxyUrl(proxyUrl);
+            }
 
             int ready = readyReplicas(name + "-registry", namespace);
             if (ready >= registry.getSpec().getReplicas()) {
@@ -143,12 +142,8 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
         String name = registry.getMetadata().getName();
         LOG.infof("ApicurioRegistry %s deleted", name);
         client.apps().deployments().inNamespace(namespace).withName(name + "-registry").delete();
-        client.apps().deployments().inNamespace(namespace).withName(name + "-rbac-proxy").delete();
-        client.services().inNamespace(namespace).withName(name + "-registry").delete();
         client.services().inNamespace(namespace).withName(name + "-rbac-proxy").delete();
         if (mcsEnabled) {
-            client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
-                    .inNamespace(namespace).withName(name + "-registry").delete();
             client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
                     .inNamespace(namespace).withName(name + "-rbac-proxy").delete();
         }

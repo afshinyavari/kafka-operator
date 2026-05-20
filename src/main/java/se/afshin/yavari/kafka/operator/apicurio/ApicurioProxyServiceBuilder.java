@@ -11,7 +11,8 @@ public class ApicurioProxyServiceBuilder {
 
     public Service build(ApicurioRegistry registry, String namespace) {
         String name = registry.getMetadata().getName();
-        var labels = ApicurioProxyDeploymentBuilder.labels(name);
+        // Selects the merged registry+proxy pod via the registry's pod label.
+        var labels = ApicurioDeploymentBuilder.labels(name);
 
         return new ServiceBuilder()
                 .withNewMetadata()
@@ -23,8 +24,8 @@ public class ApicurioProxyServiceBuilder {
                     .withSelector(labels)
                     .addNewPort()
                         .withName("http")
-                        .withPort(ApicurioProxyDeploymentBuilder.PROXY_PORT)
-                        .withTargetPort(new IntOrString(ApicurioProxyDeploymentBuilder.PROXY_PORT))
+                        .withPort(ApicurioProxyContainerBuilder.PROXY_PORT)
+                        .withTargetPort(new IntOrString(ApicurioProxyContainerBuilder.PROXY_PORT))
                     .endPort()
                 .endSpec()
                 .build();
