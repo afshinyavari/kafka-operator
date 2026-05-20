@@ -121,6 +121,10 @@ When OIDC is configured, clients authenticate with SASL/OAUTHBEARER (JWT Bearer 
 topic-level RBAC is enforced by `GroupAwareAuthorizerService` using group membership from
 the JWT claims.
 
+For Java application authors writing producers/consumers against this setup, see
+[kafka-client-oauth.md](kafka-client-oauth.md) — property recipe, the two token flows,
+and the `allowed.urls` JVM-property footgun.
+
 ### Prerequisites
 
 - Keycloak (or another OIDC provider) with realm `demo`, groups `orders-team` / `invoices-team` /
