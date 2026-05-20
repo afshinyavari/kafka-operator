@@ -26,6 +26,9 @@ rules:
       - kafkaproxies
       - kafkaproxies/status
       - kafkaproxies/finalizers
+      - kafkauis
+      - kafkauis/status
+      - kafkauis/finalizers
       - apicurioregistries
       - apicurioregistries/status
       - apicurioregistries/finalizers
@@ -34,7 +37,13 @@ rules:
     resources: ["deployments", "deployments/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["pods", "persistentvolumeclaims", "configmaps", "services", "secrets", "namespaces", "events"]
+    resources: ["pods", "persistentvolumeclaims", "configmaps", "services", "secrets", "serviceaccounts", "namespaces", "events"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["nodes"]

@@ -335,6 +335,14 @@ UI. It does **not** hold privileged credentials of its own; every request to
 the proxy or the schema registry carries the logged-in user's JWT, so the
 existing `GroupAwareAuthorizer` + `apicurio-rbac-proxy` enforce all access.
 
+The UI is deployed via the **`KafkaUI` CRD** (`kui`, group `kafka.yavari.afshin.se`)
+— see [api-reference.md → KafkaUI](api-reference.md#kafkaui). The operator
+reconciler (`se.afshin.yavari.kafka.operator.ui`) materializes the
+ServiceAccount, namespaced Role/RoleBinding, Deployment, Service, and optional
+Ingress; child resources cascade via ownerReferences on `kubectl delete kui …`.
+The OIDC client-secret Secret stays out of the operator surface so external
+secret managers can own it.
+
 ```
 Browser ──OIDC code+PKCE──► Keycloak (realm "demo", client "kafka-ui-web")
    │                            │

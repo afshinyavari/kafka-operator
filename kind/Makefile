@@ -119,12 +119,13 @@ reload-kafka-ui-image: kafka-ui-image  ## Rebuild + reload kafka-ui image into k
 	kind load docker-image $(KAFKA_UI_IMG) --name kafka-a
 	-kubectl --context kind-kafka-a -n $(NAMESPACE) rollout restart deployment kafka-ui
 
-kafka-ui-setup:  ## Deploy kafka-ui to kafka-a (single-instance, multi-cluster via Submariner)
+kafka-ui-setup:  ## Deploy kafka-ui to kafka-a via KafkaUI CR (operator-reconciled)
 	$(MAKE) reload-kafka-ui-image
-	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafka-ui.yaml
+	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafka-ui-oidc-secret.yaml
+	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafka-ui-cr.yaml
 	@echo "Waiting for kafka-ui pod to be Ready..."
 	kubectl --context kind-kafka-a -n $(NAMESPACE) wait --for=condition=Ready \
-	  pod -l app=kafka-ui --timeout=120s
+	  pod -l app.instance=kafka-ui --timeout=120s
 	@echo "kafka-ui ready: http://localhost:30808/ (kafka-a NodePort)"
 
 ui-test:  ## End-to-end UI smoke test (login + cluster listing + topic browse)

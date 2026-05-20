@@ -12,6 +12,7 @@ All CRDs are in group `kafka.yavari.afshin.se`, version `v1alpha1`.
 | [KafkaProxy](#kafkaproxy) | `kp` | Kroxylicious proxy in front of a broker pool. Optional SASL/OAUTHBEARER, RBAC, schema validation, and MCS multi-cluster deployment. | KafkaCluster, KafkaNodePool, KafkaRbac, ApicurioRegistry |
 | [KafkaRbac](#kafkarbac) | `kra` | Declarative topic ACLs and schema-registry artifact ACLs in a single CR. The operator turns this into ConfigMaps for Kroxylicious and the Apicurio RBAC proxy. | — |
 | [ApicurioRegistry](#apicurioregistry) | `apr` | Apicurio Registry deployment with an optional JWT-aware RBAC proxy. | KafkaRbac |
+| [KafkaUI](#kafkaui) | `kui` | Web UI Deployment + Service + RBAC (Role/RoleBinding/SA) for browsing Kafka clusters through Keycloak SSO. | KafkaCluster (read-only at runtime, no CRD-level ref) |
 
 ---
 
@@ -684,3 +685,91 @@ spec:
 ```
 
 Submariner `ServiceExport` is created for both the registry and the proxy, so cross-cluster clients resolve `apicurio-rbac-proxy.kafka.svc.clusterset.local`.
+
+---
+
+## KafkaUI
+
+Deploys the Quarkus + htmx Kafka UI as an operator-managed workload: ServiceAccount, namespaced Role/RoleBinding (read access to `KafkaCluster`/`KafkaProxy`/`KafkaRbac`/`ApicurioRegistry` CRs), Deployment, Service, and optional Ingress. The UI app itself discovers `KafkaCluster` CRs at runtime via the K8s API; it does not reference one through the CRD.
+
+### spec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `image` | string | no | `kafka-ui:dev` | Container image. |
+| `imagePullPolicy` | string | no | `IfNotPresent` | |
+| `replicas` | int | no | `1` | |
+| `oidc` | KafkaUIOidcConfig | **yes** | — | Keycloak SSO settings; the reconciler fails the CR if missing. |
+| `tls` | KafkaUITlsConfig | no | `{ secretName: kafka-proxy-test-client-tls, mountPath: /etc/kafka-tls }` | Pre-provisioned client TLS Secret (cert-manager convention) mounted into the pod. |
+| `discovery` | KafkaUIDiscoveryConfig | no | see below | Overrides for the env vars the UI uses to find proxy/Apicurio Services and which namespace to list `KafkaCluster` CRs from. |
+| `resources` | ResourceRequirements | no | `requests: 100m/256Mi, limits: 500m/512Mi` | |
+| `probes` | KafkaUIProbesConfig | no | `/q/health/ready` (5/5s) + `/q/health/live` (15/10s) | |
+| `service` | KafkaUIServiceConfig | no | `NodePort 30808 -> 8080` | |
+| `ingress` | KafkaUIIngressConfig | no | `{ enabled: false }` | When `enabled=true`, a single-rule Ingress is created (and removed when toggled back). |
+| `env[]` | KafkaUIEnvVar | no | `[]` | Extra env vars. A name collision overrides the operator-set default. |
+
+### spec.oidc — KafkaUIOidcConfig
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `issuerUrl` | string | OIDC issuer (e.g. `http://keycloak.kafka.svc.clusterset.local:8080/realms/demo`). |
+| `clientId` | string | Keycloak client ID. |
+| `clientSecretRef.{name,key}` | SecretKeyRef | Secret holding the client secret. The operator does not create this Secret — apply it separately (see `kind/manifests/kafka-ui-oidc-secret.yaml`). |
+
+### spec.discovery — KafkaUIDiscoveryConfig
+
+| Field | Default | Description |
+|-------|---------|-------------|
+| `clusterNamespace` | `kafka` | Namespace the UI lists `KafkaCluster` CRs from. |
+| `proxyServiceName` | `kafka-proxy` | |
+| `proxyPort` | `9094` | |
+| `apicurioServiceName` | `apicurio-rbac-proxy` | |
+| `apicurioPort` | `8082` | |
+| `dnsSuffix` | `""` | Empty for in-cluster (`svc.cluster.local`). Set to `clusterset.local` for Submariner-style multi-cluster DNS. |
+
+### status
+
+| Field | Description |
+|-------|-------------|
+| `phase` | `RECONCILING` / `READY` / `FAILED` |
+| `message` | Status or error message. |
+| `readyReplicas` | From the underlying Deployment. |
+| `observedGeneration` | Last `metadata.generation` the reconciler processed. |
+
+### Configuration recipes
+
+#### Default — NodePort on kafka-a (matches the previous static manifest)
+
+```yaml
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaUI
+metadata:
+  name: kafka-ui
+  namespace: kafka
+spec:
+  oidc:
+    issuerUrl: http://keycloak.kafka.svc.clusterset.local:8080/realms/demo
+    clientId: kafka-ui-web
+    clientSecretRef: { name: kafka-ui-oidc, key: client-secret }
+```
+
+Every other field is defaulted by the reconciler. Apply the OIDC client-secret Secret separately (`kafka-ui-oidc` is **not** operator-owned, so external Secret managers can supply it).
+
+#### Ingress-fronted (no NodePort)
+
+```yaml
+spec:
+  service:
+    type: ClusterIP
+  ingress:
+    enabled: true
+    className: nginx
+    host: kafka-ui.example.com
+    tlsSecret: kafka-ui-tls
+  oidc:
+    issuerUrl: https://sso.example.com/realms/demo
+    clientId: kafka-ui-web
+    clientSecretRef: { name: kafka-ui-oidc, key: client-secret }
+```
+
+Toggling `ingress.enabled` back to `false` makes the reconciler delete the Ingress on the next reconcile.

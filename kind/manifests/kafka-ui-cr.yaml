@@ -1,0 +1,22 @@
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaUI
+metadata:
+  name: kafka-ui
+  namespace: kafka
+spec:
+  image: kafka-ui:dev
+  imagePullPolicy: IfNotPresent
+  replicas: 1
+  oidc:
+    issuerUrl: "http://keycloak.kafka.svc.clusterset.local:8080/realms/demo"
+    clientId: "kafka-ui-web"
+    clientSecretRef:
+      name: kafka-ui-oidc
+      key: client-secret
+  tls:
+    secretName: kafka-proxy-test-client-tls
+    mountPath: /etc/kafka-tls
+  service:
+    type: NodePort
+    port: 8080
+    nodePort: 30808
