@@ -54,7 +54,6 @@ class KafkaNodePoolReconcilerTest {
     private KRaftConfigGenerator kraftConfig;
     private PoolConfigMapBuilder poolConfigMapBuilder;
     private HeadlessServiceBuilder headlessServiceBuilder;
-    private ExternalAccessServiceBuilder externalServiceBuilder;
     private PodTemplateFactory podTemplateFactory;
     private SecretRevisionTracker secretRevisionTracker;
     private Context<KafkaNodePool> context;
@@ -89,7 +88,6 @@ class KafkaNodePoolReconcilerTest {
         kraftConfig = mock(KRaftConfigGenerator.class);
         poolConfigMapBuilder = mock(PoolConfigMapBuilder.class);
         headlessServiceBuilder = mock(HeadlessServiceBuilder.class);
-        externalServiceBuilder = mock(ExternalAccessServiceBuilder.class);
         podTemplateFactory = mock(PodTemplateFactory.class);
         secretRevisionTracker = mock(SecretRevisionTracker.class);
         when(secretRevisionTracker.revisionsOf(any(), anyString())).thenReturn("");
@@ -171,7 +169,6 @@ class KafkaNodePoolReconcilerTest {
         injectField(reconciler, "kraftConfig", kraftConfig);
         injectField(reconciler, "poolConfigMapBuilder", poolConfigMapBuilder);
         injectField(reconciler, "headlessServiceBuilder", headlessServiceBuilder);
-        injectField(reconciler, "externalServiceBuilder", externalServiceBuilder);
         injectField(reconciler, "podTemplateFactory", podTemplateFactory);
         injectField(reconciler, "secretRevisionTracker", secretRevisionTracker);
         injectField(reconciler, "serviceExportManager",

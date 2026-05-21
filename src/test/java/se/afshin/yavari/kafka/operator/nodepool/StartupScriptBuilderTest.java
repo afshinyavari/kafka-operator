@@ -3,7 +3,6 @@ package se.afshin.yavari.kafka.operator.nodepool;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import se.afshin.yavari.kafka.operator.crd.ExternalAccessType;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
@@ -81,20 +80,10 @@ class StartupScriptBuilderTest {
     }
 
     @Test
-    void broker_nodePortListener_usesHostIpVar() {
-        KafkaNodePool pool = pool(List.of(NodeRole.BROKER));
-        KafkaListenerSpec listener = listener("CLIENT", 9095, ExternalAccessType.NODEPORT, null, 31000);
-
-        String script = builder.build(pool, 0, NS, false, List.of(listener), null, false);
-
-        assertThat(script).contains("CLIENT_ADDR=\"${HOST_IP}:${EXTERNAL_CLIENT_NODEPORT}\"");
-    }
-
-    @Test
     void broker_internalListenerWithTls_usesFqdnAndHasPkcs12() {
         KafkaNodePool pool = pool(List.of(NodeRole.BROKER));
         KafkaListenerTlsConfig tls = new KafkaListenerTlsConfig();
-        KafkaListenerSpec l = listener("SECURE", 9095, null, tls, 31000);
+        KafkaListenerSpec l = listener("SECURE", 9095, tls);
 
         String script = builder.build(pool, 0, NS, false, List.of(l), null, false);
 
@@ -158,14 +147,11 @@ class StartupScriptBuilderTest {
         return pool;
     }
 
-    private KafkaListenerSpec listener(String name, int port, ExternalAccessType extAccess,
-                                       KafkaListenerTlsConfig tls, int nodePortBase) {
+    private KafkaListenerSpec listener(String name, int port, KafkaListenerTlsConfig tls) {
         KafkaListenerSpec l = new KafkaListenerSpec();
         l.setName(name);
         l.setPort(port);
-        l.setExternalAccess(extAccess);
         l.setTls(tls);
-        l.setNodePortBase(nodePortBase);
         return l;
     }
 

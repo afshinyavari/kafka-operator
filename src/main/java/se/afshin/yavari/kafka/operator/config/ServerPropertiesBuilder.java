@@ -86,7 +86,7 @@ public class ServerPropertiesBuilder {
         boolean hasExtraListeners = extraListeners != null && !extraListeners.isEmpty();
         // Only applies when the user configured a dedicated internal TLS listener (not auto mTLS)
         boolean hasInternalTlsListener = !internalMtls && hasExtraListeners && extraListeners.stream()
-                .anyMatch(l -> l.getExternalAccess() == null && l.getTls() != null);
+                .anyMatch(l -> l.getTls() != null);
 
         if (isController) {
             // Use pod IP placeholder; sed-substituted at startup. Kafka 3.9 rejects 0.0.0.0
@@ -161,7 +161,6 @@ public class ServerPropertiesBuilder {
                 interBrokerListener = "INTERNAL";
             } else {
                 interBrokerListener = extraListeners.stream()
-                        .filter(l -> l.getExternalAccess() == null)
                         .findFirst().map(KafkaListenerSpec::getName).orElse("INTERNAL");
             }
             props.put("inter.broker.listener.name", interBrokerListener);

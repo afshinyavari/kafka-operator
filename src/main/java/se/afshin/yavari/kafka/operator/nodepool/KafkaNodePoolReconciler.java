@@ -66,7 +66,6 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
     @Inject KRaftConfigGenerator kraftConfig;
     @Inject PoolConfigMapBuilder poolConfigMapBuilder;
     @Inject HeadlessServiceBuilder headlessServiceBuilder;
-    @Inject ExternalAccessServiceBuilder externalServiceBuilder;
     @Inject PodTemplateFactory podTemplateFactory;
     @Inject SecretRevisionTracker secretRevisionTracker;
     @Inject ServiceExportManager serviceExportManager;
@@ -240,18 +239,6 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         headlessServiceBuilder.buildServiceExport(poolName + "-headless", namespace, pool)
                 .ifPresent(export -> serviceExportManager.apply(export, namespace, poolName + "-headless"));
 
-        // Apply per-broker NodePort services for external listeners
-        if (isBroker) {
-            List<KafkaListenerSpec> externalListeners =
-                    cluster.getSpec().getListeners().stream()
-                        .filter(l -> l.getExternalAccess() != null)
-                        .toList();
-            if (!externalListeners.isEmpty()) {
-                externalServiceBuilder.applyExternalServices(
-                        pool, namespace, clusterName, externalListeners, clusterIndex, client);
-            }
-        }
-
         // Apply PodDisruptionBudget — maxUnavailable=1, no user config needed
         applyPdb(pool, namespace, clusterName);
 
@@ -291,7 +278,6 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         LOG.infof("KafkaNodePool %s deleted — KafkaPodSet will be garbage collected", pool.getMetadata().getName());
         client.configMaps().inNamespace(namespace).withName(pool.getMetadata().getName() + "-config").delete();
         client.services().inNamespace(namespace).withName(pool.getMetadata().getName() + "-headless").delete();
-        externalServiceBuilder.deleteExternalServices(pool, namespace, client);
         client.policy().v1().podDisruptionBudget().inNamespace(namespace)
               .withName(pool.getMetadata().getName() + "-pdb").delete();
         client.services().inNamespace(namespace)

@@ -1,10 +1,11 @@
 package se.afshin.yavari.kafka.operator.crd;
 
-import io.fabric8.generator.annotation.ValidationRule;
-
-@ValidationRule(value = "!has(self.externalAccess) || has(self.tls)",
-        message = "spec.listeners[].tls is required when externalAccess is set "
-                + "(externally-reachable PLAINTEXT listeners are forbidden).")
+/**
+ * User-defined listener on the broker. As of Wave 5 of the audit, listeners are
+ * cluster-internal only — the Kroxylicious proxy is the sole external entry point for
+ * Kafka traffic. Per-broker NodePort exposure was removed (no more
+ * {@code externalAccess} / {@code nodePortBase} fields).
+ */
 public class KafkaListenerSpec {
 
     /** Listener name used verbatim in Kafka config (e.g. CLIENT_TLS). Uppercase, alphanumeric + underscores. */
@@ -16,12 +17,6 @@ public class KafkaListenerSpec {
     /** TLS configuration. null = plain listener. */
     private KafkaListenerTlsConfig tls;
 
-    /** null = internal listener only. NODEPORT = create per-broker NodePort services. */
-    private ExternalAccessType externalAccess;
-
-    /** Base nodePort for NODEPORT type. Pod at ordinal N gets nodePortBase+N. Default 31000. */
-    private int nodePortBase = 31000;
-
     public String getName() { return name; }
     public void setName(String name) { this.name = name; }
 
@@ -30,10 +25,4 @@ public class KafkaListenerSpec {
 
     public KafkaListenerTlsConfig getTls() { return tls; }
     public void setTls(KafkaListenerTlsConfig tls) { this.tls = tls; }
-
-    public ExternalAccessType getExternalAccess() { return externalAccess; }
-    public void setExternalAccess(ExternalAccessType externalAccess) { this.externalAccess = externalAccess; }
-
-    public int getNodePortBase() { return nodePortBase; }
-    public void setNodePortBase(int nodePortBase) { this.nodePortBase = nodePortBase; }
 }

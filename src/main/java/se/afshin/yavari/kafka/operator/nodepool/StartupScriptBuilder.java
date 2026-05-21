@@ -3,7 +3,6 @@ package se.afshin.yavari.kafka.operator.nodepool;
 import jakarta.enterprise.context.ApplicationScoped;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
-import se.afshin.yavari.kafka.operator.crd.ExternalAccessType;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
@@ -21,8 +20,7 @@ public class StartupScriptBuilder {
      * Generates the {@code start.sh} script that runs as the pod's entrypoint.
      * <p>At boot the script: (1) derives {@code NODE_ID} from the pod ordinal,
      * (2) computes {@code ADVERTISED_ADDR} (MCS clusterset.local or per-pod FQDN),
-     * (3) resolves per-listener address variables (internal: from {@code ADVERTISED_ADDR};
-     * NodePort: from {@code HOST_IP} + {@code EXTERNAL_*_NODEPORT} env vars),
+     * (3) resolves per-listener address variables from {@code ADVERTISED_ADDR},
      * (4) sed-substitutes all placeholders into {@code server.properties.template},
      * (5) formats storage idempotently via {@code kafka-storage.sh},
      * (6) converts TLS certs to PKCS12 keystores if TLS listeners are configured,
@@ -71,15 +69,9 @@ public class StartupScriptBuilder {
         if (hasListeners) {
             for (KafkaListenerSpec l : listeners) {
                 String n = l.getName();
-                if (l.getExternalAccess() == ExternalAccessType.NODEPORT) {
-                    // External NodePort: advertise the node IP (HOST_IP env var) + assigned nodePort
-                    tlsAddrVars.append(n).append("_ADDR=\"${HOST_IP}:${EXTERNAL_")
-                               .append(n).append("_NODEPORT}\"\n");
-                } else {
-                    // Internal listener: derive address from base hostname + listener port
-                    tlsAddrVars.append(n).append("_ADDR=\"${ADVERTISED_ADDR%:*}:")
-                               .append(l.getPort()).append("\"\n");
-                }
+                // All listeners are now internal — derive address from base hostname + listener port.
+                tlsAddrVars.append(n).append("_ADDR=\"${ADVERTISED_ADDR%:*}:")
+                           .append(l.getPort()).append("\"\n");
                 tlsSed.append("    -e \"s|\\${").append(n).append("_ADDR}|${")
                       .append(n).append("_ADDR}|g\" \\\n");
                 if (l.getTls() != null) {

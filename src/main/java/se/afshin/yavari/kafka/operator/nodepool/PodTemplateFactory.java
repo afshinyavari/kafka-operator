@@ -27,7 +27,6 @@ import io.fabric8.kubernetes.client.KubernetesClient;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import se.afshin.yavari.kafka.operator.config.KRaftConfigGenerator;
-import se.afshin.yavari.kafka.operator.crd.ExternalAccessType;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerTlsConfig;
@@ -278,24 +277,6 @@ public class PodTemplateFactory {
             if (!zone.isEmpty()) {
                 env.add(new EnvVarBuilder().withName("BROKER_RACK").withValue(zone).build());
             }
-            boolean hasExternalListeners = listeners != null && listeners.stream()
-                    .anyMatch(l -> l.getExternalAccess() != null);
-            if (hasExternalListeners) {
-                env.add(new EnvVarBuilder()
-                        .withName("HOST_IP")
-                        .withNewValueFrom()
-                            .withNewFieldRef().withFieldPath("status.hostIP").endFieldRef()
-                        .endValueFrom()
-                        .build());
-                for (KafkaListenerSpec l : listeners) {
-                    if (l.getExternalAccess() == ExternalAccessType.NODEPORT) {
-                        env.add(new EnvVarBuilder()
-                                .withName("EXTERNAL_" + l.getName() + "_NODEPORT")
-                                .withValue(String.valueOf(l.getNodePortBase() + ordinal))
-                                .build());
-                    }
-                }
-            }
         }
         if (isController) {
             env.add(new EnvVarBuilder()
@@ -352,10 +333,10 @@ public class PodTemplateFactory {
 
     private int brokerReadinessPort(boolean isBroker, List<KafkaListenerSpec> listeners) {
         if (!isBroker) return CONTROLLER_PORT;
-        // Use the first internal TLS listener for readiness (INTERNAL is localhost-only when TLS is active)
+        // Use the first TLS listener for readiness (INTERNAL is localhost-only when TLS is active)
         if (listeners != null) {
             return listeners.stream()
-                    .filter(l -> l.getExternalAccess() == null && l.getTls() != null)
+                    .filter(l -> l.getTls() != null)
                     .findFirst()
                     .map(KafkaListenerSpec::getPort)
                     .orElse(BROKER_PORT);
