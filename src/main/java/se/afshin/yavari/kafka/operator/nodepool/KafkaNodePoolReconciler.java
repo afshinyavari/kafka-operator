@@ -45,7 +45,9 @@ import se.afshin.yavari.kafka.operator.crd.KafkaPodSetSpec;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
 import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
+import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
 import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
+import se.afshin.yavari.kafka.operator.infra.ServiceExportManager;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -68,6 +70,8 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
     @Inject ExternalAccessServiceBuilder externalServiceBuilder;
     @Inject PodTemplateFactory podTemplateFactory;
     @Inject SecretRevisionTracker secretRevisionTracker;
+    @Inject ServiceExportManager serviceExportManager;
+    @Inject OptionalResourceApplier optionalApplier;
 
     @ConfigProperty(name = "kafka.cluster.id")
     String localClusterId;
@@ -248,7 +252,7 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
                 cluster.getSpec().getListeners());
         client.services().inNamespace(namespace).resource(svc).serverSideApply();
         headlessServiceBuilder.buildServiceExport(poolName + "-headless", namespace, pool)
-                .ifPresent(export -> applyServiceExport(export, namespace, poolName));
+                .ifPresent(export -> serviceExportManager.apply(export, namespace, poolName + "-headless"));
 
         // Apply per-broker NodePort services for external listeners
         if (isBroker) {
@@ -306,16 +310,9 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
               .withName(pool.getMetadata().getName() + "-pdb").delete();
         client.services().inNamespace(namespace)
               .withName(pool.getMetadata().getName() + "-metrics").delete();
-        try {
-            client.genericKubernetesResources("monitoring.coreos.com/v1", "ServiceMonitor")
-                  .inNamespace(namespace)
-                  .withName(pool.getMetadata().getName() + "-metrics").delete();
-        } catch (Exception ignored) {}
+        optionalApplier.deleteServiceMonitor(pool.getMetadata().getName() + "-metrics", namespace);
         if (mcsEnabled) {
-            client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
-                  .inNamespace(namespace)
-                  .withName(pool.getMetadata().getName() + "-headless")
-                  .delete();
+            serviceExportManager.delete(pool.getMetadata().getName() + "-headless", namespace);
         }
         return DeleteControl.defaultDelete();
     }
@@ -393,23 +390,7 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
                 .endMetadata()
                 .addToAdditionalProperties("spec", spec)
                 .build();
-        try {
-            client.genericKubernetesResources("monitoring.coreos.com/v1", "ServiceMonitor")
-                  .inNamespace(namespace).resource(sm).serverSideApply();
-        } catch (Exception e) {
-            LOG.warnf("ServiceMonitor CRD not available — metrics monitoring skipped for %s: %s",
-                    pool.getMetadata().getName() + "-metrics", e.getMessage());
-        }
-    }
-
-    private void applyServiceExport(GenericKubernetesResource export, String namespace, String poolName) {
-        try {
-            client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
-                  .inNamespace(namespace).resource(export).serverSideApply();
-        } catch (Exception e) {
-            LOG.warnf("ServiceExport CRD not available — MCS export skipped for %s: %s",
-                    poolName + "-headless", e.getMessage());
-        }
+        optionalApplier.applyServiceMonitor(sm, namespace);
     }
 
     private void applyPodSet(KafkaNodePool pool, String namespace, String clusterName, List<PodEntry> desiredPods) {

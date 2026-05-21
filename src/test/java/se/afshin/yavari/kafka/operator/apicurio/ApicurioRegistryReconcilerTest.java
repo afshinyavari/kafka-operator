@@ -66,6 +66,8 @@ class ApicurioRegistryReconcilerTest {
     private ExternalAccessResolver externalAccessResolver;
     private HttpIngressBuilder httpIngressBuilder;
     private HttpRouteBuilder httpRouteBuilder;
+    private se.afshin.yavari.kafka.operator.infra.ServiceExportManager serviceExportManager;
+    private se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier optionalApplier;
     private Context<ApicurioRegistry> context;
     private ApicurioRegistryReconciler reconciler;
 
@@ -196,6 +198,10 @@ class ApicurioRegistryReconcilerTest {
                 mock(se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker.class);
         when(secretRevisionTracker.revisionsOf(any(), anyString())).thenReturn("");
         injectField(reconciler, "secretRevisionTracker", secretRevisionTracker);
+        serviceExportManager = mock(se.afshin.yavari.kafka.operator.infra.ServiceExportManager.class);
+        injectField(reconciler, "serviceExportManager", serviceExportManager);
+        optionalApplier = mock(se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier.class);
+        injectField(reconciler, "optionalApplier", optionalApplier);
         injectField(reconciler, "mcsEnabled", false);
         injectField(reconciler, "localClusterId", "A");
     }
@@ -449,7 +455,9 @@ class ApicurioRegistryReconcilerTest {
 
         assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.READY);
         verify(deploymentBuilder, times(1)).build(any(), anyString(), any(), any(), any(), anyString());
-        verify(serviceExportResource, times(1)).serverSideApply();
+        verify(serviceExportManager, times(1))
+                .apply(org.mockito.ArgumentMatchers.eq(REGISTRY_NAME + "-rbac-proxy"),
+                        org.mockito.ArgumentMatchers.eq(NS));
     }
 
     // --- helpers ---

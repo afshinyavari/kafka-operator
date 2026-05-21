@@ -1,7 +1,6 @@
 package se.afshin.yavari.kafka.operator.ui;
 
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
-import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
@@ -26,6 +25,8 @@ import se.afshin.yavari.kafka.operator.crd.McsConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpExternalAccessConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpIngressBuilder;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpRouteBuilder;
+import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
+import se.afshin.yavari.kafka.operator.infra.ServiceExportManager;
 import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolution;
 import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolver;
 
@@ -45,6 +46,8 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
     @Inject ExternalAccessResolver externalAccessResolver;
     @Inject HttpIngressBuilder httpIngressBuilder;
     @Inject HttpRouteBuilder httpRouteBuilder;
+    @Inject ServiceExportManager serviceExportManager;
+    @Inject OptionalResourceApplier optionalApplier;
 
     @ConfigProperty(name = "kafka.networking.mcs-enabled")
     boolean mcsEnabled;
@@ -124,7 +127,7 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
             // exports its local kafka-ui Service so cross-cluster clients (e.g. browser landing
             // on a stale LB IP) can fall back to `kafka-ui.<ns>.svc.clusterset.local`.
             if (specMcsEnabled) {
-                applyServiceExport(name, namespace);
+                serviceExportManager.apply(name, namespace);
             }
 
             HttpExternalAccessConfig ea = ui.getSpec().getExternalAccess();
@@ -190,9 +193,9 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
         if (shouldExist) {
             Ingress ingress = httpIngressBuilder.build(name, namespace, UILabels.labels(name),
                     ownerRef, external.advertisedHost(), name, KafkaUISpec.PORT, ea.getIngress());
-            client.network().v1().ingresses().inNamespace(namespace).resource(ingress).serverSideApply();
+            optionalApplier.applyIngress(ingress, namespace);
         } else {
-            client.network().v1().ingresses().inNamespace(namespace).withName(name).delete();
+            optionalApplier.deleteIngress(name, namespace);
         }
     }
 
@@ -202,20 +205,13 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
         String namespace = ui.getMetadata().getNamespace();
         boolean shouldExist = ea != null && ea.getType() == ExternalAccessType.GATEWAY
                 && external.advertisedHost() != null;
-        try {
-            if (shouldExist) {
-                GenericKubernetesResource route = httpRouteBuilder.build(name, namespace,
-                        UILabels.labels(name), ownerRef, external.advertisedHost(), name,
-                        KafkaUISpec.PORT, ea.getGateway());
-                client.genericKubernetesResources(HttpRouteBuilder.API_VERSION, HttpRouteBuilder.KIND)
-                        .inNamespace(namespace).resource(route).serverSideApply();
-            } else {
-                client.genericKubernetesResources(HttpRouteBuilder.API_VERSION, HttpRouteBuilder.KIND)
-                        .inNamespace(namespace).withName(name).delete();
-            }
-        } catch (Exception e) {
-            // Gateway API CRDs may not be installed — log and continue.
-            LOG.warnf("HTTPRoute apply/delete skipped for %s/%s: %s", namespace, name, e.getMessage());
+        if (shouldExist) {
+            GenericKubernetesResource route = httpRouteBuilder.build(name, namespace,
+                    UILabels.labels(name), ownerRef, external.advertisedHost(), name,
+                    KafkaUISpec.PORT, ea.getGateway());
+            optionalApplier.applyHttpRoute(route, namespace);
+        } else {
+            optionalApplier.deleteHttpRoute(name, namespace);
         }
     }
 
@@ -236,21 +232,6 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
             return "spec.oidc.clientSecretRef.{name,key} are required";
         }
         return null;
-    }
-
-    private void applyServiceExport(String serviceName, String namespace) {
-        if (!mcsEnabled) return;
-        GenericKubernetesResource export = new GenericKubernetesResource();
-        export.setApiVersion("multicluster.x-k8s.io/v1alpha1");
-        export.setKind("ServiceExport");
-        export.setMetadata(new ObjectMetaBuilder()
-                .withName(serviceName).withNamespace(namespace).build());
-        try {
-            client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
-                    .inNamespace(namespace).resource(export).serverSideApply();
-        } catch (Exception e) {
-            LOG.warnf("ServiceExport CRD not available — skipped for %s: %s", serviceName, e.getMessage());
-        }
     }
 
     private int readyReplicas(String deploymentName, String namespace) {

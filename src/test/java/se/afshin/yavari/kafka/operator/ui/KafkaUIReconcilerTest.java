@@ -63,6 +63,8 @@ class KafkaUIReconcilerTest {
     private ExternalAccessResolver externalAccessResolver;
     private HttpIngressBuilder httpIngressBuilder;
     private HttpRouteBuilder httpRouteBuilder;
+    private se.afshin.yavari.kafka.operator.infra.ServiceExportManager serviceExportManager;
+    private se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier optionalApplier;
     private Context<KafkaUI> context;
     private KafkaUIReconciler reconciler;
 
@@ -183,6 +185,10 @@ class KafkaUIReconcilerTest {
         injectField(reconciler, "externalAccessResolver", externalAccessResolver);
         injectField(reconciler, "httpIngressBuilder", httpIngressBuilder);
         injectField(reconciler, "httpRouteBuilder", httpRouteBuilder);
+        serviceExportManager = mock(se.afshin.yavari.kafka.operator.infra.ServiceExportManager.class);
+        injectField(reconciler, "serviceExportManager", serviceExportManager);
+        optionalApplier = mock(se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier.class);
+        injectField(reconciler, "optionalApplier", optionalApplier);
         injectField(reconciler, "localClusterId", "A");
         injectField(reconciler, "mcsEnabled", false);
     }
@@ -212,8 +218,8 @@ class KafkaUIReconcilerTest {
                 anyString(), anyString(), anyInt(), any());
         verify(httpRouteBuilder, never()).build(anyString(), anyString(), any(), any(),
                 anyString(), anyString(), anyInt(), any());
-        verify(ingResource, times(1)).delete();
-        verify(routeResource, times(1)).delete();
+        verify(optionalApplier, times(1)).deleteIngress(anyString(), anyString());
+        verify(optionalApplier, times(1)).deleteHttpRoute(anyString(), anyString());
 
         assertThat(ui.getStatus().getPhase()).isEqualTo(KafkaUIStatus.Phase.READY);
         assertThat(ui.getStatus().getReadyReplicas()).isEqualTo(1);
@@ -236,7 +242,8 @@ class KafkaUIReconcilerTest {
                 anyString(), anyString(), anyInt(), any());
         verify(httpRouteBuilder, never()).build(anyString(), anyString(), any(), any(),
                 anyString(), anyString(), anyInt(), any());
-        verify(routeResource, times(1)).delete();
+        verify(optionalApplier, times(1)).applyIngress(any(), anyString());
+        verify(optionalApplier, times(1)).deleteHttpRoute(anyString(), anyString());
         assertThat(ui.getStatus().getAdvertisedHost()).isEqualTo("kafka-ui-a.example.com");
     }
 
@@ -257,7 +264,8 @@ class KafkaUIReconcilerTest {
                 anyString(), anyString(), anyInt(), any());
         verify(httpIngressBuilder, never()).build(anyString(), anyString(), any(), any(),
                 anyString(), anyString(), anyInt(), any());
-        verify(ingResource, times(1)).delete();
+        verify(optionalApplier, times(1)).applyHttpRoute(any(), anyString());
+        verify(optionalApplier, times(1)).deleteIngress(anyString(), anyString());
         assertThat(ui.getStatus().getAdvertisedHost()).isEqualTo("kafka-ui.example.com");
     }
 
@@ -330,7 +338,9 @@ class KafkaUIReconcilerTest {
 
         assertThat(ui.getStatus().getPhase()).isEqualTo(KafkaUIStatus.Phase.READY);
         verify(deploymentBuilder, times(1)).build(any(), any());
-        verify(serviceExportResource, times(1)).serverSideApply();
+        verify(serviceExportManager, times(1))
+                .apply(org.mockito.ArgumentMatchers.eq(UI_NAME),
+                        org.mockito.ArgumentMatchers.eq(NS));
     }
 
     // ---- helpers ----

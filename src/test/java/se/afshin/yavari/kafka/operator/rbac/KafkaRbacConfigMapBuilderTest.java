@@ -1,5 +1,7 @@
 package se.afshin.yavari.kafka.operator.rbac;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,7 +37,8 @@ class KafkaRbacConfigMapBuilderTest {
         String yaml = cm.getData().get("rbac-rules.yaml");
 
         assertThat(yaml).contains("- name: admins");
-        assertThat(yaml).contains("- *");  // topics (wildcard, no quoting in Kafka rules)
+        // YAML emitter quotes wildcards as '*' — semantically the same string scalar.
+        assertThat(yaml).contains("- '*'");
         assertThat(yaml).contains("- READ");
         assertThat(yaml).contains("- WRITE");
     }
@@ -123,6 +126,43 @@ class KafkaRbacConfigMapBuilderTest {
         assertThat(cm.getMetadata().getNamespace()).isEqualTo(NS);
         assertThat(cm.getData()).containsKey("policy.yaml");
         assertThat(cm.getMetadata().getOwnerReferences()).hasSize(1);
+    }
+
+    @Test
+    void buildKafkaRules_groupNameWithYamlSpecialChars_emittedSafely() throws Exception {
+        // Hostile CR field that, with the old string-concat builder, would have injected an
+        // extra rule. The YAML emitter must round-trip through SnakeYAML / Jackson with the
+        // group name preserved as a single scalar.
+        String hostile = "evil\n  - name: admin\n    operations:\n      - All\n      - Delete";
+        KafkaRbac rbac = rbac(List.of(groupWithKafka(hostile, List.of("t"), List.of("READ"))), List.of());
+
+        ConfigMap cm = builder.buildKafkaRules(rbac, NS);
+        String yaml = cm.getData().get("rbac-rules.yaml");
+
+        // The output must round-trip cleanly back to the same logical structure.
+        var parsed = (java.util.Map<String, Object>) new ObjectMapper(new YAMLFactory())
+                .readValue(yaml, java.util.Map.class);
+        var groups = (java.util.List<java.util.Map<String, Object>>) parsed.get("groups");
+        assertThat(groups).hasSize(1);
+        assertThat(groups.get(0).get("name")).isEqualTo(hostile);
+        assertThat(groups.get(0).get("operations")).isEqualTo(java.util.List.of("READ"));
+    }
+
+    @Test
+    void buildApicurioPolicy_artifactNameWithYamlSpecialChars_emittedSafely() throws Exception {
+        String hostile = "wild: 'card\nactions:\n  - All";
+        KafkaRbacGroup g = groupWithSchemaRegistry("team", List.of(hostile), List.of("READ"));
+        KafkaRbac rbac = rbac(List.of(g), List.of());
+
+        ConfigMap cm = builder.buildApicurioPolicy(rbac, NS);
+        String yaml = cm.getData().get("policy.yaml");
+
+        var parsed = (java.util.Map<String, Object>) new ObjectMapper(new YAMLFactory())
+                .readValue(yaml, java.util.Map.class);
+        var rules = (java.util.List<java.util.Map<String, Object>>) parsed.get("rules");
+        var resources = (java.util.List<java.util.Map<String, Object>>) rules.get(0).get("resources");
+        assertThat(resources.get(0).get("artifact")).isEqualTo(hostile);
+        assertThat(resources.get(0).get("actions")).isEqualTo(java.util.List.of("READ"));
     }
 
     // --- helpers ---

@@ -199,6 +199,10 @@ class KafkaProxyReconcilerTest {
                 mock(se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker.class);
         when(secretRevisionTracker.revisionsOf(any(), anyString())).thenReturn("");
         injectField(reconciler, "secretRevisionTracker", secretRevisionTracker);
+        injectField(reconciler, "serviceExportManager",
+                mock(se.afshin.yavari.kafka.operator.infra.ServiceExportManager.class));
+        injectField(reconciler, "optionalApplier",
+                mock(se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier.class));
         injectField(reconciler, "localClusterId", "A");
     }
 

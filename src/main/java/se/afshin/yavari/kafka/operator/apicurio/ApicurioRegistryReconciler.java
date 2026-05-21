@@ -3,7 +3,6 @@ package se.afshin.yavari.kafka.operator.apicurio;
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
-import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.Service;
 import io.fabric8.kubernetes.api.model.Volume;
@@ -35,7 +34,9 @@ import se.afshin.yavari.kafka.operator.externalaccess.HttpExternalAccessConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpIngressBuilder;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpRouteBuilder;
 import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
+import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
 import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
+import se.afshin.yavari.kafka.operator.infra.ServiceExportManager;
 import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolution;
 import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolver;
 
@@ -60,6 +61,8 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
     @Inject HttpIngressBuilder httpIngressBuilder;
     @Inject HttpRouteBuilder httpRouteBuilder;
     @Inject SecretRevisionTracker secretRevisionTracker;
+    @Inject ServiceExportManager serviceExportManager;
+    @Inject OptionalResourceApplier optionalApplier;
 
     @ConfigProperty(name = "kafka.networking.mcs-enabled")
     boolean mcsEnabled;
@@ -226,7 +229,7 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
             boolean wantExport = proxyEnabled
                     && (specMcsEnabled || registry.getSpec().isExportService());
             if (wantExport) {
-                applyServiceExport(proxySvcName, namespace);
+                serviceExportManager.apply(proxySvcName, namespace);
             }
 
             ExternalAccessResolution external = ExternalAccessResolution.internal();
@@ -252,8 +255,8 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
                 }
             } else {
                 // No externalAccess configured; ensure stale Ingress/HTTPRoute are pruned.
-                deleteIngressIfExists(namespace, proxySvcName);
-                deleteHttpRouteIfExists(namespace, proxySvcName);
+                optionalApplier.deleteIngress(proxySvcName, namespace);
+                optionalApplier.deleteHttpRoute(proxySvcName, namespace);
                 status.setExternalUrl(null);
             }
 
@@ -304,11 +307,10 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
         kafkasqlSupport.cleanup(registry);
         client.apps().deployments().inNamespace(namespace).withName(name + "-registry").delete();
         client.services().inNamespace(namespace).withName(proxySvcName).delete();
-        deleteIngressIfExists(namespace, proxySvcName);
-        deleteHttpRouteIfExists(namespace, proxySvcName);
+        optionalApplier.deleteIngress(proxySvcName, namespace);
+        optionalApplier.deleteHttpRoute(proxySvcName, namespace);
         if (mcsEnabled) {
-            client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
-                    .inNamespace(namespace).withName(proxySvcName).delete();
+            serviceExportManager.delete(proxySvcName, namespace);
         }
         return DeleteControl.defaultDelete();
     }
@@ -335,9 +337,9 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
             Ingress ingress = httpIngressBuilder.build(svcName, namespace,
                     ApicurioDeploymentBuilder.labels(name), null, external.advertisedHost(),
                     svcName, ApicurioProxyContainerBuilder.PROXY_PORT, ea.getIngress());
-            client.network().v1().ingresses().inNamespace(namespace).resource(ingress).serverSideApply();
+            optionalApplier.applyIngress(ingress, namespace);
         } else {
-            deleteIngressIfExists(namespace, svcName);
+            optionalApplier.deleteIngress(svcName, namespace);
         }
     }
 
@@ -346,54 +348,16 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
         String name = registry.getMetadata().getName();
         String namespace = registry.getMetadata().getNamespace();
         String svcName = name + "-rbac-proxy";
-        try {
-            if (ea.getType() == ExternalAccessType.GATEWAY && external.advertisedHost() != null) {
-                GenericKubernetesResource route = httpRouteBuilder.build(svcName, namespace,
-                        ApicurioDeploymentBuilder.labels(name), null, external.advertisedHost(),
-                        svcName, ApicurioProxyContainerBuilder.PROXY_PORT, ea.getGateway());
-                client.genericKubernetesResources(HttpRouteBuilder.API_VERSION, HttpRouteBuilder.KIND)
-                        .inNamespace(namespace).resource(route).serverSideApply();
-            } else {
-                deleteHttpRouteIfExists(namespace, svcName);
-            }
-        } catch (Exception e) {
-            LOG.warnf("HTTPRoute apply/delete skipped for %s/%s: %s", namespace, svcName, e.getMessage());
+        if (ea.getType() == ExternalAccessType.GATEWAY && external.advertisedHost() != null) {
+            GenericKubernetesResource route = httpRouteBuilder.build(svcName, namespace,
+                    ApicurioDeploymentBuilder.labels(name), null, external.advertisedHost(),
+                    svcName, ApicurioProxyContainerBuilder.PROXY_PORT, ea.getGateway());
+            optionalApplier.applyHttpRoute(route, namespace);
+        } else {
+            optionalApplier.deleteHttpRoute(svcName, namespace);
         }
     }
 
-    private void deleteIngressIfExists(String namespace, String name) {
-        try {
-            client.network().v1().ingresses().inNamespace(namespace).withName(name).delete();
-        } catch (Exception e) {
-            LOG.warnf("Ingress cleanup skipped for %s/%s: %s", namespace, name, e.getMessage());
-        }
-    }
-
-    private void deleteHttpRouteIfExists(String namespace, String name) {
-        try {
-            client.genericKubernetesResources(HttpRouteBuilder.API_VERSION, HttpRouteBuilder.KIND)
-                    .inNamespace(namespace).withName(name).delete();
-        } catch (Exception e) {
-            LOG.warnf("HTTPRoute cleanup skipped for %s/%s: %s", namespace, name, e.getMessage());
-        }
-    }
-
-    private void applyServiceExport(String serviceName, String namespace) {
-        if (!mcsEnabled) return;
-        GenericKubernetesResource export = new GenericKubernetesResource();
-        export.setApiVersion("multicluster.x-k8s.io/v1alpha1");
-        export.setKind("ServiceExport");
-        export.setMetadata(new ObjectMetaBuilder()
-                .withName(serviceName)
-                .withNamespace(namespace)
-                .build());
-        try {
-            client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
-                    .inNamespace(namespace).resource(export).serverSideApply();
-        } catch (Exception e) {
-            LOG.warnf("ServiceExport CRD not available — skipped for %s: %s", serviceName, e.getMessage());
-        }
-    }
 
     private int readyReplicas(String deploymentName, String namespace) {
         Deployment dep = client.apps().deployments().inNamespace(namespace)

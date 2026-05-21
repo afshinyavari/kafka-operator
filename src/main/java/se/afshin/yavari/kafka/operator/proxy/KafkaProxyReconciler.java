@@ -3,7 +3,6 @@ package se.afshin.yavari.kafka.operator.proxy;
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ConfigMapBuilder;
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
-import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.Service;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
@@ -35,7 +34,9 @@ import se.afshin.yavari.kafka.operator.crd.KafkaProxyStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
 import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
+import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
 import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
+import se.afshin.yavari.kafka.operator.infra.ServiceExportManager;
 import se.afshin.yavari.kafka.operator.rolling.CrossClusterRollCoordinator;
 
 import java.time.Duration;
@@ -60,6 +61,8 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
     @Inject CrossClusterRollCoordinator rollCoordinator;
     @Inject ProxyRollTracker rollTracker;
     @Inject SecretRevisionTracker secretRevisionTracker;
+    @Inject ServiceExportManager serviceExportManager;
+    @Inject OptionalResourceApplier optionalApplier;
 
     @ConfigProperty(name = "kafka.cluster.id")
     String localClusterId;
@@ -331,7 +334,7 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
 
             // Apply ServiceExport if MCS enabled
             if (mcsEnabled) {
-                applyServiceExport(name, namespace);
+                serviceExportManager.apply(name, namespace);
             }
 
             // Apply Gateway-API TLSRoute when externalAccess.type=GATEWAY. The hostnames advertise
@@ -393,65 +396,25 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
         // leave them in place on KafkaProxy delete.
         McsConfig mcsCfg = proxy.getSpec().getMcs();
         if (mcsCfg != null && mcsCfg.isEnabled()) {
-            client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
-                    .inNamespace(namespace).withName(name).delete();
+            serviceExportManager.delete(name, namespace);
         }
-        // Best-effort TLSRoute cleanup. Mirrors the ServiceExport pattern: we don't know
-        // whether the cluster has the Gateway API CRDs installed, so swallow CRD-missing errors.
-        try {
-            client.genericKubernetesResources(TLSRouteBuilder.API_VERSION, TLSRouteBuilder.KIND)
-                    .inNamespace(namespace).withName(name).delete();
-        } catch (Exception e) {
-            LOG.warnf("TLSRoute cleanup skipped for %s/%s: %s", namespace, name, e.getMessage());
-        }
-        // Best-effort Ingress cleanup.
-        try {
-            client.network().v1().ingresses().inNamespace(namespace).withName(name).delete();
-        } catch (Exception e) {
-            LOG.warnf("Ingress cleanup skipped for %s/%s: %s", namespace, name, e.getMessage());
-        }
+        // Gateway API + Ingress: optional / may not be installed — applier handles both.
+        optionalApplier.deleteTlsRoute(name, namespace);
+        optionalApplier.deleteIngress(name, namespace);
         return DeleteControl.defaultDelete();
-    }
-
-    private void applyServiceExport(String serviceName, String namespace) {
-        GenericKubernetesResource export = new GenericKubernetesResource();
-        export.setApiVersion("multicluster.x-k8s.io/v1alpha1");
-        export.setKind("ServiceExport");
-        export.setMetadata(new ObjectMetaBuilder()
-                .withName(serviceName)
-                .withNamespace(namespace)
-                .build());
-        try {
-            client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
-                    .inNamespace(namespace).resource(export).serverSideApply();
-        } catch (Exception e) {
-            LOG.warnf("ServiceExport CRD not available — skipped for %s: %s", serviceName, e.getMessage());
-        }
     }
 
     private void applyTlsRoute(KafkaProxy proxy, int brokerCount, String namespace,
                                 ExternalAccessResolution external) {
-        try {
-            GenericKubernetesResource route = tlsRouteBuilder.build(proxy, brokerCount, namespace, external);
-            client.genericKubernetesResources(TLSRouteBuilder.API_VERSION, TLSRouteBuilder.KIND)
-                    .inNamespace(namespace).resource(route).serverSideApply();
-        } catch (Exception e) {
-            LOG.warnf("TLSRoute CRD not available — skipped for %s/%s: %s",
-                    namespace, proxy.getMetadata().getName(), e.getMessage());
-        }
+        GenericKubernetesResource route = tlsRouteBuilder.build(proxy, brokerCount, namespace, external);
+        optionalApplier.applyTlsRoute(route, namespace);
     }
 
     private void applyIngress(KafkaProxy proxy, int brokerCount, String namespace,
                                ExternalAccessResolution external) {
-        try {
-            io.fabric8.kubernetes.api.model.networking.v1.Ingress ingress =
-                    ingressBuilder.build(proxy, brokerCount, namespace, external);
-            client.network().v1().ingresses().inNamespace(namespace)
-                    .resource(ingress).serverSideApply();
-        } catch (Exception e) {
-            LOG.warnf("Ingress apply failed for %s/%s: %s",
-                    namespace, proxy.getMetadata().getName(), e.getMessage());
-        }
+        io.fabric8.kubernetes.api.model.networking.v1.Ingress ingress =
+                ingressBuilder.build(proxy, brokerCount, namespace, external);
+        optionalApplier.applyIngress(ingress, namespace);
     }
 
     private int resolveNodeIdBase(String poolName, String namespace) {
