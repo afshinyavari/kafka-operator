@@ -158,19 +158,23 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         KafkaProxyMtlsConfig proxyMtls = cluster.getSpec().getProxyMtls();
         String proxyName = null;
         String brokerMtlsSecretName = null;
-        if (proxyMtls != null && proxyMtls.isEnabled() && isBroker) {
+        if (proxyMtls != null && proxyMtls.isEnabled()) {
+            // proxyName drives the authorizer + super.users block, which must apply to
+            // controller-only pods as well (ACL writes in KRaft go through the controller).
             proxyName = proxyMtls.getProxyPrincipal();
-            brokerMtlsSecretName = pool.getSpec().getBrokerCertSecretRef() != null
-                    ? pool.getSpec().getBrokerCertSecretRef()
-                    : poolName + "-broker-tls";
-            if (client.secrets().inNamespace(namespace).withName(brokerMtlsSecretName).get() == null) {
-                String msg = "Broker mTLS secret '" + brokerMtlsSecretName + "' not found in namespace "
-                        + namespace + " — waiting for cert-manager / mcs-setup to create it";
-                LOG.warnf(msg + " (pool %s)", poolName);
-                status.setPhase(KafkaNodePoolStatus.Phase.RECONCILING);
-                status.setMessage(msg);
-                pool.setStatus(status);
-                return UpdateControl.patchStatus(pool).rescheduleAfter(java.time.Duration.ofSeconds(10));
+            if (isBroker) {
+                brokerMtlsSecretName = pool.getSpec().getBrokerCertSecretRef() != null
+                        ? pool.getSpec().getBrokerCertSecretRef()
+                        : poolName + "-broker-tls";
+                if (client.secrets().inNamespace(namespace).withName(brokerMtlsSecretName).get() == null) {
+                    String msg = "Broker mTLS secret '" + brokerMtlsSecretName + "' not found in namespace "
+                            + namespace + " — waiting for cert-manager / mcs-setup to create it";
+                    LOG.warnf(msg + " (pool %s)", poolName);
+                    status.setPhase(KafkaNodePoolStatus.Phase.RECONCILING);
+                    status.setMessage(msg);
+                    pool.setStatus(status);
+                    return UpdateControl.patchStatus(pool).rescheduleAfter(java.time.Duration.ofSeconds(10));
+                }
             }
         }
 

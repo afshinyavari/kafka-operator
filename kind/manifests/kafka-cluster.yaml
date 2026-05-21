@@ -38,12 +38,15 @@ spec:
   proxyMtls:
     enabled: true
     proxyPrincipal: kafka-proxy
-# Uncomment to enable TLS listeners. Requires per-pod secrets named {podName}-tls
+  # CONTROLLER listener mTLS. Required when proxyMtls is enabled — without it, the
+  # broker-side StandardAuthorizer denies ANONYMOUS inter-controller Raft traffic and
+  # KRaft quorum cannot form.
+  controllerTls:
+    mutualTls: true
+# Uncomment to enable user-facing TLS listeners. Requires per-pod secrets named {podName}-tls
 # with keys tls.crt, tls.key, ca.crt (cert-manager convention).
 #  listeners:
 #    - name: CLIENT_TLS
 #      port: 9094
 #      tls:
 #        mutualTls: false   # set true to require client certificates
-#  controllerTls:
-#    mutualTls: false        # set true to require mutual TLS on controller channel

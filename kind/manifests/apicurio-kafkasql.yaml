@@ -1,0 +1,15 @@
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: ApicurioRegistry
+metadata:
+  name: schema-registry
+  namespace: kafka
+spec:
+  # image defaults to apicurio-registry-kafkasql:latest-snapshot
+  replicas: 3
+  storage:
+    type: kafkasql
+    clusterRef: my-kafka
+    kafkaTopic: kafkasql-journal
+    tlsSecretRef: schema-registry-client-tls
+    principal: apicurio-registry
+  exportService: false

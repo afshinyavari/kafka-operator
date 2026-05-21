@@ -386,12 +386,26 @@ mint_cert() {
     -extfile "${extfile}" 2>/dev/null
 }
 
-# Per-pool broker certs (one per cluster), each with both cluster.local + clusterset.local SANs.
+# Per-pool broker server certs (CN=kafka-proxy so inter-broker traffic is super-user when
+# the StandardAuthorizer is enabled). SANs cover both cluster.local + clusterset.local.
 for cluster in "${CLUSTERS[@]}"; do
   suffix="${cluster#kafka-}"  # a / b / c
   pool="brokers-${suffix}"
-  mint_cert "${pool}" "${pool}" \
+  mint_cert "${pool}" "${PROXY_PRINCIPAL}" \
     "${pool}-headless.${NAMESPACE}.svc.cluster.local,${pool}-headless.${NAMESPACE}.svc.clusterset.local"
+done
+
+# Per-pod TLS certs for the CONTROLLER listener (mTLS on inter-controller Raft).
+# Each Kafka pod (controllers + brokers) needs a {podName}-tls Secret with PEM material
+# at /etc/kafka/tls/{tls.crt,tls.key,ca.crt}. CN=kafka-proxy (shared super-user identity).
+for cluster in "${CLUSTERS[@]}"; do
+  suffix="${cluster#kafka-}"
+  for pool_prefix in brokers controllers; do
+    pool="${pool_prefix}-${suffix}"
+    podname="${pool}-0"
+    mint_cert "${podname}" "${PROXY_PRINCIPAL}" \
+      "${pool}-headless.${NAMESPACE}.svc.cluster.local,${pool}-headless.${NAMESPACE}.svc.clusterset.local"
+  done
 done
 
 # Proxy client cert — CN goes into broker super.users.
@@ -405,6 +419,10 @@ mint_cert "${PROXY_PRINCIPAL}-test-client" "test-client" ""
 # INTERNAL listener over mTLS. CN reuses PROXY_PRINCIPAL so it inherits the proxy's
 # super.users entry without requiring a broker config change.
 mint_cert "kafka-operator-client" "${PROXY_PRINCIPAL}" ""
+# Apicurio Registry kafkasql client cert — used by the registry pod to talk to
+# brokers over mTLS. CN=apicurio-registry; ApicurioRegistryReconciler provisions
+# the matching ACLs via KafkaAclManager.
+mint_cert "schema-registry-client" "apicurio-registry" ""
 
 # Helper: apply a 3-key kubernetes.io/tls-style secret (cert-manager convention).
 apply_tls_secret() {
@@ -431,6 +449,22 @@ for cluster in "${CLUSTERS[@]}"; do
 done
 wait_pids "Broker TLS secrets" "${PIDS[@]}"
 
+info "Applying per-pod TLS secrets (for CONTROLLER mTLS) to each cluster..."
+PIDS=()
+for cluster in "${CLUSTERS[@]}"; do
+  ctx="kind-${cluster}"
+  suffix="${cluster#kafka-}"
+  for pool_prefix in brokers controllers; do
+    podname="${pool_prefix}-${suffix}-0"
+    (
+      apply_tls_secret "${ctx}" "${podname}-tls" \
+        "${CA_DIR}/${podname}.crt" "${CA_DIR}/${podname}.key"
+    ) &>/dev/null &
+    PIDS+=($!)
+  done
+done
+wait_pids "Per-pod TLS secrets" "${PIDS[@]}"
+
 info "Applying proxy client/server/test-client TLS secrets to: ${PROXY_CLUSTERS[*]}..."
 for cluster in "${PROXY_CLUSTERS[@]}"; do
   PROXY_CTX="kind-${cluster}"
@@ -446,6 +480,12 @@ info "Applying operator AdminClient TLS secret (kafka-operator-client-tls) to al
 for cluster in "${CLUSTERS[@]}"; do
   apply_tls_secret "kind-${cluster}" "kafka-operator-client-tls" \
     "${CA_DIR}/kafka-operator-client.crt" "${CA_DIR}/kafka-operator-client.key" &>/dev/null
+done
+
+info "Applying Apicurio Registry kafkasql TLS secret (schema-registry-client-tls) to proxy clusters..."
+for cluster in "${PROXY_CLUSTERS[@]}"; do
+  apply_tls_secret "kind-${cluster}" "schema-registry-client-tls" \
+    "${CA_DIR}/schema-registry-client.crt" "${CA_DIR}/schema-registry-client.key" &>/dev/null
 done
 ok "All mTLS secrets provisioned"
 

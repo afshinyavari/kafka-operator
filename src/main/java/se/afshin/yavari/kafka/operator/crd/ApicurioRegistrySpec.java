@@ -1,7 +1,7 @@
 package se.afshin.yavari.kafka.operator.crd;
 
 public class ApicurioRegistrySpec {
-    private String image = "quay.io/apicurio/apicurio-registry-mem:latest-snapshot";
+    private String image = "quay.io/apicurio/apicurio-registry-kafkasql:latest-snapshot";
     private String rbacProxyImage;
     private String rbacRef;
     private int replicas = 1;

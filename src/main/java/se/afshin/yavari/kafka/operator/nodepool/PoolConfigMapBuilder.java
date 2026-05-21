@@ -33,13 +33,16 @@ public class PoolConfigMapBuilder {
         String poolName = pool.getMetadata().getName();
         List<KafkaListenerSpec> listeners = cluster.getSpec().getListeners();
         KafkaListenerTlsConfig controllerTls = cluster.getSpec().getControllerTls();
+        // INTERNAL listener mTLS only applies to brokers (controllers don't have INTERNAL).
+        // The StartupScriptBuilder uses this to decide whether to mount the INTERNAL PKCS12.
         boolean internalMtls = proxyName != null && isBroker;
 
-        // Pass the startup-time placeholder so buildProperties can compose advertised.listeners
-        // correctly for all three cases: no extra listeners, external-only, and internal TLS.
+        // Pass proxyName unconditionally (when set) so the authorizer + super.users config
+        // applies to controller-only pods too — in KRaft, ACL writes flow broker → controller
+        // and the controller process must also have StandardAuthorizer configured.
         Map<String, String> props = propsBuilder.buildProperties(
                 cluster, pool.getSpec(), clusterIndex, 0, quorumVoters, controllerAddr,
-                "${ADVERTISED_ADDR}", internalMtls ? proxyName : null, poolName);
+                "${ADVERTISED_ADDR}", proxyName, poolName);
 
         if (isBroker) {
             props.put("node.id", "${NODE_ID}");

@@ -171,7 +171,6 @@ public class ServerPropertiesBuilder {
                 // CA trust still ensures only operator-issued certs can connect.
                 addSslProps(props, "INTERNAL", true);
                 props.put("listener.name.internal.ssl.endpoint.identification.algorithm", "");
-                props.put("super.users", "User:CN=" + proxyCn + ";User:CN=" + poolName);
             }
             // Per-listener SSL properties for each user-configured TLS listener
             for (KafkaListenerSpec l : extraListeners) {
@@ -195,6 +194,19 @@ public class ServerPropertiesBuilder {
         // Controller TLS SSL properties — applied to all roles (brokers also connect to controllers)
         if (ctrlTls != null) {
             addSslProps(props, "CONTROLLER", ctrlTls.isMutualTls());
+        }
+
+        if (internalMtls) {
+            // super.users + authorizer apply to BOTH controllers and brokers. In KRaft mode
+            // ACL writes flow broker → active controller, and the controller validates and
+            // persists them; both processes must therefore know about the StandardAuthorizer
+            // and treat the operator's principal (kafka-proxy) as super-user.
+            props.put("super.users", "User:CN=" + proxyCn + ";User:CN=" + poolName);
+            // All existing clients (operator AdminClient, Kroxylicious upstream) connect as
+            // kafka-proxy → super-user → unaffected. Non-super-user principals (e.g. Apicurio
+            // kafkasql registry) require explicit ACLs created via KafkaAclManager.
+            props.put("authorizer.class.name",            "org.apache.kafka.metadata.authorizer.StandardAuthorizer");
+            props.put("allow.everyone.if.no.acl.found",   "false");
         }
 
         props.putIfAbsent("num.network.threads",                 "3");

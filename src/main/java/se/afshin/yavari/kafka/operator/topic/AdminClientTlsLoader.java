@@ -33,10 +33,7 @@ public class AdminClientTlsLoader {
      */
     public Properties loadAsAdminClientSslProps(String namespace, String secretName) {
         Secret secret = client.secrets().inNamespace(namespace).withName(secretName).get();
-        if (secret == null || secret.getData() == null) {
-            throw new TlsSecretNotFoundException("TLS secret " + namespace + "/" + secretName
-                    + " not found — required when KafkaCluster.spec.proxyMtls.enabled=true");
-        }
+        validateSecretShape(secret, namespace, secretName);
         String tlsCrt = decodePemKey(secret, "tls.crt", namespace, secretName);
         String tlsKey = decodePemKey(secret, "tls.key", namespace, secretName);
         String caCrt  = decodePemKey(secret, "ca.crt",  namespace, secretName);
@@ -49,6 +46,28 @@ public class AdminClientTlsLoader {
         p.put(SslConfigs.SSL_TRUSTSTORE_TYPE_CONFIG, "PEM");
         p.put(SslConfigs.SSL_TRUSTSTORE_CERTIFICATES_CONFIG, caCrt);
         return p;
+    }
+
+    /**
+     * Verifies the Secret exists and contains the three cert-manager keys
+     * {@code tls.crt}, {@code tls.key}, {@code ca.crt}. Used by callers that only need
+     * presence validation — e.g. when the consuming pod reads the PEMs from a mounted
+     * volume rather than feeding them to AdminClient directly.
+     */
+    public void validateSecretShape(String namespace, String secretName) {
+        Secret secret = client.secrets().inNamespace(namespace).withName(secretName).get();
+        validateSecretShape(secret, namespace, secretName);
+        // Touch each key so missing entries throw the same exception message format
+        decodePemKey(secret, "tls.crt", namespace, secretName);
+        decodePemKey(secret, "tls.key", namespace, secretName);
+        decodePemKey(secret, "ca.crt",  namespace, secretName);
+    }
+
+    private static void validateSecretShape(Secret secret, String namespace, String secretName) {
+        if (secret == null || secret.getData() == null) {
+            throw new TlsSecretNotFoundException("TLS secret " + namespace + "/" + secretName
+                    + " not found — required when KafkaCluster.spec.proxyMtls.enabled=true");
+        }
     }
 
     private static String decodePemKey(Secret secret, String key, String ns, String name) {

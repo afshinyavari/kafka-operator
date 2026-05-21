@@ -20,7 +20,7 @@ A Kubernetes operator for running Apache Kafka 4.x in KRaft mode across multiple
 - **Prometheus operator metrics** — rolling update counters, ISR check results, scale-down attempts
 - **Kafka proxy (Kroxylicious)** — `KafkaProxy` CRD deploys Kroxylicious with custom filters; supports SASL/OAUTHBEARER client auth, JWT group-based RBAC, XML and schema-registry message validation
 - **KafkaRbac** — declarative topic-level ACLs (group and user) and schema-registry artifact-level ACLs in a single CR; operator generates Kroxylicious and Apicurio policy ConfigMaps from it
-- **Apicurio schema registry** — `ApicurioRegistry` CRD deploys Apicurio Registry with an optional HTTP RBAC proxy that enforces per-artifact READ/WRITE/DELETE access via JWT roles
+- **Apicurio schema registry** — `ApicurioRegistry` CRD deploys Apicurio Registry with an optional HTTP RBAC proxy that enforces per-artifact READ/WRITE/DELETE access via JWT roles. Supports `mem`, `postgresql`, and `kafkasql` (durable Kafka-backed) storage with auto-provisioned journal topic and broker ACLs
 - **OIDC/Keycloak integration** — JWT claims extracted from `realm_access.roles` become authorization groups; same JWT used for both Kafka proxy RBAC and schema registry proxy RBAC
 
 ## Prerequisites

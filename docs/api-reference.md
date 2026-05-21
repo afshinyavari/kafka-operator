@@ -626,7 +626,7 @@ Manages an Apicurio Registry deployment and an optional HTTP RBAC proxy that enf
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `image` | string | no | `quay.io/apicurio/apicurio-registry-mem:latest-snapshot` | Apicurio Registry container image. |
+| `image` | string | no | `quay.io/apicurio/apicurio-registry-kafkasql:latest-snapshot` | Apicurio Registry container image. Override when using a different storage backend (e.g. `apicurio-registry-mem` or `apicurio-registry-sql`). |
 | `rbacProxyImage` | string | no | — | `apicurio-rbac-proxy` image. When set alongside `rbacRef`, the operator deploys `{name}-rbac-proxy`. |
 | `rbacRef` | string | no | — | Name of a [`KafkaRbac`](#kafkarbac) CR. Determines which policy ConfigMap is mounted into the proxy. |
 | `replicas` | integer | no | `1` | Registry pod count. |
@@ -645,9 +645,13 @@ Manages an Apicurio Registry deployment and an optional HTTP RBAC proxy that enf
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `type` | string | no | `mem` | `mem` (in-memory, dev only) \| `sql` (Postgres-style backend). |
-| `jdbcUrl` | string | no | — | JDBC URL for the `sql` backend (e.g. `jdbc:postgresql://db.kafka.svc.cluster.local:5432/apicurio`). |
+| `type` | string | no | `mem` | `mem` (in-memory, dev only) \| `postgresql` (Postgres-style backend) \| `kafkasql` (durable, Kafka-backed). |
+| `jdbcUrl` | string | no | — | JDBC URL for the `postgresql` backend (e.g. `jdbc:postgresql://db.kafka.svc.cluster.local:5432/apicurio`). |
 | `jdbcSecretRef` | string | no | — | Name of a Secret with JDBC credentials. The operator mounts it and exposes the credentials to the registry pod. |
+| `clusterRef` | string | when `type=kafkasql` | — | Name of the [`KafkaCluster`](#kafkacluster) CR (same namespace) whose brokers will host the journal topic. |
+| `kafkaTopic` | string | no | `kafkasql-journal` | Name of the compacted journal topic. The operator auto-creates a child `KafkaTopic` named `{registry}-kafkasql-journal`. |
+| `tlsSecretRef` | string | when target cluster has `proxyMtls.enabled=true` | — | Cert-manager-style Secret (keys `tls.crt`, `tls.key`, `ca.crt`) holding the registry's client cert. Mounted read-only at `/etc/kafka/client-tls` and consumed via PEM keystore mode (no PKCS12). |
+| `principal` | string | when target cluster has `proxyMtls.enabled=true` | — | CN inside `tlsSecretRef`. The reconciler provisions broker ACLs for `User:CN={principal}` covering the journal topic, consumer groups prefixed `apicurio-registry`, and `DESCRIBE` on the cluster. |
 
 ### status
 
@@ -676,14 +680,40 @@ spec:
 
 ```yaml
 spec:
+  image: quay.io/apicurio/apicurio-registry-sql:latest-snapshot
   replicas: 2
   storage:
-    type: sql
+    type: postgresql
     jdbcUrl: jdbc:postgresql://apicurio-db.kafka.svc.cluster.local:5432/apicurio
     jdbcSecretRef: apicurio-db-credentials   # keys: username, password
 ```
 
 The secret must contain JDBC credentials in the form expected by the Apicurio image.
+
+#### Production — `kafkasql` backend (durable, Kafka-backed)
+
+```yaml
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: ApicurioRegistry
+metadata:
+  name: schema-registry
+  namespace: kafka
+spec:
+  # image defaults to apicurio-registry-kafkasql:latest-snapshot
+  replicas: 2
+  storage:
+    type: kafkasql
+    clusterRef: my-kafka                 # KafkaCluster in same namespace
+    kafkaTopic: kafkasql-journal         # default if omitted
+    tlsSecretRef: schema-registry-client-tls   # cert-manager Secret
+    principal: apicurio-registry         # CN inside the cert
+```
+
+The operator auto-creates a `KafkaTopic` CR named `schema-registry-kafkasql-journal`
+(partitions=1, RF=3, `cleanup.policy=compact`, `min.insync.replicas=2`,
+`deletionPolicy=RETAIN`) and provisions broker ACLs for `User:CN=apicurio-registry`
+covering the journal topic, the `apicurio-registry`-prefixed consumer groups, and
+`DESCRIBE` on the cluster. See `docs/architecture.md` for the full flow.
 
 #### With OIDC RBAC proxy
 

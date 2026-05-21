@@ -21,6 +21,7 @@ import org.junit.jupiter.api.Test;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistry;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistrySpec;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistryStatus;
+import se.afshin.yavari.kafka.operator.crd.ApicurioRegistryStorageConfig;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -42,6 +43,7 @@ class ApicurioRegistryReconcilerTest {
     private ApicurioDeploymentBuilder deploymentBuilder;
     private ApicurioProxyContainerBuilder proxyContainerBuilder;
     private ApicurioProxyServiceBuilder proxyServiceBuilder;
+    private ApicurioKafkasqlSupport kafkasqlSupport;
     private Context<ApicurioRegistry> context;
     private ApicurioRegistryReconciler reconciler;
 
@@ -66,6 +68,7 @@ class ApicurioRegistryReconcilerTest {
         deploymentBuilder = mock(ApicurioDeploymentBuilder.class);
         proxyContainerBuilder = mock(ApicurioProxyContainerBuilder.class);
         proxyServiceBuilder = mock(ApicurioProxyServiceBuilder.class);
+        kafkasqlSupport = mock(ApicurioKafkasqlSupport.class);
         context = mock(Context.class);
         client = mock(KubernetesClient.class);
 
@@ -110,7 +113,7 @@ class ApicurioRegistryReconcilerTest {
         when(nsSvcOp.withName(anyString())).thenReturn(namedSvc);
 
         // Stubs
-        when(deploymentBuilder.build(any(), anyString(), any(), any())).thenReturn(new Deployment());
+        when(deploymentBuilder.build(any(), anyString(), any(), any(), any())).thenReturn(new Deployment());
         when(proxyContainerBuilder.build(any())).thenReturn(new Container());
         when(proxyContainerBuilder.policyVolume(anyString())).thenReturn(new Volume());
         when(proxyServiceBuilder.build(any(), anyString())).thenReturn(new Service());
@@ -120,6 +123,7 @@ class ApicurioRegistryReconcilerTest {
         injectField(reconciler, "deploymentBuilder", deploymentBuilder);
         injectField(reconciler, "proxyContainerBuilder", proxyContainerBuilder);
         injectField(reconciler, "proxyServiceBuilder", proxyServiceBuilder);
+        injectField(reconciler, "kafkasqlSupport", kafkasqlSupport);
         injectField(reconciler, "mcsEnabled", false);
     }
 
@@ -159,7 +163,7 @@ class ApicurioRegistryReconcilerTest {
 
         verify(proxyContainerBuilder).build(any());
         verify(proxyContainerBuilder).policyVolume(RBAC_REF);
-        verify(deploymentBuilder).build(any(), anyString(), any(Container.class), any(Volume.class));
+        verify(deploymentBuilder).build(any(), anyString(), any(Container.class), any(Volume.class), any());
         verify(proxyServiceBuilder).build(any(), anyString());
         verify(depResource, times(1)).serverSideApply();   // single merged Deployment
         verify(svcResource, times(1)).serverSideApply();   // only proxy Service
@@ -189,6 +193,53 @@ class ApicurioRegistryReconcilerTest {
     }
 
     @Test
+    void kafkasql_pending_setsReconcilingAndReschedules() {
+        ApicurioRegistry registry = kafkasqlRegistry();
+        when(kafkasqlSupport.prepare(any())).thenReturn(
+                new ApicurioKafkasqlSupport.Result.Pending("waiting for journal topic"));
+
+        UpdateControl<ApicurioRegistry> result = reconciler.reconcile(registry, context);
+
+        assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.RECONCILING);
+        assertThat(registry.getStatus().getMessage()).contains("waiting for journal topic");
+        assertThat(result.getScheduleDelay()).isPresent();
+        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any());
+    }
+
+    @Test
+    void kafkasql_failed_setsFailedStatus() {
+        ApicurioRegistry registry = kafkasqlRegistry();
+        when(kafkasqlSupport.prepare(any())).thenReturn(
+                new ApicurioKafkasqlSupport.Result.Failed("clusterRef missing"));
+
+        reconciler.reconcile(registry, context);
+
+        assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.FAILED);
+        assertThat(registry.getStatus().getMessage()).contains("clusterRef missing");
+        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any());
+    }
+
+    @Test
+    void kafkasql_ready_passesConfigToDeploymentBuilder() {
+        ApicurioRegistry registry = kafkasqlRegistry();
+        var cfg = new ApicurioDeploymentBuilder.KafkasqlConfig("b:9092", "kafkasql-journal", "registry-tls", "kafka-ubi:4.0.0");
+        when(kafkasqlSupport.prepare(any())).thenReturn(new ApicurioKafkasqlSupport.Result.Ready(cfg));
+
+        reconciler.reconcile(registry, context);
+
+        verify(deploymentBuilder).build(any(), anyString(), any(), any(), org.mockito.ArgumentMatchers.eq(cfg));
+    }
+
+    @Test
+    void cleanup_invokesKafkasqlCleanup() {
+        ApicurioRegistry registry = registry(null, null);
+
+        reconciler.cleanup(registry, context);
+
+        verify(kafkasqlSupport, times(1)).cleanup(registry);
+    }
+
+    @Test
     void cleanup_deletesMergedDeploymentAndProxyService() {
         ApicurioRegistry registry = registry(null, null);
 
@@ -212,6 +263,16 @@ class ApicurioRegistryReconcilerTest {
         spec.setRbacProxyImage(rbacProxyImage);
         spec.setReplicas(1);
         r.setSpec(spec);
+        return r;
+    }
+
+    private ApicurioRegistry kafkasqlRegistry() {
+        ApicurioRegistry r = registry(null, null);
+        ApicurioRegistryStorageConfig storage = new ApicurioRegistryStorageConfig();
+        storage.setType("kafkasql");
+        storage.setClusterRef("my-kafka");
+        storage.setKafkaTopic("kafkasql-journal");
+        r.getSpec().setStorage(storage);
         return r;
     }
 

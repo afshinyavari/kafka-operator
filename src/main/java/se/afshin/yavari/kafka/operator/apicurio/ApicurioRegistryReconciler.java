@@ -43,6 +43,7 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
     @Inject ApicurioDeploymentBuilder deploymentBuilder;
     @Inject ApicurioProxyContainerBuilder proxyContainerBuilder;
     @Inject ApicurioProxyServiceBuilder proxyServiceBuilder;
+    @Inject ApicurioKafkasqlSupport kafkasqlSupport;
 
     @ConfigProperty(name = "kafka.networking.mcs-enabled")
     boolean mcsEnabled;
@@ -91,6 +92,24 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
         }
 
         try {
+            ApicurioDeploymentBuilder.KafkasqlConfig kafkasqlConfig = null;
+            if (registry.getSpec().getStorage() != null
+                    && "kafkasql".equals(registry.getSpec().getStorage().getType())) {
+                ApicurioKafkasqlSupport.Result result = kafkasqlSupport.prepare(registry);
+                if (result instanceof ApicurioKafkasqlSupport.Result.Failed f) {
+                    status.setPhase(ApicurioRegistryStatus.Phase.FAILED);
+                    status.setMessage(f.message());
+                    registry.setStatus(status);
+                    return UpdateControl.patchStatus(registry);
+                }
+                if (result instanceof ApicurioKafkasqlSupport.Result.Pending p) {
+                    status.setMessage(p.reason());
+                    registry.setStatus(status);
+                    return UpdateControl.patchStatus(registry).rescheduleAfter(Duration.ofSeconds(10));
+                }
+                kafkasqlConfig = ((ApicurioKafkasqlSupport.Result.Ready) result).config();
+            }
+
             Container proxyContainer = null;
             Volume policyVolume = null;
             if (proxyEnabled) {
@@ -98,7 +117,7 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
                 policyVolume = proxyContainerBuilder.policyVolume(rbacRef);
             }
 
-            Deployment dep = deploymentBuilder.build(registry, namespace, proxyContainer, policyVolume);
+            Deployment dep = deploymentBuilder.build(registry, namespace, proxyContainer, policyVolume, kafkasqlConfig);
             client.apps().deployments().inNamespace(namespace).resource(dep).serverSideApply();
 
             if (proxyEnabled) {
@@ -141,6 +160,7 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
         String namespace = registry.getMetadata().getNamespace();
         String name = registry.getMetadata().getName();
         LOG.infof("ApicurioRegistry %s deleted", name);
+        kafkasqlSupport.cleanup(registry);
         client.apps().deployments().inNamespace(namespace).withName(name + "-registry").delete();
         client.services().inNamespace(namespace).withName(name + "-rbac-proxy").delete();
         if (mcsEnabled) {

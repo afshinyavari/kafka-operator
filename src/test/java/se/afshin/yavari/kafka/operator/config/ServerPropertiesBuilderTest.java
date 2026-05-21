@@ -103,6 +103,69 @@ class ServerPropertiesBuilderTest {
     }
 
     @Test
+    void authorizerEnabledWhenProxyMtlsActive() {
+        KafkaCluster cr = sampleCr();
+        KafkaNodePoolSpec poolSpec = new KafkaNodePoolSpec();
+        poolSpec.setRoles(List.of(NodeRole.BROKER));
+        poolSpec.setReplicas(3);
+
+        Map<String, String> props = builder.buildProperties(
+                cr, poolSpec, 0, 0,
+                "10000@ctrl-a:9093",
+                null,
+                "broker-a-0.example.com:9092",
+                "kafka-proxy",
+                "brokers-a");
+
+        assertThat(props.get("authorizer.class.name"))
+                .isEqualTo("org.apache.kafka.metadata.authorizer.StandardAuthorizer");
+        assertThat(props.get("allow.everyone.if.no.acl.found")).isEqualTo("false");
+        assertThat(props.get("super.users")).isEqualTo("User:CN=kafka-proxy;User:CN=brokers-a");
+    }
+
+    @Test
+    void authorizerAlsoEnabledOnControllerOnlyNodes() {
+        // KRaft ACL writes are forwarded from brokers to the active controller, so the
+        // controller process must also have the authorizer + super.users configured.
+        KafkaCluster cr = sampleCr();
+        KafkaNodePoolSpec poolSpec = new KafkaNodePoolSpec();
+        poolSpec.setRoles(List.of(NodeRole.CONTROLLER));
+        poolSpec.setReplicas(1);
+
+        Map<String, String> props = builder.buildProperties(
+                cr, poolSpec, 0, 0,
+                "10000@ctrl-a:9093",
+                "ctrl-a.example.com:9093",
+                null,
+                "kafka-proxy",
+                "controllers-a");
+
+        assertThat(props.get("authorizer.class.name"))
+                .isEqualTo("org.apache.kafka.metadata.authorizer.StandardAuthorizer");
+        assertThat(props.get("allow.everyone.if.no.acl.found")).isEqualTo("false");
+        assertThat(props.get("super.users")).isEqualTo("User:CN=kafka-proxy;User:CN=controllers-a");
+    }
+
+    @Test
+    void authorizerAbsentWhenProxyMtlsDisabled() {
+        KafkaCluster cr = sampleCr();
+        KafkaNodePoolSpec poolSpec = new KafkaNodePoolSpec();
+        poolSpec.setRoles(List.of(NodeRole.BROKER));
+        poolSpec.setReplicas(3);
+
+        Map<String, String> props = builder.buildProperties(
+                cr, poolSpec, 0, 0,
+                "10000@ctrl-a:9093",
+                null,
+                "broker-a-0.example.com:9092",
+                null, null);
+
+        assertThat(props).doesNotContainKey("authorizer.class.name");
+        assertThat(props).doesNotContainKey("allow.everyone.if.no.acl.found");
+        assertThat(props).doesNotContainKey("super.users");
+    }
+
+    @Test
     void toPropertiesStringFormat() {
         Map<String, String> props = Map.of("process.roles", "broker", "node.id", "5");
         String output = builder.toPropertiesString(props);

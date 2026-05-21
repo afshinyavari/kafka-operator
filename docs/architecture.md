@@ -354,6 +354,87 @@ apicurio-registry:8080     (Apicurio Registry, no auth)
 Registry are filtered out before forwarding the response to the client. Vert.x rejects these
 as invalid HTTP/1 header names.
 
+### `kafkasql` storage backend
+
+`ApicurioRegistry.spec.storage.type=kafkasql` durably stores schemas in a compacted
+Kafka topic instead of `mem` (lost on restart) or `postgresql` (external DB). The
+registry connects **directly to brokers** on the INTERNAL listener — not through
+Kroxylicious, since the proxy mandates `SASL_SSL + OAUTHBEARER` and the registry
+needs a long-lived workload identity.
+
+```yaml
+apiVersion: yavari.afshin.se/v1
+kind: ApicurioRegistry
+metadata:
+  name: schema-registry
+spec:
+  storage:
+    type: kafkasql
+    clusterRef: my-kafka                # KafkaCluster in same namespace
+    kafkaTopic: kafkasql-journal        # default if omitted
+    tlsSecretRef: schema-registry-client-tls   # required when proxyMtls.enabled
+    principal: apicurio-registry        # CN of the cert in tlsSecretRef
+```
+
+`tlsSecretRef` must be a cert-manager-style `kubernetes.io/tls` Secret with keys
+`tls.crt`, `tls.key` (PKCS#8 PEM), and `ca.crt`. In production, mint it with a
+cert-manager `Certificate` whose `commonName` matches `storage.principal`. In the
+Kind test rig, `mcs-setup.sh` mints `schema-registry-client-tls` with CN
+`apicurio-registry` automatically.
+
+#### What the reconciler does
+
+When `storage.type=kafkasql`, `ApicurioKafkasqlSupport` runs a preflight before
+the Deployment is built:
+
+1. Validates `clusterRef` exists; when the cluster has `proxyMtls.enabled=true`,
+   also requires `tlsSecretRef` + `principal` and verifies the Secret has the
+   three cert-manager keys.
+2. Resolves the broker bootstrap via `BrokerBootstrapResolver` (alphabetically
+   first broker pool's headless service on port 9092).
+3. Server-side-applies a child `KafkaTopic` CR named
+   `{registry}-kafkasql-journal` with `partitions=1`, `replicationFactor=3`,
+   `cleanup.policy=compact`, `min.insync.replicas=2`, and
+   `deletionPolicy=RETAIN` (deleting the registry CR does not wipe schema
+   history). Blocks the Deployment until the topic is `READY`.
+4. Provisions broker ACLs via `KafkaAclManager` for
+   `User:CN={storage.principal}`:
+   - `READ`/`WRITE`/`DESCRIBE` on the journal topic (literal),
+   - `READ`/`DESCRIBE` on consumer groups prefixed `apicurio-registry`,
+   - `DESCRIBE` on cluster.
+5. Passes a `KafkasqlConfig` record to `ApicurioDeploymentBuilder`, which emits the
+   `KAFKA_*` env vars (the names Apicurio v2.6 actually reads — see its
+   `application.properties`: `KAFKA_BOOTSTRAP_SERVERS`, `KAFKA_TOPIC`,
+   `KAFKA_SECURITY_PROTOCOL`, `KAFKA_SSL_*`). Apicurio's Kafka client SSL config
+   only accepts file-based **PKCS12/JKS** keystores, not inline PEM, so the
+   deployment adds a `pem-to-pkcs12` initContainer (using the cluster's Kafka
+   image, which carries `openssl` + `keytool`) that converts the cert-manager
+   PEM Secret into `/tmp/pkcs12/{keystore,truststore}.p12` (chmod 0644 so the
+   registry's non-root UID can read them).
+
+#### Broker authorizer + controller mTLS prerequisites
+
+`kafkasql` requires broker-side ACL enforcement, so when
+`KafkaCluster.spec.proxyMtls.enabled=true` the operator sets
+`authorizer.class.name=org.apache.kafka.metadata.authorizer.StandardAuthorizer`
+and `allow.everyone.if.no.acl.found=false` in `server.properties` on **both
+brokers and controllers** — in KRaft, ACL writes flow broker → active controller,
+so both processes must run the authorizer. This also requires
+`KafkaCluster.spec.controllerTls.mutualTls=true`: without mTLS on the
+inter-controller CONTROLLER listener, controller-to-controller Raft traffic
+arrives as `User:ANONYMOUS` and is denied, blocking quorum.
+
+All cluster-internal mTLS certs (broker INTERNAL listener, per-pod CONTROLLER
+listener, operator AdminClient) share the `CN=kafka-proxy` identity, which is
+listed in `super.users`. This avoids needing per-pool CN entries in
+`super.users`. Per-pod `{podName}-tls` Secrets must exist for every Kafka pod;
+`mcs-setup.sh` mints them in the test rig (cert-manager `Certificate` resources
+would handle this in production).
+
+On `ApicurioRegistry` deletion the helper deletes the ACLs by principal; the
+auto-created `KafkaTopic` CR is removed via ownerReference cascade, while the
+underlying Kafka topic is retained per `deletionPolicy=RETAIN`.
+
 ---
 
 ## Kafka UI (Quarkus + htmx)
