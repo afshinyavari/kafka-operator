@@ -57,6 +57,9 @@ public class KafkaClusterSpec {
             message = "spec.proxy is required: every KafkaCluster has a Kroxylicious proxy")
     private KafkaClusterProxySpec proxy;
 
+    /** Apicurio Registry sub-spec. Optional: null = no schema registry deployed. */
+    private KafkaClusterApicurioSpec apicurio;
+
     public String getKafkaImage() { return kafkaImage; }
     public void setKafkaImage(String kafkaImage) { this.kafkaImage = kafkaImage; }
 
@@ -89,4 +92,7 @@ public class KafkaClusterSpec {
 
     public KafkaClusterProxySpec getProxy() { return proxy; }
     public void setProxy(KafkaClusterProxySpec proxy) { this.proxy = proxy; }
+
+    public KafkaClusterApicurioSpec getApicurio() { return apicurio; }
+    public void setApicurio(KafkaClusterApicurioSpec apicurio) { this.apicurio = apicurio; }
 }

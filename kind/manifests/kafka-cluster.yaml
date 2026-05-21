@@ -73,6 +73,26 @@ spec:
     externalAccess:
       type: LOADBALANCER
       # advertisedHostTemplate: ""    # optional override; supports ${clusterId}
+  # Apicurio Registry — optional sub-spec as of Wave 4c of the audit. Omit to skip.
+  # mcs/targetClusters/exportService are derived from `clusters[]` above. The
+  # storage.clusterRef is implicit (the parent IS the cluster).
+  apicurio:
+    rbacProxyImage: apicurio-rbac-proxy:dev
+    rbacRef: kafka-rbac
+    replicas: 3
+    storage:
+      type: kafkasql
+      kafkaTopic: kafkasql-journal
+      # Apicurio v2.6 requires partitions=1 for total ordering. Multi-cluster HA shares
+      # this single journal across all 3 cluster replicas — total ordering is load-bearing.
+      kafkaTopicPartitions: 1
+      tlsSecretRef: schema-registry-client-tls
+      principal: apicurio-registry
+    oidc:
+      issuerUrl: http://keycloak.kafka.svc.clusterset.local:8080/realms/demo
+      groupsClaim: realm_access.roles
+    externalAccess:
+      type: LOADBALANCER
 # Uncomment to enable user-facing TLS listeners. Requires per-pod secrets named {podName}-tls
 # with keys tls.crt, tls.key, ca.crt (cert-manager convention).
 #  listeners:

@@ -22,6 +22,9 @@ public class KafkaClusterStatus {
     /** Proxy sub-status (post-Wave-4 merger of KafkaProxy into KafkaCluster). */
     private KafkaProxyStatus proxy;
 
+    /** Apicurio Registry sub-status (Wave 4c merger). Null when spec.apicurio is unset. */
+    private ApicurioRegistryStatus apicurio;
+
     public Phase getPhase() { return phase; }
     public void setPhase(Phase phase) { this.phase = phase; }
 
@@ -48,4 +51,7 @@ public class KafkaClusterStatus {
 
     public KafkaProxyStatus getProxy() { return proxy; }
     public void setProxy(KafkaProxyStatus proxy) { this.proxy = proxy; }
+
+    public ApicurioRegistryStatus getApicurio() { return apicurio; }
+    public void setApicurio(ApicurioRegistryStatus apicurio) { this.apicurio = apicurio; }
 }

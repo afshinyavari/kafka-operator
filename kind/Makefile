@@ -191,14 +191,13 @@ proxy-setup:  ## Apply KafkaRbac CR + wait for the proxy sub-spec on KafkaCluste
 rbac-test:  ## Run end-to-end RBAC test via SASL/OAUTHBEARER
 	@chmod +x rbac-test.sh && ./rbac-test.sh
 
-apicurio-setup:  ## Build + deploy Apicurio Registry (kafkasql) + RBAC proxy to cluster-a
+apicurio-setup:  ## Build the rbac-proxy image + wait for Apicurio sub-spec on KafkaCluster
 	$(MAKE) reload-apicurio-proxy-image
 	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafkarbac.yaml
-	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/apicurio-kafkasql.yaml
-	@echo "Waiting for ApicurioRegistry to be Ready..."
-	@until kubectl --context kind-kafka-a -n $(NAMESPACE) get apicurioregistry apicurio \
-	    -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
-	@echo "ApicurioRegistry READY."
+	@echo "Waiting for KafkaCluster.status.apicurio.phase to reach READY..."
+	@until kubectl --context kind-kafka-a -n $(NAMESPACE) get kafkacluster my-kafka \
+	    -o jsonpath='{.status.apicurio.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
+	@echo "Apicurio READY."
 
 apicurio-rbac-test:  ## Run end-to-end schema registry RBAC test
 	@chmod +x apicurio-rbac-test.sh && ./apicurio-rbac-test.sh

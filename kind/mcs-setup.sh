@@ -310,7 +310,6 @@ for cluster in "${CLUSTERS[@]}"; do
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkapodsets.kafka.yavari.afshin.se-v1.yml" --server-side
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkarbacs.kafka.yavari.afshin.se-v1.yml" --server-side
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkauis.kafka.yavari.afshin.se-v1.yml" --server-side
-    kubectl --context "${ctx}" apply -f "${CRD_DIR}/apicurioregistries.kafka.yavari.afshin.se-v1.yml" --server-side
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkatopics.kafka.yavari.afshin.se-v1.yml" --server-side
   ) &>/dev/null &
   PIDS+=($!)
@@ -603,15 +602,12 @@ for cluster in "${PROXY_CLUSTERS[@]}"; do
   kubectl --context "kind-${cluster}" apply -f "${MANIFESTS_DIR}/kafkarbac.yaml" --server-side &>/dev/null
 done
 
-info "Deploying ApicurioRegistry CR to: ${PROXY_CLUSTERS[*]} (HA #19 — each operator filters by targetClusters)..."
+info "Apicurio is a sub-spec of KafkaCluster as of Wave 4c — the rendered kafka-cluster.yaml"
+info "applied earlier already includes spec.apicurio. Waiting for apicurio READY on each cluster..."
 for cluster in "${PROXY_CLUSTERS[@]}"; do
-  kubectl --context "kind-${cluster}" apply -f "${MANIFESTS_DIR}/apicurio-kafkasql.yaml" --server-side &>/dev/null
-done
-info "Waiting for ApicurioRegistry to reach READY on each target cluster (up to 5 min)..."
-for cluster in "${PROXY_CLUSTERS[@]}"; do
-  until kubectl --context "kind-${cluster}" -n "${NAMESPACE}" get apicurioregistry apicurio \
-      -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
-  ok "ApicurioRegistry READY on ${cluster}"
+  until kubectl --context "kind-${cluster}" -n "${NAMESPACE}" get kafkacluster my-kafka \
+      -o jsonpath='{.status.apicurio.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
+  ok "Apicurio READY on ${cluster}"
 done
 
 info "Installing MetalLB on all clusters (KafkaProxy externalAccess=LOADBALANCER needs it)..."

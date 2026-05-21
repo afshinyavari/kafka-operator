@@ -28,6 +28,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
+import se.afshin.yavari.kafka.operator.apicurio.ApicurioOrchestrator;
 import se.afshin.yavari.kafka.operator.proxy.KafkaProxyOrchestrator;
 import se.afshin.yavari.kafka.operator.upgrade.VersionUpgradeController;
 
@@ -62,6 +63,9 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
     @Inject
     KafkaProxyOrchestrator proxyOrchestrator;
 
+    @Inject
+    ApicurioOrchestrator apicurioOrchestrator;
+
     @ConfigProperty(name = "kafka.cluster.id")
     String localClusterId;
 
@@ -95,7 +99,7 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
                 .build(),
             context);
 
-        // Wake on rotation of any Secret the proxy mounts (cert-manager rotations -> roll).
+        // Wake on rotation of any Secret the proxy or apicurio mounts (cert-manager -> roll).
         var secretEventSource = new InformerEventSource<>(
             InformerConfiguration.from(Secret.class, context)
                 .withSecondaryToPrimaryMapper(secret -> {
@@ -103,7 +107,9 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
                     String secretName = secret.getMetadata().getName();
                     return context.getClient()
                             .resources(KafkaCluster.class).inNamespace(ns).list().getItems().stream()
-                            .filter(c -> proxyReferencesSecret(c, secretName))
+                            .filter(c -> proxyReferencesSecret(c, secretName)
+                                    || se.afshin.yavari.kafka.operator.apicurio.ApicurioOrchestrator
+                                            .referencesSecret(c, secretName))
                             .map(c -> new ResourceID(c.getMetadata().getName(), ns))
                             .collect(Collectors.toSet());
                 })
@@ -174,9 +180,22 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
         if (cr.getSpec().getProxy() != null) {
             status.setProxy(proxyOrchestrator.reconcile(cr, namespace, localClusterId));
         }
+        // Reconcile the optional Apicurio sub-spec (Wave 4c).
+        if (cr.getSpec().getApicurio() != null) {
+            status.setApicurio(apicurioOrchestrator.reconcile(cr, namespace, localClusterId));
+        }
 
         cr.setStatus(status);
-        if (status.getPhase() != KafkaClusterStatus.Phase.READY) {
+        // Reschedule while any sub-status (proxy / apicurio) is still converging — the
+        // sub-orchestrators set RECONCILING when they're waiting on dependent resources
+        // (LB ingress, kafkasql journal topic, etc.) and need the cluster reconciler to
+        // tick them again.
+        boolean proxyConverging = status.getProxy() != null
+                && status.getProxy().getPhase() == se.afshin.yavari.kafka.operator.crd.KafkaProxyStatus.Phase.RECONCILING;
+        boolean apicurioConverging = status.getApicurio() != null
+                && status.getApicurio().getPhase() == se.afshin.yavari.kafka.operator.crd.ApicurioRegistryStatus.Phase.RECONCILING;
+        if (status.getPhase() != KafkaClusterStatus.Phase.READY
+                || proxyConverging || apicurioConverging) {
             return UpdateControl.patchStatus(cr).rescheduleAfter(java.time.Duration.ofSeconds(15));
         }
         return UpdateControl.patchStatus(cr);
@@ -188,10 +207,13 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
         String name = cr.getMetadata().getName();
         LOG.infof("KafkaCluster %s/%s deleted — ordered shutdown (brokers first, then controllers)", namespace, name);
 
-        // Tear down proxy resources up-front. Most are owner-ref'd to the cluster and would
-        // cascade, but Deployment/ConfigMap explicit delete keeps the order deterministic.
+        // Tear down proxy + apicurio resources up-front. Most are owner-ref'd to the cluster
+        // and would cascade, but Deployment/ConfigMap explicit delete keeps order deterministic.
         if (cr.getSpec().getProxy() != null) {
             proxyOrchestrator.cleanup(cr, namespace);
+        }
+        if (cr.getSpec().getApicurio() != null) {
+            apicurioOrchestrator.cleanup(cr, namespace);
         }
 
         List<KafkaNodePool> pools = client.resources(KafkaNodePool.class)

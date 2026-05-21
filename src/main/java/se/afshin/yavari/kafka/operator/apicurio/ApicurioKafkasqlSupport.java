@@ -148,18 +148,37 @@ public class ApicurioKafkasqlSupport {
         String topicCrName = registry.getMetadata().getName() + "-kafkasql-journal";
 
         KafkaTopic desired = new KafkaTopic();
-        desired.setMetadata(new io.fabric8.kubernetes.api.model.ObjectMetaBuilder()
+        var meta = new io.fabric8.kubernetes.api.model.ObjectMetaBuilder()
                 .withName(topicCrName)
-                .withNamespace(ns)
-                .withOwnerReferences(new OwnerReferenceBuilder()
-                        .withApiVersion(registry.getApiVersion())
-                        .withKind(registry.getKind())
-                        .withName(registry.getMetadata().getName())
-                        .withUid(registry.getMetadata().getUid())
+                .withNamespace(ns);
+        // Post-Wave-4c: the synthetic ApicurioRegistry has no UID — owner-ref the parent
+        // KafkaCluster instead (looked up via storage.clusterRef which the orchestrator
+        // populates). On the legacy path the registry IS a CR and has a real UID; we
+        // honour that when present.
+        if (registry.getMetadata().getUid() != null && !registry.getMetadata().getUid().isBlank()) {
+            meta.withOwnerReferences(new OwnerReferenceBuilder()
+                    .withApiVersion(registry.getApiVersion())
+                    .withKind(registry.getKind())
+                    .withName(registry.getMetadata().getName())
+                    .withUid(registry.getMetadata().getUid())
+                    .withController(true)
+                    .withBlockOwnerDeletion(true)
+                    .build());
+        } else if (storage.getClusterRef() != null) {
+            KafkaCluster owner = client.resources(KafkaCluster.class).inNamespace(ns)
+                    .withName(storage.getClusterRef()).get();
+            if (owner != null && owner.getMetadata().getUid() != null) {
+                meta.withOwnerReferences(new OwnerReferenceBuilder()
+                        .withApiVersion(owner.getApiVersion())
+                        .withKind(owner.getKind())
+                        .withName(owner.getMetadata().getName())
+                        .withUid(owner.getMetadata().getUid())
                         .withController(true)
                         .withBlockOwnerDeletion(true)
-                        .build())
-                .build());
+                        .build());
+            }
+        }
+        desired.setMetadata(meta.build());
 
         KafkaTopicSpec spec = new KafkaTopicSpec();
         spec.setClusterRef(storage.getClusterRef());

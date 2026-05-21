@@ -37,7 +37,7 @@ public class UIRbacBuilder {
                 .endMetadata()
                 .withRules(new PolicyRuleBuilder()
                         .withApiGroups("kafka.yavari.afshin.se")
-                        .withResources("kafkaclusters", "kafkaproxies", "kafkarbacs", "apicurioregistries")
+                        .withResources("kafkaclusters", "kafkarbacs")
                         .withVerbs("get", "list", "watch")
                         .build())
                 .build();
