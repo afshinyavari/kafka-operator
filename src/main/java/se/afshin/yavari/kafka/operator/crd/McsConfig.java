@@ -1,6 +1,6 @@
 package se.afshin.yavari.kafka.operator.crd;
 
-public class KafkaProxyMcsConfig {
+public class McsConfig {
 
     private boolean enabled;
 

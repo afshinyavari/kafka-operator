@@ -5,6 +5,7 @@ A Kubernetes operator for running Apache Kafka 4.x in KRaft mode across multiple
 ## Features
 
 - **Multi-cluster KRaft quorum** — single controller quorum spanning 3+ clusters via Submariner `clusterset.local` DNS
+- **Multi-cluster HA for KafkaProxy / ApicurioRegistry / KafkaUI** — `spec.mcs.enabled + spec.targetClusters` on each CR; the same CR is applied to every cluster and each operator filters by its own cluster ID. `ServiceExport` resources are auto-created for cross-cluster client resolution via Lighthouse. For Apicurio, all replicas share one kafkasql journal topic on the MCS broker pool (single-partition for total ordering).
 - **Node pool model** — separate `KafkaNodePool` CRs for controllers and brokers; mixed roles supported
 - **Safe rolling updates** — spec hash triggers pod restart; ISR/quorum check blocks restart until safe
 - **Cross-cluster roll ordering** — `spec.clusterRollOrder` sequences controller restarts across clusters

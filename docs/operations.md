@@ -344,6 +344,97 @@ curl -H "Authorization: Bearer $TOKEN" \
   $PROXY/apis/registry/v2/groups/default/artifacts/invoices
 ```
 
+### Multi-cluster HA (#19) — failover
+
+In MCS deployments the manifest sets `spec.mcs.enabled: true` and
+`spec.targetClusters: [A, B, C]`, so the same CR applied to all 3 clusters yields
+3 independent Apicurio deployments sharing one kafkasql journal topic on the MCS
+broker pool. Each operator creates a `ServiceExport` for its local
+`{name}-rbac-proxy` Service. Clients reach the registry via the per-cluster
+external URL from `status.externalUrl` (LB / Gateway / Ingress).
+
+> **Submariner limitation**: Lighthouse does not support `LoadBalancer`-typed
+> Services for cross-cluster DNS aggregation (`UnsupportedServiceType`). When
+> `externalAccess.type=LOADBALANCER`, the `ServiceExport` is still created (and
+> Lighthouse logs the rejection), but `apicurio-rbac-proxy.kafka.svc.clusterset.local`
+> will NOT resolve. Clients must use per-cluster external URLs — typically
+> through a DNS-based load balancer above MetalLB. Switching `externalAccess.type`
+> to `GATEWAY` or `INGRESS` keeps the underlying Service at `ClusterIP`, in which
+> case Lighthouse aggregation works.
+
+Verify the fan-out:
+
+```bash
+# Each cluster phase should be READY
+for c in a b c; do
+  kubectl --context kind-kafka-$c -n kafka get apicurioregistry apicurio \
+    -o jsonpath='{.status.phase}'; echo
+done
+
+# Each cluster should have its own ServiceExport for the rbac-proxy
+for c in a b c; do
+  kubectl --context kind-kafka-$c -n kafka get serviceexport apicurio-rbac-proxy
+done
+
+# Cross-cluster DNS: should return one endpoint per cluster (3 total)
+kubectl --context kind-kafka-b -n kafka exec brokers-b-0 -- \
+  nslookup apicurio-rbac-proxy.kafka.svc.clusterset.local
+```
+
+**Failover**: when `kafka-a` is unavailable, the kafkasql journal topic is still
+hosted by the shared MCS broker pool (RF=3, broker pods on each cluster).
+Apicurio replicas on `kafka-b` and `kafka-c` continue to read/write the journal;
+clients pointed at `kafka-b`/`kafka-c`'s LB IPs continue to serve traffic.
+Restart the `kafka-a` Apicurio pods once the cluster comes back — the local H2
+mirror replays the journal from scratch.
+
+**Caveats**:
+
+- Apicurio v2.6 requires `storage.kafkaTopicPartitions: 1` for total ordering;
+  the operator warns if overridden. With multi-cluster HA this becomes
+  load-bearing — keep it at 1.
+- Concurrent writes to the same artifact-version from different cluster's
+  clients are resolved by Apicurio's optimistic concurrency (one client gets
+  `409 Conflict`). Safe but visible to clients.
+- All 3 deployments must use the same `storage.kafkaTopic` and
+  `storage.principal` (automatic when applying the same CR).
+- For cross-cluster failover via DNS, put a DNS-based load balancer (or
+  HAProxy / cloud-LB) in front of the 3 per-cluster LB IPs. Submariner
+  Lighthouse cannot do this for LoadBalancer-typed Services.
+
+---
+
+## Kafka UI (Web Console)
+
+Apply via:
+
+```bash
+make -C kind kafka-ui-setup
+```
+
+This now deploys the UI to **all 3 clusters** (HA #20). Per-cluster external
+URLs are available at `status.advertisedHost`. State is read-mostly (per-pod
+Caffeine cache + per-pod OIDC session), so HA is active-active with eventual
+freshness — no shared session store required.
+
+The kafka-ui Service is typically `LoadBalancer` (matching the existing
+`externalAccess.type: LOADBALANCER` default), which Submariner Lighthouse
+rejects for cross-cluster DNS. Browsers reach each cluster via the per-cluster
+LB IP; for unified DNS, layer a DNS-based load balancer above MetalLB.
+
+```bash
+# Verify the per-cluster external URL
+for c in a b c; do
+  kubectl --context kind-kafka-$c -n kafka get kafkaui kafka-ui \
+    -o jsonpath='{.status.phase}{"  "}{.status.advertisedHost}'; echo
+done
+```
+
+If browser clients are pinned to one cluster's LB IP, OIDC sessions remain on
+that cluster — sticky by IP rather than by user. For cross-cluster failover
+(load balancer drops a backend), point users at the cluster-local URL or use a
+DNS record that resolves to all 3 LB IPs.
+
 ---
 
 ## Monitoring

@@ -31,6 +31,7 @@ import se.afshin.yavari.kafka.operator.crd.ApicurioRegistrySpec;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistryStatus;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistryStorageConfig;
 import se.afshin.yavari.kafka.operator.crd.ExternalAccessType;
+import se.afshin.yavari.kafka.operator.crd.McsConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpExternalAccessConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpGatewayConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpIngressBuilder;
@@ -86,6 +87,7 @@ class ApicurioRegistryReconcilerTest {
 
     private Resource ingResource;
     private Resource routeResource;
+    private Resource serviceExportResource;
 
     @BeforeEach
     void setup() throws Exception {
@@ -161,6 +163,15 @@ class ApicurioRegistryReconcilerTest {
         when(routeMixed.inNamespace(NS)).thenReturn(routeNamespaced);
         when(routeNamespaced.resource(any(GenericKubernetesResource.class))).thenReturn(routeResource);
         when(routeNamespaced.withName(anyString())).thenReturn(routeResource);
+
+        // GenericKubernetesResource (ServiceExport) chain
+        MixedOperation seMixed = mock(MixedOperation.class);
+        NonNamespaceOperation seNamespaced = mock(NonNamespaceOperation.class);
+        serviceExportResource = mock(Resource.class);
+        when(client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport"))
+                .thenReturn(seMixed);
+        when(seMixed.inNamespace(NS)).thenReturn(seNamespaced);
+        when(seNamespaced.resource(any(GenericKubernetesResource.class))).thenReturn(serviceExportResource);
 
         // Stubs
         when(deploymentBuilder.build(any(), anyString(), any(), any(), any())).thenReturn(new Deployment());
@@ -374,6 +385,67 @@ class ApicurioRegistryReconcilerTest {
 
         verify(namedDep, times(1)).delete();
         verify(namedSvc, times(1)).delete();
+    }
+
+    // --- MCS multi-cluster HA (#19) ---
+
+    @Test
+    void mcsEnabled_clusterNotInTargetClusters_setsSkipped() {
+        ApicurioRegistry registry = registry(RBAC_REF, "proxy-image:latest");
+        McsConfig mcs = new McsConfig();
+        mcs.setEnabled(true);
+        registry.getSpec().setMcs(mcs);
+        registry.getSpec().setTargetClusters(List.of("B", "C"));
+
+        reconciler.reconcile(registry, context);
+
+        assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.SKIPPED);
+        assertThat(registry.getStatus().getMessage()).contains("'A'").contains("not a target");
+        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any());
+        verify(proxyServiceBuilder, never()).build(any(), anyString());
+    }
+
+    @Test
+    void mcsEnabled_emptyTargetClusters_setsFailed() {
+        ApicurioRegistry registry = registry(RBAC_REF, "proxy-image:latest");
+        McsConfig mcs = new McsConfig();
+        mcs.setEnabled(true);
+        registry.getSpec().setMcs(mcs);
+        registry.getSpec().setTargetClusters(List.of());
+
+        reconciler.reconcile(registry, context);
+
+        assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.FAILED);
+        assertThat(registry.getStatus().getMessage()).contains("targetClusters");
+        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any());
+    }
+
+    @Test
+    void mcsDisabled_butTargetClustersSet_setsFailed() {
+        ApicurioRegistry registry = registry(RBAC_REF, "proxy-image:latest");
+        registry.getSpec().setTargetClusters(List.of("A"));
+
+        reconciler.reconcile(registry, context);
+
+        assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.FAILED);
+        assertThat(registry.getStatus().getMessage()).contains("targetClusters").contains("mcs.enabled");
+        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any());
+    }
+
+    @Test
+    void mcsEnabled_clusterInTargetClusters_appliesServiceExport() throws Exception {
+        injectField(reconciler, "mcsEnabled", true); // operator-level MCS flag
+        ApicurioRegistry registry = registry(RBAC_REF, "proxy-image:latest");
+        McsConfig mcs = new McsConfig();
+        mcs.setEnabled(true);
+        registry.getSpec().setMcs(mcs);
+        registry.getSpec().setTargetClusters(List.of("A", "B", "C"));
+
+        reconciler.reconcile(registry, context);
+
+        assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.READY);
+        verify(deploymentBuilder, times(1)).build(any(), anyString(), any(), any(), any());
+        verify(serviceExportResource, times(1)).serverSideApply();
     }
 
     // --- helpers ---

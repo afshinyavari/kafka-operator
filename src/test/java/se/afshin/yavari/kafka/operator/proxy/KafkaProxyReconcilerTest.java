@@ -515,7 +515,7 @@ class KafkaProxyReconcilerTest {
 
     private KafkaProxy mcsProxy(List<String> targetClusters, List<se.afshin.yavari.kafka.operator.crd.BrokerNodeIdRange> ranges) {
         KafkaProxy p = proxy(null);
-        se.afshin.yavari.kafka.operator.crd.KafkaProxyMcsConfig mcs = new se.afshin.yavari.kafka.operator.crd.KafkaProxyMcsConfig();
+        se.afshin.yavari.kafka.operator.crd.McsConfig mcs = new se.afshin.yavari.kafka.operator.crd.McsConfig();
         mcs.setEnabled(true);
         p.getSpec().setMcs(mcs);
         p.getSpec().setTargetClusters(targetClusters);

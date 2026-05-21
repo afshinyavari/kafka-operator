@@ -16,6 +16,12 @@ spec:
   tls:
     secretName: kafka-proxy-test-client-tls
     mountPath: /etc/kafka-tls
+  # Multi-cluster HA (#20): same CR applied to all 3 clusters; each operator filters by
+  # localClusterId and exports the kafka-ui Service so clients can resolve
+  # `kafka-ui.kafka.svc.clusterset.local` via Submariner Lighthouse.
+  mcs:
+    enabled: true
+  targetClusters: [A, B, C]
   # External access — same shape as KafkaProxy. Default LOADBALANCER for the MetalLB demo;
   # switch to GATEWAY / INGRESS / NODEPORT as needed.
   externalAccess:

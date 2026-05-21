@@ -12,7 +12,7 @@ public class KafkaProxySpec {
     private String apicurioRef;
     private KafkaProxyTlsConfig tls;
     private KafkaProxyOidcConfig oidc;
-    private KafkaProxyMcsConfig mcs;
+    private McsConfig mcs;
     private KafkaProxyFiltersConfig filters = new KafkaProxyFiltersConfig();
     private List<KafkaProxyCustomFilter> customFilters = List.of();
     private List<BrokerNodeIdRange> brokerNodeIdRanges = List.of();
@@ -46,8 +46,8 @@ public class KafkaProxySpec {
     public KafkaProxyOidcConfig getOidc() { return oidc; }
     public void setOidc(KafkaProxyOidcConfig oidc) { this.oidc = oidc; }
 
-    public KafkaProxyMcsConfig getMcs() { return mcs; }
-    public void setMcs(KafkaProxyMcsConfig mcs) { this.mcs = mcs; }
+    public McsConfig getMcs() { return mcs; }
+    public void setMcs(McsConfig mcs) { this.mcs = mcs; }
 
     public KafkaProxyFiltersConfig getFilters() { return filters; }
     public void setFilters(KafkaProxyFiltersConfig filters) { this.filters = filters; }

@@ -98,6 +98,23 @@ Set `KAFKA_NETWORKING_MCS_ENABLED=true` on the operator deployment to switch mod
 | Cross-cluster controller reach | `svc.clusterset.local` DNS | Must configure manually |
 | `ServiceExport` resources | Created automatically | Not created |
 
+### Multi-cluster HA for stateless services (KafkaProxy / ApicurioRegistry / KafkaUI)
+
+`KafkaProxy`, `ApicurioRegistry`, and `KafkaUI` all opt into multi-cluster HA via the same shape:
+
+```yaml
+spec:
+  mcs:
+    enabled: true
+  targetClusters: [A, B, C]
+```
+
+The same CR is applied to every K8s cluster; each operator filters by its own `KAFKA_CLUSTER_ID` env var. Operators on clusters listed in `targetClusters` reconcile fully; operators on other clusters set `status.phase=SKIPPED` with no resources created. When `mcs.enabled=true` the operator also creates a Submariner `ServiceExport` so cross-cluster clients can resolve the service via `<svc>.<ns>.svc.clusterset.local` — **but only for ClusterIP or Headless underlying Services.** Submariner Lighthouse rejects `LoadBalancer`-typed Services (`UnsupportedServiceType`); with `externalAccess.type=LOADBALANCER` the export is created but never aggregated, and clients reach each cluster via its own LB IP instead. Use `GATEWAY` or `INGRESS` modes if you need Lighthouse aggregation.
+
+For Apicurio specifically: all replicas across all clusters share **one** kafkasql journal topic on the MCS broker pool. Apicurio v2.6 requires the journal to have `partitions=1` for total ordering — the operator warns if the override is > 1. The kafkasql client cert (`schema-registry-client-tls` Secret with `CN=apicurio-registry`) is distributed to every cluster by `mcs-setup.sh`, so all replicas authenticate as the same Kafka principal and share ACLs. Concurrent writes to the same artifact-version across clusters are resolved by Apicurio's optimistic concurrency (one client gets a `409 Conflict`); this is rare and safe.
+
+For Kafka UI: state is read-mostly (per-pod Caffeine cache, OIDC session local to each pod). External clients pin to one cluster's LB IP / Ingress host; for cross-cluster fallback, internal callers can resolve `kafka-ui.kafka.svc.clusterset.local` via Lighthouse.
+
 ---
 
 ## Config Generation Pipeline

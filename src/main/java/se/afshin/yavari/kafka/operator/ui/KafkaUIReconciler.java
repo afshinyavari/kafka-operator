@@ -1,6 +1,7 @@
 package se.afshin.yavari.kafka.operator.ui;
 
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
+import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
@@ -21,6 +22,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaUI;
 import se.afshin.yavari.kafka.operator.crd.KafkaUIOidcConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaUISpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaUIStatus;
+import se.afshin.yavari.kafka.operator.crd.McsConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpExternalAccessConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpIngressBuilder;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpRouteBuilder;
@@ -28,6 +30,7 @@ import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolution;
 import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolver;
 
 import java.time.Duration;
+import java.util.List;
 
 @ControllerConfiguration
 @ApplicationScoped
@@ -43,6 +46,9 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
     @Inject HttpIngressBuilder httpIngressBuilder;
     @Inject HttpRouteBuilder httpRouteBuilder;
 
+    @ConfigProperty(name = "kafka.networking.mcs-enabled")
+    boolean mcsEnabled;
+
     @ConfigProperty(name = "kafka.cluster.id", defaultValue = "")
     String localClusterId;
 
@@ -55,6 +61,34 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
         KafkaUIStatus status = ui.getStatus() != null ? ui.getStatus() : new KafkaUIStatus();
         status.setPhase(KafkaUIStatus.Phase.RECONCILING);
         status.setObservedGeneration(ui.getMetadata().getGeneration());
+
+        McsConfig mcsCfg = ui.getSpec().getMcs();
+        boolean specMcsEnabled = mcsCfg != null && mcsCfg.isEnabled();
+        List<String> targetClusters = ui.getSpec().getTargetClusters();
+
+        if (!specMcsEnabled && targetClusters != null && !targetClusters.isEmpty()) {
+            status.setPhase(KafkaUIStatus.Phase.FAILED);
+            status.setMessage("spec.targetClusters is set but spec.mcs.enabled is false");
+            ui.setStatus(status);
+            return UpdateControl.patchStatus(ui);
+        }
+
+        if (specMcsEnabled) {
+            if (targetClusters == null || targetClusters.isEmpty()) {
+                status.setPhase(KafkaUIStatus.Phase.FAILED);
+                status.setMessage("spec.mcs.enabled requires spec.targetClusters to be non-empty");
+                ui.setStatus(status);
+                return UpdateControl.patchStatus(ui);
+            }
+            if (!targetClusters.contains(localClusterId)) {
+                LOG.infof("KafkaUI %s/%s: cluster '%s' not in targetClusters %s — skipping",
+                        namespace, name, localClusterId, targetClusters);
+                status.setPhase(KafkaUIStatus.Phase.SKIPPED);
+                status.setMessage("Cluster '" + localClusterId + "' is not a target for this UI");
+                ui.setStatus(status);
+                return UpdateControl.patchStatus(ui);
+            }
+        }
 
         String validationError = validate(ui);
         if (validationError != null) {
@@ -85,6 +119,13 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
                     .resource(deploymentBuilder.build(ui, ownerRef)).serverSideApply();
             client.services().inNamespace(namespace)
                     .resource(serviceBuilder.build(ui, ownerRef)).serverSideApply();
+
+            // When MCS is enabled the same CR is applied to every target cluster; each operator
+            // exports its local kafka-ui Service so cross-cluster clients (e.g. browser landing
+            // on a stale LB IP) can fall back to `kafka-ui.<ns>.svc.clusterset.local`.
+            if (specMcsEnabled) {
+                applyServiceExport(name, namespace);
+            }
 
             HttpExternalAccessConfig ea = ui.getSpec().getExternalAccess();
             ExternalAccessResolution external;
@@ -195,6 +236,21 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
             return "spec.oidc.clientSecretRef.{name,key} are required";
         }
         return null;
+    }
+
+    private void applyServiceExport(String serviceName, String namespace) {
+        if (!mcsEnabled) return;
+        GenericKubernetesResource export = new GenericKubernetesResource();
+        export.setApiVersion("multicluster.x-k8s.io/v1alpha1");
+        export.setKind("ServiceExport");
+        export.setMetadata(new ObjectMetaBuilder()
+                .withName(serviceName).withNamespace(namespace).build());
+        try {
+            client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
+                    .inNamespace(namespace).resource(export).serverSideApply();
+        } catch (Exception e) {
+            LOG.warnf("ServiceExport CRD not available — skipped for %s: %s", serviceName, e.getMessage());
+        }
     }
 
     private int readyReplicas(String deploymentName, String namespace) {

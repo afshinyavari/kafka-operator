@@ -17,7 +17,7 @@ import org.junit.jupiter.api.Test;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
-import se.afshin.yavari.kafka.operator.crd.KafkaProxyMcsConfig;
+import se.afshin.yavari.kafka.operator.crd.McsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxySpec;
 
 import java.util.List;
@@ -211,7 +211,7 @@ class UpgradePhaseResourceTest {
         meta.setNamespace(NS);
         kp.setMetadata(meta);
         KafkaProxySpec spec = new KafkaProxySpec();
-        KafkaProxyMcsConfig mcs = new KafkaProxyMcsConfig();
+        McsConfig mcs = new McsConfig();
         mcs.setEnabled(true);
         spec.setMcs(mcs);
         spec.setTargetClusters(targetClusters);

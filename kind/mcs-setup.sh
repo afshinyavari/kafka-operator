@@ -604,12 +604,16 @@ for cluster in "${PROXY_CLUSTERS[@]}"; do
   kubectl --context "kind-${cluster}" apply -f "${MANIFESTS_DIR}/kafkarbac.yaml" --server-side &>/dev/null
 done
 
-info "Deploying ApicurioRegistry (registry + rbac-proxy) on kafka-a..."
-kubectl --context kind-kafka-a apply -f "${MANIFESTS_DIR}/apicurio-kafkasql.yaml" --server-side &>/dev/null
-info "Waiting for ApicurioRegistry to reach READY (up to 5 min)..."
-until kubectl --context kind-kafka-a -n "${NAMESPACE}" get apicurioregistry apicurio \
-    -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
-ok "ApicurioRegistry READY"
+info "Deploying ApicurioRegistry CR to: ${PROXY_CLUSTERS[*]} (HA #19 — each operator filters by targetClusters)..."
+for cluster in "${PROXY_CLUSTERS[@]}"; do
+  kubectl --context "kind-${cluster}" apply -f "${MANIFESTS_DIR}/apicurio-kafkasql.yaml" --server-side &>/dev/null
+done
+info "Waiting for ApicurioRegistry to reach READY on each target cluster (up to 5 min)..."
+for cluster in "${PROXY_CLUSTERS[@]}"; do
+  until kubectl --context "kind-${cluster}" -n "${NAMESPACE}" get apicurioregistry apicurio \
+      -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
+  ok "ApicurioRegistry READY on ${cluster}"
+done
 
 info "Installing MetalLB on all clusters (KafkaProxy externalAccess=LOADBALANCER needs it)..."
 # Non-overlapping /28-ish ranges on the kind docker bridge (172.19.0.0/16).

@@ -151,6 +151,20 @@ class ApicurioKafkasqlSupportTest {
     }
 
     @Test
+    void prepare_topicSkipped_returnsReady_treatsAsExistingOnPrimary() {
+        // On non-primary clusters the KafkaTopic CR is SKIPPED (StaticPrimaryClusterLeader);
+        // the journal exists in Kafka because the primary cluster's operator owns the create.
+        ApicurioRegistry r = registry(CLUSTER, "registry-tls", "apicurio-registry");
+        when(clusterResource.get()).thenReturn(cluster(true));
+        when(topicResource.serverSideApply()).thenReturn(topicWithPhase(KafkaTopicStatus.Phase.SKIPPED));
+
+        var result = support.prepare(r);
+
+        assertThat(result).isInstanceOf(ApicurioKafkasqlSupport.Result.Ready.class);
+        verify(aclManager).apply(eq(CLUSTER), eq(NS), anyString(), any());
+    }
+
+    @Test
     void prepare_topicReady_returnsReadyConfigAndApplyAcls() {
         ApicurioRegistry r = registry(CLUSTER, "registry-tls", "apicurio-registry");
         when(clusterResource.get()).thenReturn(cluster(true));

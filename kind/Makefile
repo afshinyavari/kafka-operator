@@ -131,25 +131,32 @@ kafka-ui-image:  ## Build the kafka-ui Docker image
 	cd $(OPERATOR_DIR)/kafka-ui && mvn package -DskipTests -q
 	docker build -t $(KAFKA_UI_IMG) $(OPERATOR_DIR)/kafka-ui
 
-reload-kafka-ui-image: kafka-ui-image  ## Rebuild + reload kafka-ui image into kafka-a (UI is single-instance)
-	kind load docker-image $(KAFKA_UI_IMG) --name kafka-a
-	-kubectl --context kind-kafka-a -n $(NAMESPACE) rollout restart deployment kafka-ui
-
-kafka-ui-setup:  ## Deploy kafka-ui to kafka-a via KafkaUI CR (operator-reconciled)
-	$(MAKE) reload-kafka-ui-image
-	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafka-ui-oidc-secret.yaml
-	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafka-ui-cr.yaml
-	@echo "Waiting for operator to create the kafka-ui Deployment..."
-	@for i in $$(seq 1 60); do \
-	  kubectl --context kind-kafka-a -n $(NAMESPACE) get deployment kafka-ui >/dev/null 2>&1 && break; \
-	  sleep 2; \
+reload-kafka-ui-image: kafka-ui-image  ## Rebuild + reload kafka-ui image into all Kind clusters (HA #20)
+	@for cluster in $(CLUSTERS); do \
+	  kind load docker-image $(KAFKA_UI_IMG) --name $$cluster; \
+	  kubectl --context kind-$$cluster -n $(NAMESPACE) rollout restart deployment kafka-ui 2>/dev/null || true; \
 	done
-	@echo "Waiting for kafka-ui rollout to converge (old pods terminated)..."
-	kubectl --context kind-kafka-a -n $(NAMESPACE) rollout status deployment/kafka-ui --timeout=120s
-	kubectl --context kind-kafka-a -n $(NAMESPACE) wait --for=condition=Ready \
-	  pod -l app.instance=kafka-ui --timeout=120s
-	@echo "kafka-ui ready. URL: $$(kubectl --context kind-kafka-a -n $(NAMESPACE) get kafkaui kafka-ui -o jsonpath='{.status.advertisedHost}' 2>/dev/null || true)"
-	@echo "  (if blank, status.advertisedHost is empty — externalAccess.type may be NODEPORT/internal)"
+
+kafka-ui-setup:  ## Deploy kafka-ui to all clusters via KafkaUI CR (HA #20; operator filters by targetClusters)
+	$(MAKE) reload-kafka-ui-image
+	@for cluster in $(CLUSTERS); do \
+	  kubectl --context kind-$$cluster apply -f $(MANIFESTS_DIR)/kafka-ui-oidc-secret.yaml; \
+	  kubectl --context kind-$$cluster apply -f $(MANIFESTS_DIR)/kafka-ui-cr.yaml; \
+	done
+	@echo "Waiting for operator to create the kafka-ui Deployment on each cluster..."
+	@for cluster in $(CLUSTERS); do \
+	  for i in $$(seq 1 60); do \
+	    kubectl --context kind-$$cluster -n $(NAMESPACE) get deployment kafka-ui >/dev/null 2>&1 && break; \
+	    sleep 2; \
+	  done; \
+	done
+	@echo "Waiting for kafka-ui rollout to converge on each cluster..."
+	@for cluster in $(CLUSTERS); do \
+	  kubectl --context kind-$$cluster -n $(NAMESPACE) rollout status deployment/kafka-ui --timeout=120s; \
+	  kubectl --context kind-$$cluster -n $(NAMESPACE) wait --for=condition=Ready \
+	    pod -l app.instance=kafka-ui --timeout=120s; \
+	  echo "kafka-ui READY on $$cluster. URL: $$(kubectl --context kind-$$cluster -n $(NAMESPACE) get kafkaui kafka-ui -o jsonpath='{.status.advertisedHost}' 2>/dev/null || true)"; \
+	done
 
 ui-test:  ## End-to-end UI smoke test (login + cluster listing + topic browse)
 	@chmod +x ui-test.sh && ./ui-test.sh

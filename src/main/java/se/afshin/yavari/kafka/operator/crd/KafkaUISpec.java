@@ -19,6 +19,8 @@ public class KafkaUISpec {
     private KafkaUIProbesConfig probes = new KafkaUIProbesConfig();
     private HttpExternalAccessConfig externalAccess = new HttpExternalAccessConfig();
     private List<KafkaUIEnvVar> env = List.of();
+    private McsConfig mcs;
+    private List<String> targetClusters = List.of();
 
     public String getImage() { return image; }
     public void setImage(String image) { this.image = image; }
@@ -49,4 +51,10 @@ public class KafkaUISpec {
 
     public List<KafkaUIEnvVar> getEnv() { return env; }
     public void setEnv(List<KafkaUIEnvVar> env) { this.env = env; }
+
+    public McsConfig getMcs() { return mcs; }
+    public void setMcs(McsConfig mcs) { this.mcs = mcs; }
+
+    public List<String> getTargetClusters() { return targetClusters; }
+    public void setTargetClusters(List<String> targetClusters) { this.targetClusters = targetClusters; }
 }

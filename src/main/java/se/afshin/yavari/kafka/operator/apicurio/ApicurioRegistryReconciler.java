@@ -29,6 +29,7 @@ import se.afshin.yavari.kafka.operator.crd.ApicurioRegistry;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistryStatus;
 import se.afshin.yavari.kafka.operator.crd.ExternalAccessType;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
+import se.afshin.yavari.kafka.operator.crd.McsConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpExternalAccessConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpIngressBuilder;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpRouteBuilder;
@@ -36,6 +37,7 @@ import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolution;
 import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolver;
 
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
@@ -90,6 +92,34 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
         ApicurioRegistryStatus status = registry.getStatus() != null
                 ? registry.getStatus() : new ApicurioRegistryStatus();
         status.setPhase(ApicurioRegistryStatus.Phase.RECONCILING);
+
+        McsConfig mcsCfg = registry.getSpec().getMcs();
+        boolean specMcsEnabled = mcsCfg != null && mcsCfg.isEnabled();
+        List<String> targetClusters = registry.getSpec().getTargetClusters();
+
+        if (!specMcsEnabled && targetClusters != null && !targetClusters.isEmpty()) {
+            status.setPhase(ApicurioRegistryStatus.Phase.FAILED);
+            status.setMessage("spec.targetClusters is set but spec.mcs.enabled is false");
+            registry.setStatus(status);
+            return UpdateControl.patchStatus(registry);
+        }
+
+        if (specMcsEnabled) {
+            if (targetClusters == null || targetClusters.isEmpty()) {
+                status.setPhase(ApicurioRegistryStatus.Phase.FAILED);
+                status.setMessage("spec.mcs.enabled requires spec.targetClusters to be non-empty");
+                registry.setStatus(status);
+                return UpdateControl.patchStatus(registry);
+            }
+            if (!targetClusters.contains(localClusterId)) {
+                LOG.infof("ApicurioRegistry %s/%s: cluster '%s' not in targetClusters %s — skipping",
+                        namespace, name, localClusterId, targetClusters);
+                status.setPhase(ApicurioRegistryStatus.Phase.SKIPPED);
+                status.setMessage("Cluster '" + localClusterId + "' is not a target for this registry");
+                registry.setStatus(status);
+                return UpdateControl.patchStatus(registry);
+            }
+        }
 
         String rbacRef = registry.getSpec().getRbacRef();
         boolean proxyEnabled = rbacRef != null && registry.getSpec().getRbacProxyImage() != null;
@@ -149,7 +179,12 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
                 client.services().inNamespace(namespace).resource(proxySvc).serverSideApply();
             }
 
-            if (registry.getSpec().isExportService() && proxyEnabled) {
+            // When MCS is enabled the same CR is applied to every cluster; each operator must
+            // export its local rbac-proxy Service so cross-cluster clients can resolve
+            // `apicurio-rbac-proxy.<ns>.svc.clusterset.local` and fan out via Submariner Lighthouse.
+            boolean wantExport = proxyEnabled
+                    && (specMcsEnabled || registry.getSpec().isExportService());
+            if (wantExport) {
                 applyServiceExport(proxySvcName, namespace);
             }
 

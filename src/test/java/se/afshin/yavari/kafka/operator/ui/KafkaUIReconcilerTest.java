@@ -31,6 +31,9 @@ import se.afshin.yavari.kafka.operator.crd.KafkaUIOidcConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaUISecretKeyRef;
 import se.afshin.yavari.kafka.operator.crd.KafkaUISpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaUIStatus;
+import se.afshin.yavari.kafka.operator.crd.McsConfig;
+
+import java.util.List;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpExternalAccessConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpGatewayConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpIngressBuilder;
@@ -67,6 +70,7 @@ class KafkaUIReconcilerTest {
     private RollableScalableResource namedDep;
     private Resource ingResource;
     private Resource routeResource;
+    private Resource serviceExportResource;
     private MixedOperation routeMixed;
     private NonNamespaceOperation routeNamespaced;
 
@@ -162,6 +166,15 @@ class KafkaUIReconcilerTest {
         when(routeNamespaced.resource(any(GenericKubernetesResource.class))).thenReturn(routeResource);
         when(routeNamespaced.withName(anyString())).thenReturn(routeResource);
 
+        // GenericKubernetesResource (ServiceExport) chain
+        MixedOperation seMixed = mock(MixedOperation.class);
+        NonNamespaceOperation seNamespaced = mock(NonNamespaceOperation.class);
+        serviceExportResource = mock(Resource.class);
+        when(client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport"))
+                .thenReturn(seMixed);
+        when(seMixed.inNamespace(NS)).thenReturn(seNamespaced);
+        when(seNamespaced.resource(any(GenericKubernetesResource.class))).thenReturn(serviceExportResource);
+
         reconciler = new KafkaUIReconciler();
         injectField(reconciler, "client", client);
         injectField(reconciler, "deploymentBuilder", deploymentBuilder);
@@ -171,6 +184,7 @@ class KafkaUIReconcilerTest {
         injectField(reconciler, "httpIngressBuilder", httpIngressBuilder);
         injectField(reconciler, "httpRouteBuilder", httpRouteBuilder);
         injectField(reconciler, "localClusterId", "A");
+        injectField(reconciler, "mcsEnabled", false);
     }
 
     @Test
@@ -256,6 +270,67 @@ class KafkaUIReconcilerTest {
         assertThat(ui.getStatus().getPhase()).isEqualTo(KafkaUIStatus.Phase.RECONCILING);
         assertThat(ui.getStatus().getReadyReplicas()).isEqualTo(0);
         assertThat(ui.getStatus().getMessage()).contains("Waiting for kafka-ui pods");
+    }
+
+    // ---- MCS multi-cluster HA (#20) ----
+
+    @Test
+    void mcsEnabled_clusterNotInTargetClusters_setsSkipped() {
+        KafkaUI ui = ui();
+        McsConfig mcs = new McsConfig();
+        mcs.setEnabled(true);
+        ui.getSpec().setMcs(mcs);
+        ui.getSpec().setTargetClusters(List.of("B", "C"));
+
+        reconciler.reconcile(ui, context);
+
+        assertThat(ui.getStatus().getPhase()).isEqualTo(KafkaUIStatus.Phase.SKIPPED);
+        assertThat(ui.getStatus().getMessage()).contains("'A'").contains("not a target");
+        verify(deploymentBuilder, never()).build(any(), any());
+        verify(serviceBuilder, never()).build(any(), any());
+    }
+
+    @Test
+    void mcsEnabled_emptyTargetClusters_setsFailed() {
+        KafkaUI ui = ui();
+        McsConfig mcs = new McsConfig();
+        mcs.setEnabled(true);
+        ui.getSpec().setMcs(mcs);
+        ui.getSpec().setTargetClusters(List.of());
+
+        reconciler.reconcile(ui, context);
+
+        assertThat(ui.getStatus().getPhase()).isEqualTo(KafkaUIStatus.Phase.FAILED);
+        assertThat(ui.getStatus().getMessage()).contains("targetClusters");
+        verify(deploymentBuilder, never()).build(any(), any());
+    }
+
+    @Test
+    void mcsDisabled_butTargetClustersSet_setsFailed() {
+        KafkaUI ui = ui();
+        ui.getSpec().setTargetClusters(List.of("A"));
+
+        reconciler.reconcile(ui, context);
+
+        assertThat(ui.getStatus().getPhase()).isEqualTo(KafkaUIStatus.Phase.FAILED);
+        assertThat(ui.getStatus().getMessage()).contains("targetClusters").contains("mcs.enabled");
+        verify(deploymentBuilder, never()).build(any(), any());
+    }
+
+    @Test
+    void mcsEnabled_clusterInTargetClusters_appliesServiceExport() throws Exception {
+        injectField(reconciler, "mcsEnabled", true); // operator-level MCS flag
+        KafkaUI ui = ui();
+        McsConfig mcs = new McsConfig();
+        mcs.setEnabled(true);
+        ui.getSpec().setMcs(mcs);
+        ui.getSpec().setTargetClusters(List.of("A", "B", "C"));
+
+        reconciler.reconcile(ui, context);
+
+        assertThat(ui.getStatus().getPhase()).isEqualTo(KafkaUIStatus.Phase.READY);
+        verify(deploymentBuilder, times(1)).build(any(), any());
+        verify(serviceExportResource, times(1)).serverSideApply();
     }
 
     // ---- helpers ----

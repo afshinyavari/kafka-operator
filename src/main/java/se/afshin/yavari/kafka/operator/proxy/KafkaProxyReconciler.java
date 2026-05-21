@@ -28,7 +28,7 @@ import se.afshin.yavari.kafka.operator.crd.BrokerNodeIdRange;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
-import se.afshin.yavari.kafka.operator.crd.KafkaProxyMcsConfig;
+import se.afshin.yavari.kafka.operator.crd.McsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyMtlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
@@ -120,7 +120,7 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
         KafkaProxyStatus status = proxy.getStatus() != null ? proxy.getStatus() : new KafkaProxyStatus();
         status.setPhase(KafkaProxyStatus.Phase.RECONCILING);
 
-        KafkaProxyMcsConfig mcsCfg = proxy.getSpec().getMcs();
+        McsConfig mcsCfg = proxy.getSpec().getMcs();
         boolean mcsEnabled = mcsCfg != null && mcsCfg.isEnabled();
         List<String> targetClusters = proxy.getSpec().getTargetClusters();
 
@@ -358,7 +358,7 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
         client.services().inNamespace(namespace).withName(name).delete();
         // TLS secrets are NOT operator-owned (cert-manager / mcs-setup provisions them);
         // leave them in place on KafkaProxy delete.
-        KafkaProxyMcsConfig mcsCfg = proxy.getSpec().getMcs();
+        McsConfig mcsCfg = proxy.getSpec().getMcs();
         if (mcsCfg != null && mcsCfg.isEnabled()) {
             client.genericKubernetesResources("multicluster.x-k8s.io/v1alpha1", "ServiceExport")
                     .inNamespace(namespace).withName(name).delete();

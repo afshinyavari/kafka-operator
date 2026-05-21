@@ -15,16 +15,20 @@ spec:
     type: kafkasql
     clusterRef: my-kafka
     kafkaTopic: kafkasql-journal
-    # Apicurio v2.6 documents single-partition for ordering guarantees; we override to
-    # exercise the per-cluster-broker replication path. If schema reads turn inconsistent
-    # under load, revert to 1.
-    kafkaTopicPartitions: 3
+    # Apicurio v2.6 requires partitions=1 for total ordering. Multi-cluster HA (#19) shares
+    # this single journal across all 3 cluster replicas — total ordering is load-bearing.
+    kafkaTopicPartitions: 1
     tlsSecretRef: schema-registry-client-tls
     principal: apicurio-registry
   oidc:
-    issuerUrl: http://keycloak.kafka.svc.cluster.local:8080/realms/demo
+    issuerUrl: http://keycloak.kafka.svc.clusterset.local:8080/realms/demo
     groupsClaim: realm_access.roles
-  exportService: false
+  # Multi-cluster HA (#19): same CR applied to all 3 clusters; each operator filters by
+  # localClusterId. ServiceExport is created implicitly because mcs.enabled=true, so
+  # cross-cluster clients reach `apicurio-rbac-proxy.kafka.svc.clusterset.local`.
+  mcs:
+    enabled: true
+  targetClusters: [A, B, C]
   # External access for the rbac-proxy Service. Requires rbacRef + rbacProxyImage.
   # Same shape as KafkaProxy / KafkaUI.
   externalAccess:

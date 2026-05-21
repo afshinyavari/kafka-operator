@@ -328,7 +328,7 @@ Deploys a Kroxylicious proxy in front of a broker pool. Clients connect to the p
 | `brokerNodeIdRanges` | []BrokerNodeIdRange | no | `[]` | Explicit mapping of node-ID ranges to pool names. When omitted, the operator infers ranges by inspecting broker pod labels. |
 | `oidc` | KafkaProxyOidcConfig | no | — | Enables SASL/OAUTHBEARER + JWT group extraction. When set, the four-filter OIDC chain is injected. |
 | `tls` | KafkaProxyTlsConfig | no | — | TLS secrets the proxy mounts. When fields are null the reconciler falls back to convention defaults, so a typical CR omits this block entirely. |
-| `mcs` | KafkaProxyMcsConfig | no | — | Enables MCS (Submariner ServiceExport) mode for cross-cluster client resolution. |
+| `mcs` | McsConfig | no | — | Enables MCS (Submariner ServiceExport) mode for cross-cluster client resolution. |
 | `targetClusters` | []string | no | `[]` | List of cluster IDs (matching `KafkaCluster.spec.clusters[].id`) on which to deploy this proxy. Operators on other clusters set `status.phase=SKIPPED`. Used in MCS mode where the same CR is applied to every cluster. |
 | `filters` | KafkaProxyFiltersConfig | no | (defaults) | Built-in filter toggles (XML validation, schema-registry payload validation). |
 | `customFilters` | []KafkaProxyCustomFilter | no | `[]` | Arbitrary Kroxylicious filter entries appended verbatim to `config.yaml`. |
@@ -380,7 +380,7 @@ Both secrets follow the cert-manager convention (`kubernetes.io/tls` with `tls.c
 | `clientCertSecretRef` | string | no | `{proxyName}-client-tls` | Secret holding the proxy's client cert (presented upstream to brokers when `KafkaCluster.spec.proxyMtls.enabled=true`). |
 | `serverCertSecretRef` | string | no | `{proxyName}-server-tls` | Secret holding the proxy's server cert (presented to downstream Kafka clients). |
 
-### spec.mcs — KafkaProxyMcsConfig
+### spec.mcs — McsConfig
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -632,8 +632,10 @@ Manages an Apicurio Registry deployment and an optional HTTP RBAC proxy that enf
 | `replicas` | integer | no | `1` | Registry pod count. |
 | `oidc` | ApicurioRegistryOidcConfig | no | — | OIDC settings for the RBAC proxy. |
 | `storage` | ApicurioRegistryStorageConfig | no | (defaults) | Storage backend selection. |
-| `exportService` | boolean | no | `false` | When `true`, creates Submariner `ServiceExport` resources for the registry and proxy Services (MCS mode). |
+| `exportService` | boolean | no | `false` | When `true`, creates Submariner `ServiceExport` resources for the registry and proxy Services (MCS mode). Redundant when `mcs.enabled=true` (which implies the export). |
 | `externalAccess` | HttpExternalAccessConfig | no | — | When set, exposes the `{name}-rbac-proxy` Service externally. Requires `rbacRef` + `rbacProxyImage`; the raw registry on port 8080 is never exposed. See [shared HTTP external access](#http-external-access). |
+| `mcs` | McsConfig | no | — | When `mcs.enabled=true`, the operator creates a Submariner `ServiceExport` for the rbac-proxy Service so cross-cluster clients can resolve `<name>-rbac-proxy.<ns>.svc.clusterset.local`. Used with `targetClusters` for multi-cluster HA (#19). |
+| `targetClusters` | []string | no | `[]` | List of cluster IDs (matching `KafkaCluster.spec.clusters[].id`) on which to deploy this registry. Operators on other clusters set `status.phase=SKIPPED`. Used in MCS mode where the same CR is applied to every cluster. |
 
 ### spec.oidc — ApicurioRegistryOidcConfig
 
@@ -658,7 +660,7 @@ Manages an Apicurio Registry deployment and an optional HTTP RBAC proxy that enf
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `phase` | `RECONCILING` \| `READY` \| `FAILED` | Deployment state. |
+| `phase` | `RECONCILING` \| `READY` \| `FAILED` \| `SKIPPED` | Deployment state. `SKIPPED` means this operator's cluster is not in `spec.targetClusters`. |
 | `message` | string | Status or error message. |
 | `proxyUrl` | string | ClusterIP URL of the RBAC proxy (`http://{name}-rbac-proxy.{namespace}.svc.cluster.local:8082`). Clients that need RBAC enforcement must use this URL with a Bearer JWT. The registry itself is reachable at `http://{name}-registry.{namespace}.svc.cluster.local:8080` for internal callers that bypass RBAC. |
 | `externalUrl` | string | Externally-reachable URL when `externalAccess` is configured (LB IP, advertised host, etc.). Empty otherwise. |
@@ -768,6 +770,8 @@ Deploys the Quarkus + htmx Kafka UI as an operator-managed workload: ServiceAcco
 | `probes` | KafkaUIProbesConfig | no | `/q/health/ready` (5/5s) + `/q/health/live` (15/10s) | |
 | `externalAccess` | HttpExternalAccessConfig | no | `{ type: NODEPORT }` | Same shape as `KafkaProxy.spec.externalAccess`. Pick `NODEPORT` / `LOADBALANCER` / `GATEWAY` / `INGRESS`. See [shared HTTP external access](#http-external-access). |
 | `env[]` | KafkaUIEnvVar | no | `[]` | Extra env vars. A name collision overrides the operator-set default. |
+| `mcs` | McsConfig | no | — | When `mcs.enabled=true`, the operator creates a Submariner `ServiceExport` for the kafka-ui Service so cross-cluster clients can resolve `kafka-ui.<ns>.svc.clusterset.local`. Used with `targetClusters` for multi-cluster HA (#20). |
+| `targetClusters` | []string | no | `[]` | List of cluster IDs (matching `KafkaCluster.spec.clusters[].id`) on which to deploy this UI. Operators on other clusters set `status.phase=SKIPPED`. Used in MCS mode where the same CR is applied to every cluster. |
 
 ### spec.oidc — KafkaUIOidcConfig
 
@@ -792,7 +796,7 @@ Deploys the Quarkus + htmx Kafka UI as an operator-managed workload: ServiceAcco
 
 | Field | Description |
 |-------|-------------|
-| `phase` | `RECONCILING` / `READY` / `FAILED` |
+| `phase` | `RECONCILING` / `READY` / `FAILED` / `SKIPPED` (cluster not in `spec.targetClusters`) |
 | `message` | Status or error message. |
 | `readyReplicas` | From the underlying Deployment. |
 | `observedGeneration` | Last `metadata.generation` the reconciler processed. |

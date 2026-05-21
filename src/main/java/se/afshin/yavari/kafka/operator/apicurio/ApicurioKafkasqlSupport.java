@@ -93,7 +93,13 @@ public class ApicurioKafkasqlSupport {
 
         KafkaTopic topic = ensureJournalTopic(registry, storage);
         KafkaTopicStatus topicStatus = topic.getStatus();
-        if (topicStatus == null || topicStatus.getPhase() != KafkaTopicStatus.Phase.READY) {
+        // SKIPPED means this operator is not the primary cluster for the KafkaTopic CR; the
+        // primary cluster's operator owns the actual AdminClient create. We trust that and
+        // proceed — the journal exists in Kafka regardless of which operator created it.
+        boolean topicUsable = topicStatus != null
+                && (topicStatus.getPhase() == KafkaTopicStatus.Phase.READY
+                    || topicStatus.getPhase() == KafkaTopicStatus.Phase.SKIPPED);
+        if (!topicUsable) {
             String phase = topicStatus == null ? "<none>" : String.valueOf(topicStatus.getPhase());
             return new Result.Pending("waiting for kafkasql journal topic '"
                     + topic.getMetadata().getName() + "' (phase=" + phase + ")");
@@ -160,8 +166,15 @@ public class ApicurioKafkasqlSupport {
         spec.setTopicName(storage.getKafkaTopic());
         // Apicurio v2.6 documents single-partition for kafkasql ordering; the
         // CRD allows overriding via storage.kafkaTopicPartitions for experimentation.
-        spec.setPartitions(storage.getKafkaTopicPartitions() != null
-                ? storage.getKafkaTopicPartitions() : 1);
+        int partitions = storage.getKafkaTopicPartitions() != null
+                ? storage.getKafkaTopicPartitions() : 1;
+        if (partitions > 1) {
+            LOG.warnf("ApicurioRegistry %s/%s: kafkasql journal partitions=%d. Apicurio v2.6 "
+                    + "requires partitions=1 for total ordering across writers; multi-cluster HA "
+                    + "(#19) relies on this. Override at your own risk.",
+                    ns, registry.getMetadata().getName(), partitions);
+        }
+        spec.setPartitions(partitions);
         spec.setReplicationFactor((short) 3);
         spec.setConfig(Map.of(
                 "cleanup.policy", "compact",
