@@ -14,6 +14,9 @@ spec:
         app: kafka-operator
     spec:
       serviceAccountName: kafka-operator
+      # Give in-flight reconciles a chance to finish before SIGKILL. Must exceed
+      # quarkus.shutdown.timeout in application.properties (currently 60s).
+      terminationGracePeriodSeconds: 90
       containers:
         - name: operator
           image: kafka-operator:dev

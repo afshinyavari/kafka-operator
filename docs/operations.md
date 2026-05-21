@@ -599,3 +599,83 @@ kubectl logs -n kafka -l app=kafka-operator --context kind-kafka-a -f
 ```
 
 Log level for `se.afshin.yavari` is `DEBUG` by default; JOSDK and Fabric8 are `INFO`/`WARN` to reduce noise.
+
+## Prerequisites for production
+
+The operator deliberately does *not* manage two pieces of infrastructure. Run
+them yourselves before deploying the operator into a production namespace.
+
+### Bring your own IDP
+
+The operator consumes OIDC config (`spec.proxy.oidc.*`) but does not deploy
+Keycloak or any other IDP. In production:
+
+- The IDP must be reachable from the proxy pod at the configured
+  `jwksEndpointUrl`. Use HTTPS — JWT signature verification over HTTP is a
+  trivial MITM target.
+- The `expectedIssuer` must match the IDP's `iss` claim exactly (scheme +
+  authority + path, no trailing slash unless your IDP emits one).
+- The `expectedAudience` must match the JWT `aud` claim. Configure your
+  client application's audience at the IDP to match.
+- `groupsClaim` defaults to `realm_access.roles` (the Keycloak shape). For
+  other IDPs map it to whatever claim holds the user's group/role membership.
+
+The `kind/manifests/keycloak*.yaml` fixtures are test-rig only — they exist
+so `make e2e` is self-contained. They use HTTP and a static realm definition.
+**Do not** copy them into a production environment.
+
+See `docs/security.md` and `docs/kafka-client-oauth.md` for client-side
+configuration.
+
+### Bring your own cert-manager
+
+The operator does *not* sign or rotate certificates. It expects Secrets to
+already exist by name, with the standard `tls.crt` / `tls.key` / `ca.crt`
+keys (the cert-manager convention).
+
+Cert sources the operator reads:
+
+| Secret name (default) | Mounted by | Field that overrides |
+|---|---|---|
+| `kafka-operator-client-tls` | Operator's AdminClient | `spec.proxyMtls.adminClientCertSecretRef` |
+| `kafka-proxy-client-tls` | Proxy → broker | `spec.proxy.tls.clientCertSecretRef` |
+| `kafka-proxy-server-tls` | Client → proxy | `spec.proxy.tls.serverCertSecretRef` |
+| `schema-registry-client-tls` | Apicurio → broker (kafkasql) | `spec.apicurio.storage.tlsSecretRef` |
+| `{poolName}-broker-tls` | Broker INTERNAL listener | `KafkaNodePool.spec.brokerCertSecretRef` |
+
+Rotation policy is yours. The operator reacts to in-place Secret rotation
+automatically (see *Cert rotation* in `docs/security.md`) — within seconds of
+cert-manager updating a Secret, the affected pod's `configHash` changes and
+the Pod is rolled.
+
+In the kind rig, `kind/mcs-setup.sh` provisions self-signed certs into the
+same Secret names so the rest of the operator works unchanged.
+
+### Per-user Kafka quotas
+
+Wave 7 (#21) added `spec.users[].quotas` to `KafkaRbac`. Apply broker-side
+client quotas via the same CR that defines the user:
+
+```yaml
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaRbac
+metadata:
+  name: kafka-rbac
+spec:
+  users:
+    - name: alice
+      kafka:
+        topics: [orders]
+        operations: [PRODUCE]
+      quotas:
+        producerByteRate: 1048576       # 1 MiB/s
+        consumerByteRate: 2097152       # 2 MiB/s
+        requestPercentage: 0.5          # 50% of one IO thread
+        controllerMutationRate: 10.0    # 10 admin ops/sec
+```
+
+All quota fields are optional; unset fields are not pushed to the broker (so
+they don't disturb manually-applied quotas on the same user). The operator
+applies quotas via AdminClient on the primary cluster only — under MCS, only
+the first entry in `KafkaCluster.spec.clusters[]` issues the
+`alterClientQuotas` call.

@@ -538,6 +538,7 @@ For mTLS client-certificate CN authorization. No schema-registry rules — those
 |-------|------|----------|-------------|
 | `name` | string | **yes** | Client certificate CN; matched against the mTLS Subject. |
 | `kafka` | KafkaRbacKafkaAccess | no | Kafka topic rules. |
+| `quotas` | KafkaQuotaConfig | no | Per-user Kafka client quotas (Wave 7 #21). Applied via `AdminClient.alterClientQuotas` on the primary cluster only. |
 
 ### KafkaRbacKafkaAccess
 
@@ -545,6 +546,17 @@ For mTLS client-certificate CN authorization. No schema-registry rules — those
 |-------|------|---------|-------------|
 | `topics` | []string | `[]` | Topic names this principal may access. `*` matches all topics. |
 | `operations` | []string | `[]` | Allowed operations. Semantic aliases: `PRODUCE` (→ `WRITE` + `DESCRIBE`), `FETCH` (→ `READ` + `DESCRIBE`). Raw operations: `READ`, `WRITE`, `DESCRIBE`, `CREATE`, `DELETE`, `ALTER`, `DESCRIBE_CONFIGS`, `ALTER_CONFIGS`. |
+
+### KafkaQuotaConfig
+
+All fields optional; unset means the operator does not push that quota (existing broker-side value, if any, is preserved).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `producerByteRate` | int64 (Long) | Bytes/sec the user may produce. |
+| `consumerByteRate` | int64 (Long) | Bytes/sec the user may consume. |
+| `requestPercentage` | float64 (Double) | Fraction of broker IO/network threads the user may use (`0.5` = 50% of one thread). |
+| `controllerMutationRate` | float64 (Double) | Controller mutations/sec (topic creates, ACL writes, ...). |
 
 ### KafkaRbacSchemaAccess
 
