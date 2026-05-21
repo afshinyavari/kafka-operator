@@ -240,6 +240,20 @@ class ApicurioKafkasqlSupportTest {
                 .isEqualTo(se.afshin.yavari.kafka.operator.crd.TopicDeletionPolicy.RETAIN);
     }
 
+    @Test
+    void prepare_kafkaTopicPartitionsOverride_appliedToJournalTopic() {
+        ApicurioRegistry r = registry(CLUSTER, "registry-tls", "apicurio-registry");
+        r.getSpec().getStorage().setKafkaTopicPartitions(3);
+        when(clusterResource.get()).thenReturn(cluster(true));
+        when(topicResource.serverSideApply()).thenReturn(topicWithPhase(KafkaTopicStatus.Phase.READY));
+
+        support.prepare(r);
+
+        ArgumentCaptor<KafkaTopic> captor = ArgumentCaptor.forClass(KafkaTopic.class);
+        verify(client.resources(KafkaTopic.class).inNamespace(NS), atLeastOnce()).resource(captor.capture());
+        assertThat(captor.getValue().getSpec().getPartitions()).isEqualTo(3);
+    }
+
     // helpers
 
     private static ApicurioRegistry registry(String clusterRef, String tlsSecretRef, String principal) {

@@ -42,6 +42,11 @@ make mcs-setup
 
 # 3. Verify the KRaft quorum is healthy across all clusters
 make quorum
+
+# 4. Run the full e2e — KafkaTopic + RBAC + Apicurio + XML/JSON schema + MCS +
+#    external LB + durability + rolling restart + broker-kill resilience + UI.
+#    Each sub-target stays runnable individually (make rbac-test, etc.).
+make -C kind e2e
 ```
 
 The setup deploys:

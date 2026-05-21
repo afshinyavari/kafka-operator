@@ -17,7 +17,9 @@ MANIFESTS_DIR      := manifests
         kafka-ui-image reload-kafka-ui-image kafka-ui-setup ui-test \
         keycloak-setup proxy-setup rbac-test apicurio-setup apicurio-rbac-test \
         setup-external proxy-external-lb-test proxy-external-gateway-test \
-        proxy-external-ingress-test help
+        proxy-external-ingress-test help \
+        kafkatopic-test json-schema-test durability-test rolling-restart-test \
+        broker-kill-test e2e
 
 all: setup  ## Full setup: build → image → clusters → deploy
 
@@ -137,7 +139,13 @@ kafka-ui-setup:  ## Deploy kafka-ui to kafka-a via KafkaUI CR (operator-reconcil
 	$(MAKE) reload-kafka-ui-image
 	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafka-ui-oidc-secret.yaml
 	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafka-ui-cr.yaml
-	@echo "Waiting for kafka-ui pod to be Ready..."
+	@echo "Waiting for operator to create the kafka-ui Deployment..."
+	@for i in $$(seq 1 60); do \
+	  kubectl --context kind-kafka-a -n $(NAMESPACE) get deployment kafka-ui >/dev/null 2>&1 && break; \
+	  sleep 2; \
+	done
+	@echo "Waiting for kafka-ui rollout to converge (old pods terminated)..."
+	kubectl --context kind-kafka-a -n $(NAMESPACE) rollout status deployment/kafka-ui --timeout=120s
 	kubectl --context kind-kafka-a -n $(NAMESPACE) wait --for=condition=Ready \
 	  pod -l app.instance=kafka-ui --timeout=120s
 	@echo "kafka-ui ready: http://localhost:30808/ (kafka-a NodePort)"
@@ -165,10 +173,10 @@ proxy-setup:  ## Apply KafkaProxy + KafkaRbac CRs to cluster-a, wait for READY
 rbac-test:  ## Run end-to-end RBAC test via SASL/OAUTHBEARER
 	@chmod +x rbac-test.sh && ./rbac-test.sh
 
-apicurio-setup:  ## Build + deploy Apicurio Registry + RBAC proxy to cluster-a
+apicurio-setup:  ## Build + deploy Apicurio Registry (kafkasql) + RBAC proxy to cluster-a
 	$(MAKE) reload-apicurio-proxy-image
 	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafkarbac.yaml
-	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/apicurioregistry.yaml
+	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/apicurio-kafkasql.yaml
 	@echo "Waiting for ApicurioRegistry to be Ready..."
 	@until kubectl --context kind-kafka-a -n $(NAMESPACE) get apicurioregistry apicurio \
 	    -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
@@ -176,6 +184,40 @@ apicurio-setup:  ## Build + deploy Apicurio Registry + RBAC proxy to cluster-a
 
 apicurio-rbac-test:  ## Run end-to-end schema registry RBAC test
 	@chmod +x apicurio-rbac-test.sh && ./apicurio-rbac-test.sh
+
+# ── New e2e sub-tests ─────────────────────────────────────────────────────────
+kafkatopic-test:  ## KafkaTopic CR lifecycle: create, alter, DELETE vs RETAIN
+	@chmod +x kafkatopic-test.sh && ./kafkatopic-test.sh
+
+json-schema-test:  ## Apicurio JSON schema + produce/consume through KafkaProxy LB
+	@chmod +x json-schema-test.sh && ./json-schema-test.sh
+
+durability-test:  ## kafkasql: schema survives Apicurio pod restart
+	@chmod +x durability-test.sh && ./durability-test.sh
+
+rolling-restart-test:  ## Rolling broker restart preserves quorum + no message loss
+	@chmod +x rolling-restart-test.sh && ./rolling-restart-test.sh
+
+broker-kill-test:  ## Kill a broker; producers/consumers keep going; broker rejoins ISR
+	@chmod +x broker-kill-test.sh && ./broker-kill-test.sh
+
+# ── Unified e2e: one target that exercises every shipped feature ──────────────
+# Composes the existing tests in dependency order, including the new ones above.
+# Assumes mcs-setup is already done (it bakes in MetalLB + KafkaProxy on all 3
+# clusters + kafkasql Apicurio). Run `make teardown && make mcs-setup && make e2e`
+# from a clean shell for the full flow.
+# Note: mcs-proxy-test is NOT included — Submariner Lighthouse only registers
+# ClusterIP/Headless Services in clusterset.local DNS, so the LoadBalancer-type
+# kafka-proxy Service (when externalAccess=LOADBALANCER is enabled) isn't
+# resolvable as `kafka-proxy.kafka.svc.clusterset.local`. Cross-cluster reach is
+# instead covered by `proxy-external-lb-test`, which has clients outside K8s
+# hitting any cluster's MetalLB-assigned LB IP. Run `make mcs-proxy-test`
+# manually only on a topology without externalAccess.
+e2e: quorum kafkatopic-test rbac-test apicurio-rbac-test xml-filter-test \
+     json-schema-test proxy-external-lb-test durability-test \
+     rolling-restart-test broker-kill-test kafka-ui-setup ui-test
+	@echo ""
+	@echo "✓ All e2e checks passed"
 
 help:  ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \

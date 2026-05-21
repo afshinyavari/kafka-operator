@@ -158,7 +158,10 @@ public class ApicurioKafkasqlSupport {
         KafkaTopicSpec spec = new KafkaTopicSpec();
         spec.setClusterRef(storage.getClusterRef());
         spec.setTopicName(storage.getKafkaTopic());
-        spec.setPartitions(1);          // kafkasql requires single partition
+        // Apicurio v2.6 documents single-partition for kafkasql ordering; the
+        // CRD allows overriding via storage.kafkaTopicPartitions for experimentation.
+        spec.setPartitions(storage.getKafkaTopicPartitions() != null
+                ? storage.getKafkaTopicPartitions() : 1);
         spec.setReplicationFactor((short) 3);
         spec.setConfig(Map.of(
                 "cleanup.policy", "compact",

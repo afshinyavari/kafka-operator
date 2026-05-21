@@ -18,6 +18,7 @@ spec:
   targetClusters:
     - A
     - B
+    - C
   brokerNodeIdRanges:
     - name: brokers-a
       start: 0
@@ -66,14 +67,15 @@ spec:
   #     type: com.example.MyFilterFactory
   #     config:
   #       someKey: someValue
-  # External access — uncomment ONE of:
+  # External access — exposes the KafkaProxy on each cluster via MetalLB-backed
+  # LoadBalancer. mcs-setup.sh installs MetalLB and advertises per-cluster pools
+  # (172.19.255.{200-210,220-230,240-250}). Clients outside Kind connect to the
+  # cluster-A LB IP on port 9094 with SASL_SSL + OAUTHBEARER.
+  externalAccess:
+    type: LOADBALANCER
+    # advertisedHostTemplate: ""    # optional override; supports ${clusterId}
   #
-  # LoadBalancer (each cluster auto-resolves its LB IP from Service.status.loadBalancer.ingress):
-  #   externalAccess:
-  #     type: LOADBALANCER
-  #     # advertisedHostTemplate: ""    # optional override; supports ${clusterId}
-  #
-  # Gateway API (sniHostIdentifiesNode + TLSRoute SNI passthrough):
+  # Alternative — Gateway API (sniHostIdentifiesNode + TLSRoute SNI passthrough):
   #   externalAccess:
   #     type: GATEWAY
   #     advertisedHostTemplate: "${clusterId}.kafka.example.com"

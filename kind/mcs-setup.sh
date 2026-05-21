@@ -17,8 +17,9 @@ CLUSTERS=(kafka-a kafka-b kafka-c)
 CLUSTER_IDS=(A B C)
 # Clusters that host a KafkaProxy. The same KafkaProxy CR is applied to each;
 # the operator on every cluster reads spec.targetClusters and only deploys if
-# its own KAFKA_CLUSTER_ID is listed.
-PROXY_CLUSTERS=(kafka-a kafka-b)
+# its own KAFKA_CLUSTER_ID is listed. All 3 clusters host a proxy in the e2e
+# topology so cross-cluster + LB-external clients can hit any of them.
+PROXY_CLUSTERS=(kafka-a kafka-b kafka-c)
 CLUSTER_CONFIGS=(cluster-a.yaml cluster-b.yaml cluster-c.yaml)
 POD_SUBNETS=(10.244.0.0/16 10.245.0.0/16 10.246.0.0/16)
 NAMESPACE=kafka
@@ -582,11 +583,55 @@ for cluster in "${PROXY_CLUSTERS[@]}"; do
 done
 
 info "Deploying ApicurioRegistry (registry + rbac-proxy) on kafka-a..."
-kubectl --context kind-kafka-a apply -f "${MANIFESTS_DIR}/apicurioregistry.yaml" --server-side &>/dev/null
+kubectl --context kind-kafka-a apply -f "${MANIFESTS_DIR}/apicurio-kafkasql.yaml" --server-side &>/dev/null
 info "Waiting for ApicurioRegistry to reach READY (up to 5 min)..."
 until kubectl --context kind-kafka-a -n "${NAMESPACE}" get apicurioregistry apicurio \
     -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
 ok "ApicurioRegistry READY"
+
+info "Installing MetalLB on all clusters (KafkaProxy externalAccess=LOADBALANCER needs it)..."
+# Non-overlapping /28-ish ranges on the kind docker bridge (172.19.0.0/16).
+# Reachable from the host so e2e clients in Docker can hit the LB IPs.
+declare -A METALLB_POOL
+METALLB_POOL[kafka-a]="172.19.255.200-172.19.255.210"
+METALLB_POOL[kafka-b]="172.19.255.220-172.19.255.230"
+METALLB_POOL[kafka-c]="172.19.255.240-172.19.255.250"
+METALLB_VERSION="v0.14.8"
+for cluster in "${CLUSTERS[@]}"; do
+  kubectl --context "kind-${cluster}" apply -f \
+    "https://raw.githubusercontent.com/metallb/metallb/${METALLB_VERSION}/config/manifests/metallb-native.yaml" &>/dev/null
+done
+for cluster in "${CLUSTERS[@]}"; do
+  kubectl --context "kind-${cluster}" -n metallb-system \
+    wait --for=condition=Available deployment/controller --timeout=180s &>/dev/null
+  # IPAddressPool admission webhook 503s until its pod has endpoints
+  for _ in {1..60}; do
+    EP=$(kubectl --context "kind-${cluster}" -n metallb-system \
+      get endpoints metallb-webhook-service -o jsonpath='{.subsets[*].addresses[*].ip}' 2>/dev/null || echo "")
+    [ -n "${EP}" ] && break
+    sleep 1
+  done
+  cat <<EOF | kubectl --context "kind-${cluster}" apply -f - &>/dev/null
+apiVersion: metallb.io/v1beta1
+kind: IPAddressPool
+metadata:
+  name: kafka-pool
+  namespace: metallb-system
+spec:
+  addresses:
+    - ${METALLB_POOL[$cluster]}
+---
+apiVersion: metallb.io/v1beta1
+kind: L2Advertisement
+metadata:
+  name: kafka-l2
+  namespace: metallb-system
+spec:
+  ipAddressPools:
+    - kafka-pool
+EOF
+done
+ok "MetalLB ready (pools: A=172.19.255.200-210 B=220-230 C=240-250)"
 
 info "Deploying KafkaProxy CR to: ${PROXY_CLUSTERS[*]} (each operator decides whether to deploy locally based on spec.targetClusters)..."
 for cluster in "${PROXY_CLUSTERS[@]}"; do

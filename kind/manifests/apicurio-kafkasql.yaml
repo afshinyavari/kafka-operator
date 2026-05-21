@@ -1,15 +1,27 @@
 apiVersion: kafka.yavari.afshin.se/v1alpha1
 kind: ApicurioRegistry
 metadata:
-  name: schema-registry
+  # Named "apicurio" (not "schema-registry") so the resulting K8s resources
+  # (Deployment "apicurio-registry", Service "apicurio-rbac-proxy") match what
+  # apicurio-rbac-test.sh and other existing scripts already expect.
+  name: apicurio
   namespace: kafka
 spec:
   # image defaults to apicurio-registry-kafkasql:latest-snapshot
+  rbacProxyImage: apicurio-rbac-proxy:dev
+  rbacRef: kafka-rbac
   replicas: 3
   storage:
     type: kafkasql
     clusterRef: my-kafka
     kafkaTopic: kafkasql-journal
+    # Apicurio v2.6 documents single-partition for ordering guarantees; we override to
+    # exercise the per-cluster-broker replication path. If schema reads turn inconsistent
+    # under load, revert to 1.
+    kafkaTopicPartitions: 3
     tlsSecretRef: schema-registry-client-tls
     principal: apicurio-registry
+  oidc:
+    issuerUrl: http://keycloak.kafka.svc.cluster.local:8080/realms/demo
+    groupsClaim: realm_access.roles
   exportService: false

@@ -28,6 +28,31 @@ make status      # Pod and CR status
 make pods-a      # kubectl get pods -n kafka on kafka-a
 ```
 
+### End-to-end test inventory
+
+`make -C kind e2e` runs the full integrated flow against a fresh `mcs-setup`.
+Each sub-target stays runnable on its own.
+
+| Sub-target | What it guards |
+|---|---|
+| `quorum` | All 3 controllers form a healthy KRaft quorum (CONTROLLER:SSL with authorizer enabled) |
+| `kafkatopic-test` | `KafkaTopic` CR lifecycle: create with p=3/RF=3, alter config via AdminClient, `deletionPolicy=DELETE` vs `RETAIN` |
+| `rbac-test` | Kroxylicious `GroupAwareAuthorizer`: alice→orders ALLOW, alice→invoices DENY (and bob inverse) over SASL_SSL+OAUTHBEARER |
+| `apicurio-rbac-test` | Apicurio RBAC proxy enforces JWT-group-based artifact ACLs (orders-team, invoices-team, schema-admin) |
+| `xml-filter-test` | Custom Kroxylicious XML-validation filter accepts schema-valid XML, rejects malformed with `INVALID_RECORD` |
+| `json-schema-test` | JSON schema registered in Apicurio, fetchable, JSON messages produce/consume through KafkaProxy LB; schema rejects payloads missing required fields |
+| `mcs-proxy-test` | Cross-cluster: produce via cluster-A's proxy, consume from cluster-B's AND cluster-C's via `clusterset.local` DNS |
+| `proxy-external-lb-test` | Producer + consumer in a Docker container OUTSIDE Kind hit the LB-exposed proxy on MetalLB-assigned IP |
+| `durability-test` | Kafkasql journal: register a schema, delete a registry pod, schema is still there after pod restart |
+| `rolling-restart-test` | Annotation-kicked rolling restart of `brokers-a` NodePool: quorum stays healthy + no message loss (1 msg/sec for 60s) |
+| `broker-kill-test` | Delete `brokers-a-0`; producer/consumer through cluster-B's proxy keep working (RF=3+min.isr=2); broker rejoins ISR after |
+| `ui-test` | kafka-ui smoke: login via Keycloak, list clusters, browse a topic |
+
+The KafkaProxy is exposed via MetalLB-backed LoadBalancer on every cluster
+(IP pools `172.19.255.{200-210,220-230,240-250}` — reachable from the Docker
+host). MetalLB install is now part of `mcs-setup.sh`; `setup-external.sh` still
+exists for the alternate Gateway-API / Ingress paths.
+
 ---
 
 ## Deploying to a Real Cluster

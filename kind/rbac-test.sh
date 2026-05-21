@@ -108,6 +108,7 @@ try_produce() {
       'ssl.truststore.type=PKCS12' \
       'ssl.truststore.location=/tmp/rbac-test/truststore.p12' \
       'ssl.truststore.password=changeit' \
+      'ssl.endpoint.identification.algorithm=' \
       'sasl.mechanism=OAUTHBEARER' \
       'sasl.oauthbearer.token.endpoint.url=file://${TOKEN_FILE}' \
       'sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required;' \

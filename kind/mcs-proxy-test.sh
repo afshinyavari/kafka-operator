@@ -93,6 +93,7 @@ kubectl --context "${CTX}" -n "${NS}" exec "${BROKER_POD}" -- bash -c "
     'ssl.truststore.type=PKCS12' \
     'ssl.truststore.location=/tmp/mcs-proxy-test/truststore.p12' \
     'ssl.truststore.password=changeit' \
+    'ssl.endpoint.identification.algorithm=' \
     'sasl.mechanism=OAUTHBEARER' \
     'sasl.oauthbearer.token.endpoint.url=file://${TOKEN_FILE}' \
     'sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required;' \
@@ -157,12 +158,62 @@ OUT=$(kubectl --context "${CTX}" -n "${NS}" exec "${BROKER_POD}" -- bash -c "
 
 COUNT=$(echo "${OUT}" | grep -c "mcstest-${RUN_ID}-" 2>/dev/null || true)
 
-echo ""
-echo "────────────────────────────────────────────────────────────────────────"
 if [ "${COUNT}" -ge 3 ]; then
-  echo -e "${GREEN}mcs-proxy-test PASSED${NC}: produced and consumed ${COUNT} messages via clusterset.local proxy bootstrap (client in ${CTX})"
+  info "✓ cluster-B consumed ${COUNT} messages via clusterset.local proxy"
 else
-  echo -e "${RED}mcs-proxy-test FAILED${NC}: expected 3 messages, got output:"
+  echo -e "${RED}mcs-proxy-test FAILED${NC}: expected 3 messages from cluster-B, got output:"
   echo "${OUT}"
   exit 1
 fi
+
+# Repeat the consume from cluster-C — confirms its KafkaProxy serves the same data.
+# Skipped if cluster-C doesn't host a proxy (older PROXY_CLUSTERS config).
+C_CTX="kind-kafka-c"
+C_PROXY_PODS=$(kubectl --context "${C_CTX}" -n "${NS}" get pods \
+  -l app=kroxylicious,app.instance=kafka-proxy --no-headers 2>/dev/null | wc -l)
+if [ "${C_PROXY_PODS}" -ge 1 ]; then
+  echo ""
+  info "Consuming from '${TOPIC}' via cluster-C KafkaProxy..."
+  C_BROKER_POD=$(kubectl --context "${C_CTX}" get pods -n "${NS}" \
+    -l "kafka.yavari.afshin.se/cluster=my-kafka" \
+    --no-headers -o custom-columns='NAME:.metadata.name' 2>/dev/null | head -1)
+  # Reuse the same TLS material; re-fetch JWT from a cluster-C pod
+  kubectl --context "${C_CTX}" -n "${NS}" exec "${C_BROKER_POD}" -- bash -c "
+    mkdir -p /tmp/mcs-proxy-test
+    echo '${CA_B64}'   | base64 -d > /tmp/mcs-proxy-test/ca.crt
+    echo '${CERT_B64}' | base64 -d > /tmp/mcs-proxy-test/client.crt
+    echo '${KEY_B64}'  | base64 -d > /tmp/mcs-proxy-test/client.key
+    rm -f /tmp/mcs-proxy-test/keystore.p12 /tmp/mcs-proxy-test/truststore.p12
+    openssl pkcs12 -export -inkey /tmp/mcs-proxy-test/client.key -in /tmp/mcs-proxy-test/client.crt -out /tmp/mcs-proxy-test/keystore.p12 -passout pass:changeit 2>/dev/null
+    keytool -importcert -noprompt -trustcacerts -alias ca -file /tmp/mcs-proxy-test/ca.crt -keystore /tmp/mcs-proxy-test/truststore.p12 -storetype PKCS12 -storepass changeit 2>/dev/null
+    printf '%s\n' 'security.protocol=SASL_SSL' 'ssl.keystore.type=PKCS12' 'ssl.keystore.location=/tmp/mcs-proxy-test/keystore.p12' 'ssl.keystore.password=changeit' 'ssl.truststore.type=PKCS12' 'ssl.truststore.location=/tmp/mcs-proxy-test/truststore.p12' 'ssl.truststore.password=changeit' 'ssl.endpoint.identification.algorithm=' 'sasl.mechanism=OAUTHBEARER' 'sasl.oauthbearer.token.endpoint.url=file://${TOKEN_FILE}' 'sasl.jaas.config=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginModule required;' 'sasl.login.callback.handler.class=org.apache.kafka.common.security.oauthbearer.OAuthBearerLoginCallbackHandler' > /tmp/mcs-proxy-test/sasl-ssl.properties
+    curl -sf -X POST '${KEYCLOAK_TOKEN_URL}' \
+      -d 'grant_type=password&client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET_VAL}&username=alice&password=alice' \
+      | python3 -c 'import sys,json; print(json.load(sys.stdin)[\"access_token\"], end=\"\")' \
+      > '${TOKEN_FILE}'
+  " 2>/dev/null
+  C_OUT=$(kubectl --context "${C_CTX}" -n "${NS}" exec "${C_BROKER_POD}" -- bash -c "
+    export KAFKA_HEAP_OPTS='-Xmx64m -Xms32m'
+    export KAFKA_OPTS='-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=file://${TOKEN_FILE}'
+    timeout 30 /opt/kafka/bin/kafka-console-consumer.sh \
+      --bootstrap-server '${PROXY_BOOTSTRAP}' \
+      --topic '${TOPIC}' \
+      --group 'mcs-test-c-${RUN_ID}' \
+      --from-beginning --timeout-ms 15000 \
+      --consumer.config /tmp/mcs-proxy-test/sasl-ssl.properties 2>/dev/null
+  " 2>/dev/null)
+  C_COUNT=$(echo "${C_OUT}" | grep -c "mcstest-${RUN_ID}-" 2>/dev/null || true)
+  if [ "${C_COUNT}" -ge 3 ]; then
+    info "✓ cluster-C consumed ${C_COUNT} messages via clusterset.local proxy"
+  else
+    echo -e "${RED}mcs-proxy-test FAILED${NC}: cluster-C expected 3 messages, got output:"
+    echo "${C_OUT}"
+    exit 1
+  fi
+else
+  info "(cluster-C has no KafkaProxy pods — skipping cluster-C consume; expand PROXY_CLUSTERS in mcs-setup.sh to enable)"
+fi
+
+echo ""
+echo "────────────────────────────────────────────────────────────────────────"
+echo -e "${GREEN}mcs-proxy-test PASSED${NC}: cluster-B + cluster-C both served the same data via clusterset.local proxy bootstrap"

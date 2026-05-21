@@ -382,6 +382,13 @@ cert-manager `Certificate` whose `commonName` matches `storage.principal`. In th
 Kind test rig, `mcs-setup.sh` mints `schema-registry-client-tls` with CN
 `apicurio-registry` automatically.
 
+`storage.kafkaTopicPartitions` (optional, defaults to 1) overrides the journal
+partition count. Apicurio v2.6 documents single-partition for ordering
+guarantees; setting >1 is unsupported by Apicurio upstream but allowed by the
+CRD for experimentation. The test rig sets it to 3 in
+`kind/manifests/apicurio-kafkasql.yaml` to exercise the multi-partition
+replication path; if schema reads turn inconsistent under load, revert to 1.
+
 #### What the reconciler does
 
 When `storage.type=kafkasql`, `ApicurioKafkasqlSupport` runs a preflight before
