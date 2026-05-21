@@ -1,14 +1,15 @@
 package se.afshin.yavari.kafka.operator.crd;
 
-import io.fabric8.generator.annotation.ValidationRule;
-
 import java.util.List;
 
 public class KafkaRbacKafkaAccess {
 
-    @ValidationRule(value = "self.all(t, t != '*')",
-            message = "Wildcard '*' is not allowed in topics. Enumerate topic names explicitly "
-                    + "to avoid accidentally granting cluster-wide access.")
+    // Wave 2 added a CEL rule barring '*' in topics, but the CRD generator's
+    // x-kubernetes-validations cost budget rejected it at apply time (the rule
+    // wasn't bounded by maxItems on the list, so K8s assumed worst-case). YAML
+    // emitter from Wave 1 (#6) still escapes injection via the policy YAML.
+    // Re-introduce as an admission webhook or with maxItems support when fabric8
+    // exposes it.
     private List<String> topics = List.of();
 
     private List<String> operations = List.of();

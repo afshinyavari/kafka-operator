@@ -26,7 +26,7 @@ public class KafkaTopicSpec {
     private int partitions = 1;
 
     @ValidationRule(value = "self >= 1", message = "replicationFactor must be at least 1")
-    private short replicationFactor = 1;
+    private int replicationFactor = 1;
 
     /** Dynamic topic-level configs (e.g. cleanup.policy, retention.ms).
      *  Keys not listed here are reset to broker defaults on each reconcile. */
@@ -44,8 +44,8 @@ public class KafkaTopicSpec {
     public int getPartitions() { return partitions; }
     public void setPartitions(int partitions) { this.partitions = partitions; }
 
-    public short getReplicationFactor() { return replicationFactor; }
-    public void setReplicationFactor(short replicationFactor) { this.replicationFactor = replicationFactor; }
+    public int getReplicationFactor() { return replicationFactor; }
+    public void setReplicationFactor(int replicationFactor) { this.replicationFactor = replicationFactor; }
 
     public Map<String, String> getConfig() { return config; }
     public void setConfig(Map<String, String> config) { this.config = config; }

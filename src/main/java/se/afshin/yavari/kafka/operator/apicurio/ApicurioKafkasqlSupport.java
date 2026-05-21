@@ -194,7 +194,7 @@ public class ApicurioKafkasqlSupport {
                     ns, registry.getMetadata().getName(), partitions);
         }
         spec.setPartitions(partitions);
-        spec.setReplicationFactor((short) 3);
+        spec.setReplicationFactor(3);
         spec.setConfig(Map.of(
                 "cleanup.policy", "compact",
                 "min.insync.replicas", "2",

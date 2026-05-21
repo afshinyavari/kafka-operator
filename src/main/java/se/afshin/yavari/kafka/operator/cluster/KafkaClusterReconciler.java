@@ -66,6 +66,9 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
     @Inject
     ApicurioOrchestrator apicurioOrchestrator;
 
+    @Inject
+    se.afshin.yavari.kafka.operator.infra.EventRecorder eventRecorder;
+
     @ConfigProperty(name = "kafka.cluster.id")
     String localClusterId;
 
@@ -133,11 +136,18 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
 
     @Override
     public UpdateControl<KafkaCluster> reconcile(KafkaCluster cr, Context<KafkaCluster> context) {
+        try (var ignored = se.afshin.yavari.kafka.operator.infra.ReconcileContext.scope(cr)) {
+        return reconcileInner(cr, context);
+        }
+    }
+
+    private UpdateControl<KafkaCluster> reconcileInner(KafkaCluster cr, Context<KafkaCluster> context) {
         String name = cr.getMetadata().getName();
         String namespace = cr.getMetadata().getNamespace();
         LOG.infof("Reconciling KafkaCluster %s/%s (local cluster: %s)", namespace, name, localClusterId);
 
         KafkaClusterStatus status = cr.getStatus() != null ? cr.getStatus() : new KafkaClusterStatus();
+        KafkaClusterStatus.Phase priorPhase = status.getPhase();
         status.setLastReconcileTime(Instant.now().toString());
         status.setObservedGeneration(cr.getMetadata().getGeneration());
 
@@ -185,7 +195,22 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
             status.setApicurio(apicurioOrchestrator.reconcile(cr, namespace, localClusterId));
         }
 
+        // Kubernetes-style conditions alongside the bespoke phase — let generic tooling
+        // react to Available / Progressing / Degraded without knowing our enum.
+        updateConditions(status);
         cr.setStatus(status);
+        // Emit a K8s Event on phase transition — only when the phase actually changed
+        // (every-reconcile spam would drown out the signal). Visible via kubectl describe.
+        if (priorPhase != status.getPhase()) {
+            if (status.getPhase() == KafkaClusterStatus.Phase.READY) {
+                eventRecorder.emit(cr, se.afshin.yavari.kafka.operator.infra.EventRecorder.Type.NORMAL,
+                        "Ready", "KafkaCluster reached READY");
+            } else if (status.getPhase() == KafkaClusterStatus.Phase.FAILED) {
+                eventRecorder.emit(cr, se.afshin.yavari.kafka.operator.infra.EventRecorder.Type.WARNING,
+                        "Failed", "KafkaCluster reconciliation failed: "
+                                + (status.getMessage() != null ? status.getMessage() : "(no detail)"));
+            }
+        }
         // Reschedule while any sub-status (proxy / apicurio) is still converging — the
         // sub-orchestrators set RECONCILING when they're waiting on dependent resources
         // (LB ingress, kafkasql journal topic, etc.) and need the cluster reconciler to
@@ -259,6 +284,37 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
 
         return DeleteControl.defaultDelete();
     }
+
+    private void updateConditions(KafkaClusterStatus status) {
+        var conditions = status.getConditions();
+        Long gen = status.getObservedGeneration();
+        boolean ready = status.getPhase() == KafkaClusterStatus.Phase.READY;
+        boolean failed = status.getPhase() == KafkaClusterStatus.Phase.FAILED;
+        conditions = se.afshin.yavari.kafka.operator.infra.ConditionUtil.set(conditions,
+                se.afshin.yavari.kafka.operator.infra.ConditionUtil.AVAILABLE,
+                ready ? se.afshin.yavari.kafka.operator.infra.ConditionUtil.TRUE
+                      : se.afshin.yavari.kafka.operator.infra.ConditionUtil.FALSE,
+                ready ? "AllPoolsReady" : "PoolsNotReady",
+                ready ? "All pools have desired replicas ready" : nz(status.getMessage()),
+                gen);
+        conditions = se.afshin.yavari.kafka.operator.infra.ConditionUtil.set(conditions,
+                se.afshin.yavari.kafka.operator.infra.ConditionUtil.PROGRESSING,
+                ready ? se.afshin.yavari.kafka.operator.infra.ConditionUtil.FALSE
+                      : se.afshin.yavari.kafka.operator.infra.ConditionUtil.TRUE,
+                ready ? "Stable" : "Reconciling",
+                ready ? "No active reconcile" : nz(status.getMessage()),
+                gen);
+        conditions = se.afshin.yavari.kafka.operator.infra.ConditionUtil.set(conditions,
+                se.afshin.yavari.kafka.operator.infra.ConditionUtil.DEGRADED,
+                failed ? se.afshin.yavari.kafka.operator.infra.ConditionUtil.TRUE
+                       : se.afshin.yavari.kafka.operator.infra.ConditionUtil.FALSE,
+                failed ? "ReconcileFailed" : "Healthy",
+                failed ? nz(status.getMessage()) : "Cluster healthy",
+                gen);
+        status.setConditions(conditions);
+    }
+
+    private static String nz(String s) { return s == null ? "" : s; }
 
     private void applyQuorumConfigMap(KafkaCluster cr, String namespace, String quorumVoters, String clusterId) {
         ConfigMap cm = new ConfigMapBuilder()

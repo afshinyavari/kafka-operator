@@ -72,6 +72,20 @@
       <artifactId>quarkus-micrometer-registry-prometheus</artifactId>
     </dependency>
 
+    <!-- JSON-formatted log output (enabled per-profile in application.properties) -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-logging-json</artifactId>
+    </dependency>
+
+    <!-- OpenTelemetry tracing: automatic span instrumentation for fabric8 HTTP +
+         Kafka AdminClient. Disabled by default; set quarkus.otel.sdk.disabled=false
+         and quarkus.otel.exporter.otlp.endpoint=<collector> to activate. -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-opentelemetry</artifactId>
+    </dependency>
+
     <!-- Kafka Admin API for ISR-safe rolling updates -->
     <dependency>
       <groupId>org.apache.kafka</groupId>

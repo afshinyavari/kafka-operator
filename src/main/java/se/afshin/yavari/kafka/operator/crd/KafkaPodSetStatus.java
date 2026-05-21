@@ -1,11 +1,15 @@
 package se.afshin.yavari.kafka.operator.crd;
 
+import io.fabric8.crd.generator.annotation.PrinterColumn;
+
 import java.util.ArrayList;
 import java.util.List;
 
 public class KafkaPodSetStatus {
 
+    @PrinterColumn(name = "Desired", format = "", priority = 0)
     private int replicas;
+    @PrinterColumn(name = "Ready", format = "", priority = 0)
     private int readyReplicas;
 
     /** Name of the pod currently being rolled; empty string means no roll in progress. */

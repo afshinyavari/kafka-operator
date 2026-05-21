@@ -1,12 +1,17 @@
 package se.afshin.yavari.kafka.operator.crd;
 
+import io.fabric8.crd.generator.annotation.PrinterColumn;
+
 public class KafkaNodePoolStatus {
 
     public enum Phase { PENDING, RECONCILING, READY, FAILED }
 
+    @PrinterColumn(name = "Phase", format = "", priority = 0)
     private Phase phase = Phase.PENDING;
     private String message;
+    @PrinterColumn(name = "Ready", format = "", priority = 0)
     private int readyReplicas;
+    @PrinterColumn(name = "Desired", format = "", priority = 0)
     private int desiredReplicas;
     private String lastError;
 

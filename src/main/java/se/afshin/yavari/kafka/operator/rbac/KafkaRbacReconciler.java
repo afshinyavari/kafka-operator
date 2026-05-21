@@ -25,6 +25,12 @@ public class KafkaRbacReconciler implements Reconciler<KafkaRbac>, Cleaner<Kafka
 
     @Override
     public UpdateControl<KafkaRbac> reconcile(KafkaRbac rbac, Context<KafkaRbac> context) {
+        try (var ignored = se.afshin.yavari.kafka.operator.infra.ReconcileContext.scope(rbac)) {
+        return reconcileInner(rbac, context);
+        }
+    }
+
+    private UpdateControl<KafkaRbac> reconcileInner(KafkaRbac rbac, Context<KafkaRbac> context) {
         String name = rbac.getMetadata().getName();
         String namespace = rbac.getMetadata().getNamespace();
         LOG.infof("Reconciling KafkaRbac %s/%s", namespace, name);

@@ -126,6 +126,12 @@ class KafkaClusterReconcilerTest {
         injectField(reconciler, "kraftConfig", kraftConfig);
         injectField(reconciler, "statusAggregator", statusAggregator);
         injectField(reconciler, "versionUpgradeController", versionUpgradeController);
+        injectField(reconciler, "proxyOrchestrator",
+                mock(se.afshin.yavari.kafka.operator.proxy.KafkaProxyOrchestrator.class));
+        injectField(reconciler, "apicurioOrchestrator",
+                mock(se.afshin.yavari.kafka.operator.apicurio.ApicurioOrchestrator.class));
+        injectField(reconciler, "eventRecorder",
+                mock(se.afshin.yavari.kafka.operator.infra.EventRecorder.class));
         injectField(reconciler, "localClusterId", LOCAL_CLUSTER_ID);
     }
 

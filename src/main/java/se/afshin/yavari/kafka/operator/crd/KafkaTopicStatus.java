@@ -1,14 +1,19 @@
 package se.afshin.yavari.kafka.operator.crd;
 
+import io.fabric8.crd.generator.annotation.PrinterColumn;
+
 public class KafkaTopicStatus {
 
     public enum Phase { RECONCILING, READY, SKIPPED, FAILED }
 
+    @PrinterColumn(name = "Phase", format = "", priority = 0)
     private Phase phase = Phase.RECONCILING;
     private String message;
     private Long observedGeneration;
     private String topicId;
+    @PrinterColumn(name = "Partitions", format = "", priority = 1)
     private Integer observedPartitions;
+    @PrinterColumn(name = "RF", format = "", priority = 1)
     private Short observedReplicationFactor;
     private String lastReconcileTime;
 

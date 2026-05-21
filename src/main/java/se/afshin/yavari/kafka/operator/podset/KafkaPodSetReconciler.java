@@ -71,6 +71,12 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
 
     @Override
     public UpdateControl<KafkaPodSet> reconcile(KafkaPodSet podSet, Context<KafkaPodSet> context) {
+        try (var ignored = se.afshin.yavari.kafka.operator.infra.ReconcileContext.scope(podSet)) {
+        return reconcileInner(podSet, context);
+        }
+    }
+
+    private UpdateControl<KafkaPodSet> reconcileInner(KafkaPodSet podSet, Context<KafkaPodSet> context) {
         String name = podSet.getMetadata().getName();
         String namespace = podSet.getMetadata().getNamespace();
         LOG.infof("Reconciling KafkaPodSet %s/%s", namespace, name);

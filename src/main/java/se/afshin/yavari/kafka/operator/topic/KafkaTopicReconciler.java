@@ -40,6 +40,12 @@ public class KafkaTopicReconciler implements Reconciler<KafkaTopic>, Cleaner<Kaf
 
     @Override
     public UpdateControl<KafkaTopic> reconcile(KafkaTopic topic, Context<KafkaTopic> ctx) {
+        try (var ignored = se.afshin.yavari.kafka.operator.infra.ReconcileContext.scope(topic)) {
+        return reconcileInner(topic, ctx);
+        }
+    }
+
+    private UpdateControl<KafkaTopic> reconcileInner(KafkaTopic topic, Context<KafkaTopic> ctx) {
         String ns = topic.getMetadata().getNamespace();
         String name = topic.getMetadata().getName();
         String topicName = topic.resolvedTopicName();
@@ -87,7 +93,7 @@ public class KafkaTopicReconciler implements Reconciler<KafkaTopic>, Cleaner<Kaf
                         topicName, topic.getSpec().getPartitions(), topic.getSpec().getReplicationFactor());
                 state = service.createTopic(admin, topicName,
                         topic.getSpec().getPartitions(),
-                        topic.getSpec().getReplicationFactor(),
+                        (short) topic.getSpec().getReplicationFactor(),
                         topic.getSpec().getConfig());
             } else {
                 if (state.replicationFactor() != topic.getSpec().getReplicationFactor()) {

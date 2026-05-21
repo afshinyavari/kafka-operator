@@ -57,6 +57,12 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
 
     @Override
     public UpdateControl<KafkaUI> reconcile(KafkaUI ui, Context<KafkaUI> context) {
+        try (var ignored = se.afshin.yavari.kafka.operator.infra.ReconcileContext.scope(ui)) {
+        return reconcileInner(ui, context);
+        }
+    }
+
+    private UpdateControl<KafkaUI> reconcileInner(KafkaUI ui, Context<KafkaUI> context) {
         String name = ui.getMetadata().getName();
         String namespace = ui.getMetadata().getNamespace();
         LOG.infof("Reconciling KafkaUI %s/%s", namespace, name);

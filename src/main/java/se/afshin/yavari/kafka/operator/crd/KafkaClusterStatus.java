@@ -1,22 +1,36 @@
 package se.afshin.yavari.kafka.operator.crd;
 
+import io.fabric8.crd.generator.annotation.PrinterColumn;
+
+import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 public class KafkaClusterStatus {
 
     public enum Phase { RECONCILING, READY, DEGRADED, FAILED }
 
+    @PrinterColumn(name = "Phase", format = "", priority = 0)
     private Phase phase = Phase.RECONCILING;
     private String message;
     private String lastReconcileTime;
     private Long observedGeneration;
 
+    /** Kubernetes-style conditions ({@code Available}, {@code Progressing}, {@code Degraded}).
+     *  Complements the bespoke {@code phase} field — kubectl and generic tooling can react
+     *  to these without knowing about the phase enum. */
+    private List<Condition> conditions = new ArrayList<>();
+
     /** Per-pool readiness summary, keyed by pool name. */
     private Map<String, String> poolPhases = new LinkedHashMap<>();
 
+    @PrinterColumn(name = "Kafka", format = "", priority = 0)
     private String currentKafkaVersion;
+
+    @PrinterColumn(name = "Upgrade", format = "", priority = 1)
     private String upgradePhase;
+
     private Integer currentMetadataVersion;
 
     /** Proxy sub-status (post-Wave-4 merger of KafkaProxy into KafkaCluster). */
@@ -54,4 +68,7 @@ public class KafkaClusterStatus {
 
     public ApicurioRegistryStatus getApicurio() { return apicurio; }
     public void setApicurio(ApicurioRegistryStatus apicurio) { this.apicurio = apicurio; }
+
+    public List<Condition> getConditions() { return conditions; }
+    public void setConditions(List<Condition> conditions) { this.conditions = conditions; }
 }

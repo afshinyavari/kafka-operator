@@ -146,6 +146,12 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
 
     @Override
     public UpdateControl<KafkaNodePool> reconcile(KafkaNodePool pool, Context<KafkaNodePool> context) {
+        try (var ignored = se.afshin.yavari.kafka.operator.infra.ReconcileContext.scope(pool)) {
+        return reconcileInner(pool, context);
+        }
+    }
+
+    private UpdateControl<KafkaNodePool> reconcileInner(KafkaNodePool pool, Context<KafkaNodePool> context) {
         String poolName = pool.getMetadata().getName();
         String namespace = pool.getMetadata().getNamespace();
         String clusterName = pool.getMetadata().getLabels().get(KafkaNodePool.CLUSTER_LABEL);
