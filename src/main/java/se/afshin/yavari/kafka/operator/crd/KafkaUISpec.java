@@ -1,8 +1,13 @@
 package se.afshin.yavari.kafka.operator.crd;
 
+import se.afshin.yavari.kafka.operator.externalaccess.HttpExternalAccessConfig;
+
 import java.util.List;
 
 public class KafkaUISpec {
+    /** Fixed container port the kafka-ui image listens on. */
+    public static final int PORT = 8080;
+
     private String image = "kafka-ui:dev";
     private String imagePullPolicy = "IfNotPresent";
     private int replicas = 1;
@@ -12,8 +17,7 @@ public class KafkaUISpec {
     private KafkaUIDiscoveryConfig discovery = new KafkaUIDiscoveryConfig();
     private KafkaUIResourceRequirements resources = new KafkaUIResourceRequirements();
     private KafkaUIProbesConfig probes = new KafkaUIProbesConfig();
-    private KafkaUIServiceConfig service = new KafkaUIServiceConfig();
-    private KafkaUIIngressConfig ingress = new KafkaUIIngressConfig();
+    private HttpExternalAccessConfig externalAccess = new HttpExternalAccessConfig();
     private List<KafkaUIEnvVar> env = List.of();
 
     public String getImage() { return image; }
@@ -40,11 +44,8 @@ public class KafkaUISpec {
     public KafkaUIProbesConfig getProbes() { return probes; }
     public void setProbes(KafkaUIProbesConfig probes) { this.probes = probes; }
 
-    public KafkaUIServiceConfig getService() { return service; }
-    public void setService(KafkaUIServiceConfig service) { this.service = service; }
-
-    public KafkaUIIngressConfig getIngress() { return ingress; }
-    public void setIngress(KafkaUIIngressConfig ingress) { this.ingress = ingress; }
+    public HttpExternalAccessConfig getExternalAccess() { return externalAccess; }
+    public void setExternalAccess(HttpExternalAccessConfig externalAccess) { this.externalAccess = externalAccess; }
 
     public List<KafkaUIEnvVar> getEnv() { return env; }
     public void setEnv(List<KafkaUIEnvVar> env) { this.env = env; }

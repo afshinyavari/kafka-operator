@@ -1,8 +1,10 @@
 package se.afshin.yavari.kafka.operator.ui;
 
+import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
 import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
+import io.fabric8.kubernetes.api.model.networking.v1.Ingress;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.javaoperatorsdk.operator.api.reconciler.Cleaner;
 import io.javaoperatorsdk.operator.api.reconciler.Context;
@@ -12,10 +14,18 @@ import io.javaoperatorsdk.operator.api.reconciler.Reconciler;
 import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
+import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
+import se.afshin.yavari.kafka.operator.crd.ExternalAccessType;
 import se.afshin.yavari.kafka.operator.crd.KafkaUI;
 import se.afshin.yavari.kafka.operator.crd.KafkaUIOidcConfig;
+import se.afshin.yavari.kafka.operator.crd.KafkaUISpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaUIStatus;
+import se.afshin.yavari.kafka.operator.externalaccess.HttpExternalAccessConfig;
+import se.afshin.yavari.kafka.operator.externalaccess.HttpIngressBuilder;
+import se.afshin.yavari.kafka.operator.externalaccess.HttpRouteBuilder;
+import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolution;
+import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolver;
 
 import java.time.Duration;
 
@@ -29,7 +39,12 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
     @Inject UIDeploymentBuilder deploymentBuilder;
     @Inject UIServiceBuilder serviceBuilder;
     @Inject UIRbacBuilder rbacBuilder;
-    @Inject UIIngressBuilder ingressBuilder;
+    @Inject ExternalAccessResolver externalAccessResolver;
+    @Inject HttpIngressBuilder httpIngressBuilder;
+    @Inject HttpRouteBuilder httpRouteBuilder;
+
+    @ConfigProperty(name = "kafka.cluster.id", defaultValue = "")
+    String localClusterId;
 
     @Override
     public UpdateControl<KafkaUI> reconcile(KafkaUI ui, Context<KafkaUI> context) {
@@ -71,22 +86,42 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
             client.services().inNamespace(namespace)
                     .resource(serviceBuilder.build(ui, ownerRef)).serverSideApply();
 
-            if (ui.getSpec().getIngress() != null && ui.getSpec().getIngress().isEnabled()) {
-                client.network().v1().ingresses().inNamespace(namespace)
-                        .resource(ingressBuilder.build(ui, ownerRef)).serverSideApply();
-            } else {
-                client.network().v1().ingresses().inNamespace(namespace).withName(name).delete();
+            HttpExternalAccessConfig ea = ui.getSpec().getExternalAccess();
+            ExternalAccessResolution external;
+            try {
+                external = externalAccessResolver.resolve(ea, name, localClusterId, namespace, client);
+            } catch (IllegalStateException e) {
+                status.setPhase(KafkaUIStatus.Phase.FAILED);
+                status.setMessage(e.getMessage());
+                ui.setStatus(status);
+                return UpdateControl.patchStatus(ui);
+            }
+
+            applyOrDeleteIngress(ui, ownerRef, ea, external);
+            applyOrDeleteHttpRoute(ui, ownerRef, ea, external);
+
+            status.setAdvertisedHost(external.advertisedHost());
+
+            // LB pending doesn't block READY — the UI is functional internally; only external
+            // clients are affected. Reschedule so advertisedHost is populated when the LB IP arrives.
+            boolean rescheduleForLb = external.isPending();
+            if (rescheduleForLb) {
+                status.setMessage("UI ready; waiting for LoadBalancer ingress address for external access");
             }
 
             int ready = readyReplicas(name, namespace);
             status.setReadyReplicas(ready);
             if (ready >= ui.getSpec().getReplicas()) {
                 status.setPhase(KafkaUIStatus.Phase.READY);
-                status.setMessage(null);
+                if (!rescheduleForLb) status.setMessage(null);
             } else {
                 status.setMessage("Waiting for kafka-ui pods: " + ready + "/" + ui.getSpec().getReplicas());
                 ui.setStatus(status);
                 return UpdateControl.patchStatus(ui).rescheduleAfter(Duration.ofSeconds(15));
+            }
+            if (rescheduleForLb) {
+                ui.setStatus(status);
+                return UpdateControl.patchStatus(ui).rescheduleAfter(Duration.ofSeconds(5));
             }
         } catch (Exception e) {
             LOG.errorf("KafkaUI %s/%s failed: %s", namespace, name, e.getMessage());
@@ -103,6 +138,44 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
         // Child resources cascade via ownerReferences — no manual cleanup needed.
         LOG.infof("KafkaUI %s/%s deleted", ui.getMetadata().getNamespace(), ui.getMetadata().getName());
         return DeleteControl.defaultDelete();
+    }
+
+    private void applyOrDeleteIngress(KafkaUI ui, OwnerReference ownerRef,
+                                      HttpExternalAccessConfig ea, ExternalAccessResolution external) {
+        String name = ui.getMetadata().getName();
+        String namespace = ui.getMetadata().getNamespace();
+        boolean shouldExist = ea != null && ea.getType() == ExternalAccessType.INGRESS
+                && external.advertisedHost() != null;
+        if (shouldExist) {
+            Ingress ingress = httpIngressBuilder.build(name, namespace, UILabels.labels(name),
+                    ownerRef, external.advertisedHost(), name, KafkaUISpec.PORT, ea.getIngress());
+            client.network().v1().ingresses().inNamespace(namespace).resource(ingress).serverSideApply();
+        } else {
+            client.network().v1().ingresses().inNamespace(namespace).withName(name).delete();
+        }
+    }
+
+    private void applyOrDeleteHttpRoute(KafkaUI ui, OwnerReference ownerRef,
+                                        HttpExternalAccessConfig ea, ExternalAccessResolution external) {
+        String name = ui.getMetadata().getName();
+        String namespace = ui.getMetadata().getNamespace();
+        boolean shouldExist = ea != null && ea.getType() == ExternalAccessType.GATEWAY
+                && external.advertisedHost() != null;
+        try {
+            if (shouldExist) {
+                GenericKubernetesResource route = httpRouteBuilder.build(name, namespace,
+                        UILabels.labels(name), ownerRef, external.advertisedHost(), name,
+                        KafkaUISpec.PORT, ea.getGateway());
+                client.genericKubernetesResources(HttpRouteBuilder.API_VERSION, HttpRouteBuilder.KIND)
+                        .inNamespace(namespace).resource(route).serverSideApply();
+            } else {
+                client.genericKubernetesResources(HttpRouteBuilder.API_VERSION, HttpRouteBuilder.KIND)
+                        .inNamespace(namespace).withName(name).delete();
+            }
+        } catch (Exception e) {
+            // Gateway API CRDs may not be installed — log and continue.
+            LOG.warnf("HTTPRoute apply/delete skipped for %s/%s: %s", namespace, name, e.getMessage());
+        }
     }
 
     private String validate(KafkaUI ui) {

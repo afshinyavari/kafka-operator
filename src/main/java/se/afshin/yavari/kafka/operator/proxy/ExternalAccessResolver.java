@@ -6,16 +6,16 @@ import io.fabric8.kubernetes.client.KubernetesClient;
 import jakarta.enterprise.context.ApplicationScoped;
 import se.afshin.yavari.kafka.operator.crd.ExternalAccessType;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
-import se.afshin.yavari.kafka.operator.crd.KafkaProxyExternalAccessConfig;
+import se.afshin.yavari.kafka.operator.externalaccess.ExternalAccessSpec;
 
 import java.util.List;
 
 /**
- * Resolves the externally-advertised hostname for a {@link KafkaProxy} on the local K8s cluster.
+ * Resolves the externally-advertised hostname for a service on the local K8s cluster.
  *
  * <p>Each cluster's operator runs its own reconciler instance with its own
- * {@code localClusterId} — so the same KafkaProxy CR produces different external resolutions
- * on different clusters.
+ * {@code localClusterId} — so the same CR produces different external resolutions on
+ * different clusters.
  *
  * <ul>
  *   <li>{@code LOADBALANCER}: read {@code Service.status.loadBalancer.ingress[0]} on the current
@@ -23,14 +23,22 @@ import java.util.List;
  *   if the user explicitly provided one.
  *   <li>{@code GATEWAY} / {@code INGRESS}: substitute {@code ${clusterId}} in
  *   {@code advertisedHostTemplate}.
+ *   <li>{@code NODEPORT}: treated as internal (no advertised host needed beyond NodeIP).
  * </ul>
  */
 @ApplicationScoped
 public class ExternalAccessResolver {
 
+    /** KafkaProxy overload preserved for the proxy reconciler's existing call sites. */
     public ExternalAccessResolution resolve(KafkaProxy proxy, String localClusterId,
                                             String namespace, KubernetesClient client) {
-        KafkaProxyExternalAccessConfig ea = proxy.getSpec().getExternalAccess();
+        return resolve(proxy.getSpec().getExternalAccess(), proxy.getMetadata().getName(),
+                localClusterId, namespace, client);
+    }
+
+    public ExternalAccessResolution resolve(ExternalAccessSpec ea, String serviceName,
+                                            String localClusterId, String namespace,
+                                            KubernetesClient client) {
         if (ea == null || ea.getType() == null) {
             return ExternalAccessResolution.internal();
         }
@@ -43,7 +51,7 @@ public class ExternalAccessResolver {
                 if (template != null && !template.isBlank()) {
                     return ExternalAccessResolution.resolved(type, substitute(template, localClusterId));
                 }
-                String lbHost = readLoadBalancerIngress(client, namespace, proxy.getMetadata().getName());
+                String lbHost = readLoadBalancerIngress(client, namespace, serviceName);
                 if (lbHost == null) {
                     return ExternalAccessResolution.pending(type);
                 }
@@ -55,8 +63,12 @@ public class ExternalAccessResolver {
                 }
                 return ExternalAccessResolution.resolved(type, substitute(template, localClusterId));
             }
+            case NODEPORT -> {
+                // NodePort needs no advertised hostname resolution at the service level.
+                return ExternalAccessResolution.internal();
+            }
             default -> throw new IllegalStateException(
-                    "externalAccess.type=" + type + " is not supported on the proxy");
+                    "externalAccess.type=" + type + " is not supported");
         }
     }
 

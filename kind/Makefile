@@ -148,17 +148,29 @@ kafka-ui-setup:  ## Deploy kafka-ui to kafka-a via KafkaUI CR (operator-reconcil
 	kubectl --context kind-kafka-a -n $(NAMESPACE) rollout status deployment/kafka-ui --timeout=120s
 	kubectl --context kind-kafka-a -n $(NAMESPACE) wait --for=condition=Ready \
 	  pod -l app.instance=kafka-ui --timeout=120s
-	@echo "kafka-ui ready: http://localhost:30808/ (kafka-a NodePort)"
+	@echo "kafka-ui ready. URL: $$(kubectl --context kind-kafka-a -n $(NAMESPACE) get kafkaui kafka-ui -o jsonpath='{.status.advertisedHost}' 2>/dev/null || true)"
+	@echo "  (if blank, status.advertisedHost is empty — externalAccess.type may be NODEPORT/internal)"
 
 ui-test:  ## End-to-end UI smoke test (login + cluster listing + topic browse)
 	@chmod +x ui-test.sh && ./ui-test.sh
 
+KEYCLOAK_EXTERNAL ?= loadbalancer
+KEYCLOAK_HOST ?= keycloak.kafka.svc.clusterset.local
+
 keycloak-setup:  ## Deploy Keycloak to cluster-a (namespace: kafka) and wait for Ready
-	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/keycloak.yaml
+	@sed -e "s|__KEYCLOAK_HOST__|$(KEYCLOAK_HOST)|g" $(MANIFESTS_DIR)/keycloak.yaml \
+	  | kubectl --context kind-kafka-a apply --server-side -f -
+	@for mode in loadbalancer ingress gateway; do \
+	  if [ "$(KEYCLOAK_EXTERNAL)" != "$$mode" ]; then \
+	    kubectl --context kind-kafka-a -n $(NAMESPACE) delete \
+	      service,ingress,httproute.gateway.networking.k8s.io \
+	      -l "external-access-mode=$$mode" --ignore-not-found >/dev/null 2>&1 || true; \
+	  fi; \
+	done
 	@echo "Waiting for Keycloak to be Ready (up to 5 min)..."
 	kubectl --context kind-kafka-a -n $(NAMESPACE) wait --for=condition=Ready \
 	  pod -l app=keycloak --timeout=300s
-	@echo "Keycloak ready."
+	@echo "Keycloak ready (external=$(KEYCLOAK_EXTERNAL))."
 
 proxy-setup:  ## Apply KafkaProxy + KafkaRbac CRs to cluster-a, wait for READY
 	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafkarbac.yaml

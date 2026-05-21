@@ -1,5 +1,6 @@
 package se.afshin.yavari.kafka.operator.ui;
 
+import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
 import io.fabric8.kubernetes.api.model.ObjectMeta;
 import io.fabric8.kubernetes.api.model.ServiceAccount;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
@@ -11,26 +12,31 @@ import io.fabric8.kubernetes.api.model.rbac.RoleBinding;
 import io.fabric8.kubernetes.api.model.rbac.RoleBindingBuilder;
 import io.fabric8.kubernetes.api.model.rbac.RoleBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
+import io.fabric8.kubernetes.client.V1NetworkAPIGroupDSL;
 import io.fabric8.kubernetes.client.dsl.AppsAPIGroupDSL;
 import io.fabric8.kubernetes.client.dsl.MixedOperation;
-import io.fabric8.kubernetes.client.dsl.NonNamespaceOperation;
 import io.fabric8.kubernetes.client.dsl.NetworkAPIGroupDSL;
+import io.fabric8.kubernetes.client.dsl.NonNamespaceOperation;
 import io.fabric8.kubernetes.client.dsl.RbacAPIGroupDSL;
 import io.fabric8.kubernetes.client.dsl.Resource;
 import io.fabric8.kubernetes.client.dsl.RollableScalableResource;
 import io.fabric8.kubernetes.client.dsl.ServiceAccountResource;
 import io.fabric8.kubernetes.client.dsl.ServiceResource;
-import io.fabric8.kubernetes.client.V1NetworkAPIGroupDSL;
 import io.javaoperatorsdk.operator.api.reconciler.Context;
-import io.javaoperatorsdk.operator.api.reconciler.UpdateControl;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import se.afshin.yavari.kafka.operator.crd.ExternalAccessType;
 import se.afshin.yavari.kafka.operator.crd.KafkaUI;
-import se.afshin.yavari.kafka.operator.crd.KafkaUIIngressConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaUIOidcConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaUISecretKeyRef;
 import se.afshin.yavari.kafka.operator.crd.KafkaUISpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaUIStatus;
+import se.afshin.yavari.kafka.operator.externalaccess.HttpExternalAccessConfig;
+import se.afshin.yavari.kafka.operator.externalaccess.HttpGatewayConfig;
+import se.afshin.yavari.kafka.operator.externalaccess.HttpIngressBuilder;
+import se.afshin.yavari.kafka.operator.externalaccess.HttpIngressConfig;
+import se.afshin.yavari.kafka.operator.externalaccess.HttpRouteBuilder;
+import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolver;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
@@ -51,32 +57,41 @@ class KafkaUIReconcilerTest {
     private UIDeploymentBuilder deploymentBuilder;
     private UIServiceBuilder serviceBuilder;
     private UIRbacBuilder rbacBuilder;
-    private UIIngressBuilder ingressBuilder;
+    private ExternalAccessResolver externalAccessResolver;
+    private HttpIngressBuilder httpIngressBuilder;
+    private HttpRouteBuilder httpRouteBuilder;
     private Context<KafkaUI> context;
     private KafkaUIReconciler reconciler;
 
     private RollableScalableResource depResource;
     private RollableScalableResource namedDep;
     private Resource ingResource;
+    private Resource routeResource;
+    private MixedOperation routeMixed;
+    private NonNamespaceOperation routeNamespaced;
 
     @BeforeEach
     void setup() throws Exception {
         deploymentBuilder = mock(UIDeploymentBuilder.class);
         serviceBuilder = mock(UIServiceBuilder.class);
         rbacBuilder = mock(UIRbacBuilder.class);
-        ingressBuilder = mock(UIIngressBuilder.class);
+        externalAccessResolver = new ExternalAccessResolver();
+        httpIngressBuilder = mock(HttpIngressBuilder.class);
+        httpRouteBuilder = mock(HttpRouteBuilder.class);
         context = mock(Context.class);
         client = mock(KubernetesClient.class);
 
-        // Builders return non-null stubs so the reconciler can pass them to fabric8.
         when(deploymentBuilder.build(any(), any())).thenReturn(deployment(1));
         when(serviceBuilder.build(any(), any())).thenReturn(new io.fabric8.kubernetes.api.model.Service());
         when(rbacBuilder.serviceAccount(any(), any())).thenReturn(new ServiceAccount());
         when(rbacBuilder.role(any(), any())).thenReturn(new RoleBuilder().build());
         when(rbacBuilder.roleBinding(any(), any())).thenReturn(new RoleBindingBuilder().build());
-        when(ingressBuilder.build(any(), any())).thenReturn(new Ingress());
+        when(httpIngressBuilder.build(anyString(), anyString(), any(), any(), anyString(),
+                anyString(), anyInt(), any())).thenReturn(new Ingress());
+        when(httpRouteBuilder.build(anyString(), anyString(), any(), any(), anyString(),
+                anyString(), anyInt(), any())).thenReturn(new GenericKubernetesResource());
 
-        // ServiceAccount chain — note: nsSaOp.resource(...) returns ServiceAccountResource, not generic Resource.
+        // ServiceAccount chain
         MixedOperation saOp = mock(MixedOperation.class);
         NonNamespaceOperation nsSaOp = mock(NonNamespaceOperation.class);
         ServiceAccountResource saResource = mock(ServiceAccountResource.class);
@@ -120,6 +135,9 @@ class KafkaUIReconcilerTest {
         when(client.services()).thenReturn(svcOp);
         when(svcOp.inNamespace(NS)).thenReturn(nsSvcOp);
         when(nsSvcOp.resource(any(io.fabric8.kubernetes.api.model.Service.class))).thenReturn(svcResource);
+        // svcOp.withName used by the LB resolver
+        when(nsSvcOp.withName(anyString())).thenReturn(svcResource);
+        when(svcResource.get()).thenReturn(null);
 
         // Networking / Ingress chain
         NetworkAPIGroupDSL netApi = mock(NetworkAPIGroupDSL.class);
@@ -134,12 +152,25 @@ class KafkaUIReconcilerTest {
         when(nsIngOp.resource(any(Ingress.class))).thenReturn(ingResource);
         when(nsIngOp.withName(anyString())).thenReturn(ingResource);
 
+        // GenericKubernetesResource (HTTPRoute) chain
+        routeMixed = mock(MixedOperation.class);
+        routeNamespaced = mock(NonNamespaceOperation.class);
+        routeResource = mock(Resource.class);
+        when(client.genericKubernetesResources(HttpRouteBuilder.API_VERSION, HttpRouteBuilder.KIND))
+                .thenReturn(routeMixed);
+        when(routeMixed.inNamespace(NS)).thenReturn(routeNamespaced);
+        when(routeNamespaced.resource(any(GenericKubernetesResource.class))).thenReturn(routeResource);
+        when(routeNamespaced.withName(anyString())).thenReturn(routeResource);
+
         reconciler = new KafkaUIReconciler();
         injectField(reconciler, "client", client);
         injectField(reconciler, "deploymentBuilder", deploymentBuilder);
         injectField(reconciler, "serviceBuilder", serviceBuilder);
         injectField(reconciler, "rbacBuilder", rbacBuilder);
-        injectField(reconciler, "ingressBuilder", ingressBuilder);
+        injectField(reconciler, "externalAccessResolver", externalAccessResolver);
+        injectField(reconciler, "httpIngressBuilder", httpIngressBuilder);
+        injectField(reconciler, "httpRouteBuilder", httpRouteBuilder);
+        injectField(reconciler, "localClusterId", "A");
     }
 
     @Test
@@ -155,36 +186,65 @@ class KafkaUIReconcilerTest {
     }
 
     @Test
-    void reconcile_happyPath_appliesAllResourcesAndSetsReady() {
+    void reconcile_defaultNodePort_noIngressOrRoute() {
         KafkaUI ui = ui();
 
-        UpdateControl<KafkaUI> result = reconciler.reconcile(ui, context);
+        reconciler.reconcile(ui, context);
 
-        // SA + Role + RoleBinding + Deployment + Service applied.
-        verify(rbacBuilder, times(1)).serviceAccount(any(), any());
-        verify(rbacBuilder, times(1)).role(any(), any());
-        verify(rbacBuilder, times(1)).roleBinding(any(), any());
         verify(deploymentBuilder, times(1)).build(any(), any());
         verify(serviceBuilder, times(1)).build(any(), any());
-        // Ingress disabled by default -> not built, attempted delete instead.
-        verify(ingressBuilder, never()).build(any(), any());
+        // No Ingress / HTTPRoute built; both pruned.
+        verify(httpIngressBuilder, never()).build(anyString(), anyString(), any(), any(),
+                anyString(), anyString(), anyInt(), any());
+        verify(httpRouteBuilder, never()).build(anyString(), anyString(), any(), any(),
+                anyString(), anyString(), anyInt(), any());
         verify(ingResource, times(1)).delete();
+        verify(routeResource, times(1)).delete();
 
         assertThat(ui.getStatus().getPhase()).isEqualTo(KafkaUIStatus.Phase.READY);
         assertThat(ui.getStatus().getReadyReplicas()).isEqualTo(1);
     }
 
     @Test
-    void reconcile_ingressEnabled_appliesIngress() {
+    void reconcile_ingressType_appliesIngressOnly() {
         KafkaUI ui = ui();
-        KafkaUIIngressConfig ing = new KafkaUIIngressConfig();
-        ing.setEnabled(true);
-        ing.setHost("kafka-ui.example.com");
-        ui.getSpec().setIngress(ing);
+        HttpExternalAccessConfig ea = new HttpExternalAccessConfig();
+        ea.setType(ExternalAccessType.INGRESS);
+        ea.setAdvertisedHostTemplate("kafka-ui-${clusterId}.example.com");
+        HttpIngressConfig ing = new HttpIngressConfig();
+        ing.setIngressClassName("nginx");
+        ea.setIngress(ing);
+        ui.getSpec().setExternalAccess(ea);
 
         reconciler.reconcile(ui, context);
-        verify(ingressBuilder, times(1)).build(any(), any());
-        verify(ingResource, never()).delete();
+
+        verify(httpIngressBuilder, times(1)).build(anyString(), anyString(), any(), any(),
+                anyString(), anyString(), anyInt(), any());
+        verify(httpRouteBuilder, never()).build(anyString(), anyString(), any(), any(),
+                anyString(), anyString(), anyInt(), any());
+        verify(routeResource, times(1)).delete();
+        assertThat(ui.getStatus().getAdvertisedHost()).isEqualTo("kafka-ui-a.example.com");
+    }
+
+    @Test
+    void reconcile_gatewayType_appliesRouteOnly() {
+        KafkaUI ui = ui();
+        HttpExternalAccessConfig ea = new HttpExternalAccessConfig();
+        ea.setType(ExternalAccessType.GATEWAY);
+        ea.setAdvertisedHostTemplate("kafka-ui.example.com");
+        HttpGatewayConfig gw = new HttpGatewayConfig();
+        gw.setParentGatewayName("external-gw");
+        ea.setGateway(gw);
+        ui.getSpec().setExternalAccess(ea);
+
+        reconciler.reconcile(ui, context);
+
+        verify(httpRouteBuilder, times(1)).build(anyString(), anyString(), any(), any(),
+                anyString(), anyString(), anyInt(), any());
+        verify(httpIngressBuilder, never()).build(anyString(), anyString(), any(), any(),
+                anyString(), anyString(), anyInt(), any());
+        verify(ingResource, times(1)).delete();
+        assertThat(ui.getStatus().getAdvertisedHost()).isEqualTo("kafka-ui.example.com");
     }
 
     @Test
@@ -199,6 +259,10 @@ class KafkaUIReconcilerTest {
     }
 
     // ---- helpers ----
+
+    private static int anyInt() {
+        return org.mockito.ArgumentMatchers.anyInt();
+    }
 
     private KafkaUI ui() {
         KafkaUI ui = new KafkaUI();

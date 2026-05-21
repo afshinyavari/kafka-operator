@@ -633,6 +633,7 @@ Manages an Apicurio Registry deployment and an optional HTTP RBAC proxy that enf
 | `oidc` | ApicurioRegistryOidcConfig | no | — | OIDC settings for the RBAC proxy. |
 | `storage` | ApicurioRegistryStorageConfig | no | (defaults) | Storage backend selection. |
 | `exportService` | boolean | no | `false` | When `true`, creates Submariner `ServiceExport` resources for the registry and proxy Services (MCS mode). |
+| `externalAccess` | HttpExternalAccessConfig | no | — | When set, exposes the `{name}-rbac-proxy` Service externally. Requires `rbacRef` + `rbacProxyImage`; the raw registry on port 8080 is never exposed. See [shared HTTP external access](#http-external-access). |
 
 ### spec.oidc — ApicurioRegistryOidcConfig
 
@@ -660,6 +661,7 @@ Manages an Apicurio Registry deployment and an optional HTTP RBAC proxy that enf
 | `phase` | `RECONCILING` \| `READY` \| `FAILED` | Deployment state. |
 | `message` | string | Status or error message. |
 | `proxyUrl` | string | ClusterIP URL of the RBAC proxy (`http://{name}-rbac-proxy.{namespace}.svc.cluster.local:8082`). Clients that need RBAC enforcement must use this URL with a Bearer JWT. The registry itself is reachable at `http://{name}-registry.{namespace}.svc.cluster.local:8080` for internal callers that bypass RBAC. |
+| `externalUrl` | string | Externally-reachable URL when `externalAccess` is configured (LB IP, advertised host, etc.). Empty otherwise. |
 
 ### Configuration recipes
 
@@ -764,8 +766,7 @@ Deploys the Quarkus + htmx Kafka UI as an operator-managed workload: ServiceAcco
 | `discovery` | KafkaUIDiscoveryConfig | no | see below | Overrides for the env vars the UI uses to find proxy/Apicurio Services and which namespace to list `KafkaCluster` CRs from. |
 | `resources` | ResourceRequirements | no | `requests: 100m/256Mi, limits: 500m/512Mi` | |
 | `probes` | KafkaUIProbesConfig | no | `/q/health/ready` (5/5s) + `/q/health/live` (15/10s) | |
-| `service` | KafkaUIServiceConfig | no | `NodePort 30808 -> 8080` | |
-| `ingress` | KafkaUIIngressConfig | no | `{ enabled: false }` | When `enabled=true`, a single-rule Ingress is created (and removed when toggled back). |
+| `externalAccess` | HttpExternalAccessConfig | no | `{ type: NODEPORT }` | Same shape as `KafkaProxy.spec.externalAccess`. Pick `NODEPORT` / `LOADBALANCER` / `GATEWAY` / `INGRESS`. See [shared HTTP external access](#http-external-access). |
 | `env[]` | KafkaUIEnvVar | no | `[]` | Extra env vars. A name collision overrides the operator-set default. |
 
 ### spec.oidc — KafkaUIOidcConfig
@@ -795,6 +796,7 @@ Deploys the Quarkus + htmx Kafka UI as an operator-managed workload: ServiceAcco
 | `message` | Status or error message. |
 | `readyReplicas` | From the underlying Deployment. |
 | `observedGeneration` | Last `metadata.generation` the reconciler processed. |
+| `advertisedHost` | Externally-reachable hostname/IP resolved on the local cluster (LB IP or substituted from `advertisedHostTemplate`). Empty for NodePort/internal. |
 
 ### Configuration recipes
 
@@ -815,24 +817,45 @@ spec:
 
 Every other field is defaulted by the reconciler. Apply the OIDC client-secret Secret separately (`kafka-ui-oidc` is **not** operator-owned, so external Secret managers can supply it).
 
-#### Ingress-fronted (no NodePort)
+#### LoadBalancer (MetalLB / cloud)
 
 ```yaml
 spec:
-  service:
-    type: ClusterIP
-  ingress:
-    enabled: true
-    className: nginx
-    host: kafka-ui.example.com
-    tlsSecret: kafka-ui-tls
-  oidc:
-    issuerUrl: https://sso.example.com/realms/demo
-    clientId: kafka-ui-web
-    clientSecretRef: { name: kafka-ui-oidc, key: client-secret }
+  externalAccess:
+    type: LOADBALANCER
+  oidc: { issuerUrl: ..., clientId: ..., clientSecretRef: { name: ..., key: ... } }
 ```
 
-Toggling `ingress.enabled` back to `false` makes the reconciler delete the Ingress on the next reconcile.
+`status.advertisedHost` reports the assigned LB IP once the Service ingress is ready.
+
+#### Ingress-fronted
+
+```yaml
+spec:
+  externalAccess:
+    type: INGRESS
+    advertisedHostTemplate: "kafka-ui-${clusterId}.example.com"
+    ingress:
+      ingressClassName: nginx
+      tlsSecretRef: kafka-ui-tls          # optional, BYO Secret for edge TLS termination
+  oidc: { issuerUrl: ..., clientId: ..., clientSecretRef: { name: ..., key: ... } }
+```
+
+#### Gateway API HTTPRoute
+
+```yaml
+spec:
+  externalAccess:
+    type: GATEWAY
+    advertisedHostTemplate: "kafka-ui.example.com"
+    gateway:
+      parentGatewayName: external-gw
+      parentGatewayNamespace: gateway-system
+      sectionName: https
+  oidc: ...
+```
+
+Switching `externalAccess.type` is non-destructive: the reconciler creates the new edge resource and deletes the previous one on the next reconcile.
 
 ---
 
@@ -923,3 +946,47 @@ spec:
 
 - **Static primary cluster.** Failover requires reordering `spec.clusters` on the `KafkaCluster` CR. A future Kafka-consumer-group-based leader election will replace this without changing the CRD surface.
 - **RF changes not driven.** Reassign partitions externally (or use Cruise Control once integrated) and the next reconcile will pick up the new state.
+
+---
+
+## HTTP external access
+
+Shared sub-spec used by `KafkaUI.spec.externalAccess` and `ApicurioRegistry.spec.externalAccess`. (`KafkaProxy.spec.externalAccess` is similar but uses Gateway-API `TLSRoute` + nginx `ssl-passthrough` because the proxy terminates Kafka mTLS end-to-end — see [KafkaProxy](#kafkaproxy).)
+
+### HttpExternalAccessConfig
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `type` | enum | `NODEPORT` | One of `NODEPORT` / `LOADBALANCER` / `GATEWAY` / `INGRESS`. |
+| `advertisedHostTemplate` | string | — | Externally-reachable hostname. Required for `GATEWAY` and `INGRESS`. Optional for `LOADBALANCER` (overrides the auto-resolved LB IP). `${clusterId}` is substituted with the local cluster id (lowercase) so one CR yields different hosts per cluster in MCS. |
+| `nodePort` | integer | — | Pins the NodePort. Only honoured when `type=NODEPORT`. |
+| `gateway` | HttpGatewayConfig | — | Required when `type=GATEWAY`. |
+| `ingress` | HttpIngressConfig | — | Required when `type=INGRESS`. |
+
+### HttpGatewayConfig
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `parentGatewayName` | string | Name of the parent Gateway resource to attach the HTTPRoute to. |
+| `parentGatewayNamespace` | string | Defaults to the CR's namespace. |
+| `sectionName` | string | Optional Gateway listener section name. |
+| `tlsSecretRef` | string | Informational — TLS termination happens on the Gateway listener; this records which Secret backs it. |
+
+### HttpIngressConfig
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ingressClassName` | string | Optional Ingress class. |
+| `tlsSecretRef` | string | When set, a `spec.tls[]` entry is added so the Ingress controller terminates TLS using this Secret. |
+| `annotations` | map[string]string | Extra annotations on the Ingress (e.g. cert-manager.io issuer hints). |
+
+### Resource fan-out by type
+
+| `type` | Service | Extra resource |
+|--------|---------|----------------|
+| `NODEPORT` | NodePort | — |
+| `LOADBALANCER` | LoadBalancer | — |
+| `GATEWAY` | ClusterIP | `gateway.networking.k8s.io/v1` HTTPRoute |
+| `INGRESS` | ClusterIP | `networking.k8s.io/v1` Ingress |
+
+Switching `type` is non-destructive: the reconciler creates the new edge resource on the next pass and deletes any stale Ingress/HTTPRoute.

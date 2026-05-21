@@ -35,7 +35,7 @@ public class UIDeploymentBuilder {
         KafkaUISpec spec = ui.getSpec();
         Map<String, String> labels = UILabels.labels(name);
 
-        int containerPort = spec.getService().getPort();
+        int containerPort = KafkaUISpec.PORT;
         String tlsMount = spec.getTls().getMountPath();
 
         List<EnvVar> envVars = buildEnv(spec, containerPort, tlsMount);

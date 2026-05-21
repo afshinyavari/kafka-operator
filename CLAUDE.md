@@ -11,4 +11,5 @@
 4. Try to keep the reconcilers clean so break out business logic into other classes
 5. Keep timeouts short when running the tests
 6. Write unit tests when implementing new features
-7. Always ask before commit to git
+7. Update documentation, architecture, crds, everything
+9. Always ask before commit to git

@@ -8,6 +8,7 @@ public class KafkaUIStatus {
     private String message;
     private Integer readyReplicas;
     private Long observedGeneration;
+    private String advertisedHost;
 
     public Phase getPhase() { return phase; }
     public void setPhase(Phase phase) { this.phase = phase; }
@@ -20,4 +21,7 @@ public class KafkaUIStatus {
 
     public Long getObservedGeneration() { return observedGeneration; }
     public void setObservedGeneration(Long observedGeneration) { this.observedGeneration = observedGeneration; }
+
+    public String getAdvertisedHost() { return advertisedHost; }
+    public void setAdvertisedHost(String advertisedHost) { this.advertisedHost = advertisedHost; }
 }

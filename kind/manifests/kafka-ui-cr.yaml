@@ -16,7 +16,15 @@ spec:
   tls:
     secretName: kafka-proxy-test-client-tls
     mountPath: /etc/kafka-tls
-  service:
-    type: NodePort
-    port: 8080
-    nodePort: 30808
+  # External access — same shape as KafkaProxy. Default LOADBALANCER for the MetalLB demo;
+  # switch to GATEWAY / INGRESS / NODEPORT as needed.
+  externalAccess:
+    type: LOADBALANCER
+    # advertisedHostTemplate: "kafka-ui-${clusterId}.example.com"  # optional override
+    # nodePort: 30808                                              # only used when type=NODEPORT
+    # ingress:
+    #   ingressClassName: nginx
+    #   tlsSecretRef: kafka-ui-tls
+    # gateway:
+    #   parentGatewayName: external-gw
+    #   parentGatewayNamespace: gateway-system

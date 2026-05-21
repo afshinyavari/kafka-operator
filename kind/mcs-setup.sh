@@ -566,8 +566,30 @@ par_wait "Kafka pods wait" PIDS LOGS NAMES
 ok "Kafka pods ready on all clusters"
 
 # ── Step 16: Deploy Keycloak on cluster-a ─────────────────────────────────────
-info "Deploying Keycloak on kafka-a..."
-kubectl --context kind-kafka-a apply -f "${MANIFESTS_DIR}/keycloak.yaml" --server-side &>/dev/null
+# KEYCLOAK_EXTERNAL selects which external-access overlay to keep alongside the
+# always-on ClusterIP Service. Default: loadbalancer (matches the MetalLB demo).
+# KEYCLOAK_HOST is substituted into the Ingress / HTTPRoute host field; must be
+# kept aligned with KC_HOSTNAME so the JWT `iss` claim stays consistent.
+KEYCLOAK_EXTERNAL="${KEYCLOAK_EXTERNAL:-loadbalancer}"
+KEYCLOAK_HOST="${KEYCLOAK_HOST:-keycloak.kafka.svc.clusterset.local}"
+info "Deploying Keycloak on kafka-a (external=${KEYCLOAK_EXTERNAL}, host=${KEYCLOAK_HOST})..."
+# Filter out overlay docs whose external-access-mode label doesn't match. Docs
+# without that label (ConfigMap / Deployment / base Service / ServiceExport) are
+# always kept. Avoids applying e.g. HTTPRoute when Gateway-API CRDs aren't present.
+sed -e "s|__KEYCLOAK_HOST__|${KEYCLOAK_HOST}|g" "${MANIFESTS_DIR}/keycloak.yaml" \
+  | awk -v mode="${KEYCLOAK_EXTERNAL}" '
+      function flush() { if (keep && doc != "") print doc; }
+      BEGIN { keep=1; doc="" }
+      /^---/ { flush(); keep=1; doc=$0"\n"; next }
+      /^[[:space:]]+external-access-mode:[[:space:]]+/ {
+        line=$0
+        sub(/^[[:space:]]+external-access-mode:[[:space:]]+/, "", line)
+        if (line != mode) keep=0
+      }
+      { doc = doc $0 "\n" }
+      END { flush() }
+    ' \
+  | kubectl --context kind-kafka-a apply --server-side -f - &>/dev/null
 info "Waiting for Keycloak to be Ready (up to 5 min)..."
 kubectl --context kind-kafka-a -n "${NAMESPACE}" wait --for=condition=Ready \
   pod -l app=keycloak --timeout=300s

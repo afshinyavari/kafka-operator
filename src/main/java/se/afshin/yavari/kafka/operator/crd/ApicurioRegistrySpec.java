@@ -1,5 +1,7 @@
 package se.afshin.yavari.kafka.operator.crd;
 
+import se.afshin.yavari.kafka.operator.externalaccess.HttpExternalAccessConfig;
+
 public class ApicurioRegistrySpec {
     private String image = "quay.io/apicurio/apicurio-registry-kafkasql:latest-snapshot";
     private String rbacProxyImage;
@@ -8,6 +10,8 @@ public class ApicurioRegistrySpec {
     private ApicurioRegistryOidcConfig oidc;
     private ApicurioRegistryStorageConfig storage = new ApicurioRegistryStorageConfig();
     private boolean exportService = false;
+    /** Optional. When set, the rbac-proxy Service is exposed externally. Null = internal-only. */
+    private HttpExternalAccessConfig externalAccess;
 
     public String getImage() { return image; }
     public void setImage(String image) { this.image = image; }
@@ -29,4 +33,7 @@ public class ApicurioRegistrySpec {
 
     public boolean isExportService() { return exportService; }
     public void setExportService(boolean exportService) { this.exportService = exportService; }
+
+    public HttpExternalAccessConfig getExternalAccess() { return externalAccess; }
+    public void setExternalAccess(HttpExternalAccessConfig externalAccess) { this.externalAccess = externalAccess; }
 }

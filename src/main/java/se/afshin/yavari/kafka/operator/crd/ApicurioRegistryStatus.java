@@ -7,6 +7,7 @@ public class ApicurioRegistryStatus {
     private Phase phase = Phase.RECONCILING;
     private String message;
     private String proxyUrl;
+    private String externalUrl;
 
     public Phase getPhase() { return phase; }
     public void setPhase(Phase phase) { this.phase = phase; }
@@ -16,4 +17,7 @@ public class ApicurioRegistryStatus {
 
     public String getProxyUrl() { return proxyUrl; }
     public void setProxyUrl(String proxyUrl) { this.proxyUrl = proxyUrl; }
+
+    public String getExternalUrl() { return externalUrl; }
+    public void setExternalUrl(String externalUrl) { this.externalUrl = externalUrl; }
 }

@@ -25,3 +25,14 @@ spec:
     issuerUrl: http://keycloak.kafka.svc.cluster.local:8080/realms/demo
     groupsClaim: realm_access.roles
   exportService: false
+  # External access for the rbac-proxy Service. Requires rbacRef + rbacProxyImage.
+  # Same shape as KafkaProxy / KafkaUI.
+  externalAccess:
+    type: LOADBALANCER
+    # advertisedHostTemplate: "schema-${clusterId}.example.com"
+    # ingress:
+    #   ingressClassName: nginx
+    #   tlsSecretRef: schema-registry-tls
+    # gateway:
+    #   parentGatewayName: external-gw
+    #   parentGatewayNamespace: gateway-system

@@ -8,7 +8,7 @@ A Kubernetes operator for running Apache Kafka 4.x in KRaft mode across multiple
 - **Node pool model** — separate `KafkaNodePool` CRs for controllers and brokers; mixed roles supported
 - **Safe rolling updates** — spec hash triggers pod restart; ISR/quorum check blocks restart until safe
 - **Cross-cluster roll ordering** — `spec.clusterRollOrder` sequences controller restarts across clusters
-- **External access (NodePort)** — per-broker NodePort services with deterministic port assignment
+- **External access (NodePort / LoadBalancer / Gateway API / Ingress)** — per-broker NodePort services with deterministic port assignment; KafkaProxy / KafkaUI / Apicurio Schema Registry / Keycloak all expose the same four modes (KafkaProxy via TLS SNI passthrough, the HTTP services via HTTPRoute / standard Ingress with optional BYO TLS Secret). See [External access](#external-access) below.
 - **TLS / mTLS listeners** — per-listener TLS with PKCS12 keystores generated at pod startup
 - **JMX metrics** — `jmx_prometheus_javaagent` with optional Prometheus `ServiceMonitor`
 - **Pod Disruption Budget** — auto-created `maxUnavailable=1` per pool
@@ -222,6 +222,23 @@ kafka-operator/
     ├── api-reference.md  # CRD field reference
     └── operations.md     # Upgrades, scaling, proxy/RBAC setup, monitoring, troubleshooting
 ```
+
+## External access
+
+`KafkaProxy`, `KafkaUI`, and `ApicurioRegistry` each expose a `spec.externalAccess` field with the same four modes — `NODEPORT`, `LOADBALANCER`, `GATEWAY` (Gateway-API HTTPRoute / TLSRoute), and `INGRESS`. The HTTP services (UI, Apicurio rbac-proxy) accept an optional `tlsSecretRef` so the Ingress / Gateway listener can terminate TLS using a BYO Secret; otherwise the edge is plain HTTP. See [HTTP external access](docs/api-reference.md#http-external-access) for the full sub-spec.
+
+Keycloak is deployed by a static manifest (`kind/manifests/keycloak.yaml`). `mcs-setup.sh` and `make keycloak-setup` honour two env vars:
+
+- `KEYCLOAK_EXTERNAL=none|loadbalancer|ingress|gateway` (default `loadbalancer`).
+- `KEYCLOAK_HOST=<dns>` (default `keycloak.kafka.svc.clusterset.local`) — used as the Ingress / HTTPRoute host.
+
+The Deployment pins `KC_HOSTNAME=keycloak.kafka.svc.clusterset.local` so the JWT `iss` claim is identical regardless of how clients reach Keycloak. If a browser obtains tokens via a different hostname, the issuer mismatch fails token validation in `KafkaProxy` / `KafkaUI` / Apicurio. For dev/demo external access, keep the default `KEYCLOAK_HOST` and add an `/etc/hosts` entry on the laptop:
+
+```
+<external-LB-or-Ingress-IP>  keycloak.kafka.svc.clusterset.local
+```
+
+That keeps the issuer URL aligned for browser-side OAuth flows. Production deployments should instead set `KC_HOSTNAME` to a real external DNS name and configure all OIDC clients (proxy, UI, registry) to use that same name.
 
 ## Further Reading
 
