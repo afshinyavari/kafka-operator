@@ -1,0 +1,128 @@
+# Baseline NetworkPolicies for the `kafka` namespace.
+#
+# Posture: default-deny INGRESS, EGRESS unconstrained. Egress is left open so
+# Submariner's clusterset.local DNS, kube-dns lookups, and broker AdminClient
+# calls don't need explicit egress rules per workload. (Egress hardening is
+# tracked separately in the audit backlog.)
+#
+# Not applied by `mcs-setup` automatically — opt-in via
+#   kubectl --context kind-kafka-{a,b,c} apply -f kind/manifests/networkpolicies.yaml
+# until the smoke e2e validates the Submariner cross-cluster paths work with
+# these in place.
+#
+# Pod selectors below match the labels the operator and the kind manifests put
+# on each workload. If you customise builder labels, adjust here.
+
+---
+# Default-deny: no ingress to any pod in the namespace unless another policy
+# explicitly allows it.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: kafka
+spec:
+  podSelector: {}
+  policyTypes: [Ingress]
+
+---
+# Brokers: inter-broker (9092) + per-listener TLS ports (9094 etc.) reachable
+# from anywhere in the kafka namespace AND from Submariner-routed traffic
+# (which can SNAT through kube-system or appear as pod-IPs from other clusters).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-broker-ingress
+  namespace: kafka
+spec:
+  podSelector:
+    matchExpressions:
+      - key: kafka.yavari.afshin.se/node-pool
+        operator: Exists  # matches broker AND controller pods
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {}
+        - namespaceSelector: {}  # any-namespace; covers Submariner route-agent etc.
+
+---
+# Kroxylicious proxy: 9094 from anywhere (this is the cluster's only external
+# entry point for Kafka traffic). The proxy upstream connection to brokers is
+# covered by the broker policy above.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-proxy-ingress
+  namespace: kafka
+spec:
+  podSelector:
+    matchLabels:
+      app: kroxylicious
+  policyTypes: [Ingress]
+  ingress:
+    - {}  # any source
+
+---
+# Apicurio Registry + rbac-proxy sidecar: 8080/8082 from anywhere (rbac-proxy
+# OIDC-gates schema writes; the registry container is loopback-only from the
+# rbac-proxy in the same pod, which doesn't need a NetworkPolicy entry).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-apicurio-ingress
+  namespace: kafka
+spec:
+  podSelector:
+    matchLabels:
+      app: apicurio-registry
+  policyTypes: [Ingress]
+  ingress:
+    - {}
+
+---
+# Kafka UI: 8080 from anywhere (external browser).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-kafkaui-ingress
+  namespace: kafka
+spec:
+  podSelector:
+    matchLabels:
+      app: kafka-ui
+  policyTypes: [Ingress]
+  ingress:
+    - {}
+
+---
+# Keycloak: 8080 from anywhere. IDP must be reachable by every workload
+# performing OAuth + by external browsers via the LB.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-keycloak-ingress
+  namespace: kafka
+spec:
+  podSelector:
+    matchLabels:
+      app: keycloak
+  policyTypes: [Ingress]
+  ingress:
+    - {}
+
+---
+# Operator: metrics (8080 /q/metrics) + health (8080 /q/health) reachable from
+# kube-system (kubelet probes) and the namespace (Prometheus). Allow all so
+# port-forward debugging continues to work.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-operator-ingress
+  namespace: kafka
+spec:
+  podSelector:
+    matchLabels:
+      app: kafka-operator
+  policyTypes: [Ingress]
+  ingress:
+    - {}

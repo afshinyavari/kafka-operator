@@ -9,6 +9,7 @@ import jakarta.enterprise.context.ApplicationScoped;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxySpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
+import se.afshin.yavari.kafka.operator.infra.SecurityContextDefaults;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -105,8 +106,10 @@ public class ProxyDeploymentBuilder {
                                     .withImage(spec.getImage())
                                     .withArgs("--config", "/etc/kroxy/config.yaml")
                                     .withVolumeMounts(mounts)
+                                    .withSecurityContext(SecurityContextDefaults.containerDefaults())
                                     .build())
                             .withVolumes(volumes)
+                            .withSecurityContext(SecurityContextDefaults.podDefaults())
                         .endSpec()
                     .endTemplate()
                 .endSpec()

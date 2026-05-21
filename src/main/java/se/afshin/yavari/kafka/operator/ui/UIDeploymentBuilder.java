@@ -21,6 +21,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaUIProbeConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaUIResourceRequirements;
 import se.afshin.yavari.kafka.operator.crd.KafkaUISpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaUITlsConfig;
+import se.afshin.yavari.kafka.operator.infra.SecurityContextDefaults;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -106,8 +107,10 @@ public class UIDeploymentBuilder {
                                             .withRequests(toQuantities(res.getRequests()))
                                             .withLimits(toQuantities(res.getLimits()))
                                             .build())
+                                    .withSecurityContext(SecurityContextDefaults.containerDefaults())
                                     .build())
                             .withVolumes(volumes)
+                            .withSecurityContext(SecurityContextDefaults.podDefaults())
                         .endSpec()
                     .endTemplate()
                 .endSpec()

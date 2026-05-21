@@ -4,6 +4,14 @@ metadata:
   name: kafka-operator
   namespace: kafka
 ---
+# ClusterRole — minimal cluster-scoped permissions:
+#   - the operator's CRDs (the CRD definitions themselves are cluster-scoped objects)
+#   - nodes (rack-aware topology resolution)
+# Every other resource the operator touches (Secrets, ConfigMaps, Pods, Services,
+# Deployments, leases, PDBs, Ingresses, ServiceMonitors, ServiceExports, Gateway-API
+# routes, etc.) is reached via the Role + RoleBinding below in the `kafka` namespace.
+# This requires `quarkus.operator-sdk.namespaces=kafka` in application.properties so
+# JOSDK informers don't try to watch cluster-wide.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -36,11 +44,37 @@ rules:
       - apicurioregistries/status
       - apicurioregistries/finalizers
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: kafka-operator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: kafka-operator
+subjects:
+  - kind: ServiceAccount
+    name: kafka-operator
+    namespace: kafka
+---
+# Role — namespace-scoped permissions in the `kafka` namespace. The operator only
+# reconciles workloads in this namespace by default. If you run the operator against
+# additional namespaces, duplicate this Role (and its RoleBinding) into each.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kafka-operator
+  namespace: kafka
+rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "deployments/status"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
-    resources: ["pods", "persistentvolumeclaims", "configmaps", "services", "secrets", "serviceaccounts", "namespaces", "events"]
+    resources: ["pods", "persistentvolumeclaims", "configmaps", "services", "secrets", "serviceaccounts", "events"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources: ["roles", "rolebindings"]
@@ -48,9 +82,6 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources: ["ingresses"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: [""]
-    resources: ["nodes"]
-    verbs: ["get", "list", "watch"]
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
@@ -64,16 +95,17 @@ rules:
     resources: ["serviceexports"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["gateway.networking.k8s.io"]
-    resources: ["tlsroutes"]
+    resources: ["tlsroutes", "httproutes"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
   name: kafka-operator
+  namespace: kafka
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
+  kind: Role
   name: kafka-operator
 subjects:
   - kind: ServiceAccount

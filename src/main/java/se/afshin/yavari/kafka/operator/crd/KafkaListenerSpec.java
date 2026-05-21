@@ -1,5 +1,10 @@
 package se.afshin.yavari.kafka.operator.crd;
 
+import io.fabric8.generator.annotation.ValidationRule;
+
+@ValidationRule(value = "self.externalAccess == null || self.tls != null",
+        message = "spec.listeners[].tls is required when externalAccess is set "
+                + "(externally-reachable PLAINTEXT listeners are forbidden).")
 public class KafkaListenerSpec {
 
     /** Listener name used verbatim in Kafka config (e.g. CLIENT_TLS). Uppercase, alphanumeric + underscores. */

@@ -11,6 +11,7 @@ import io.fabric8.kubernetes.api.model.VolumeMountBuilder;
 import jakarta.enterprise.context.ApplicationScoped;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistry;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistryOidcConfig;
+import se.afshin.yavari.kafka.operator.infra.SecurityContextDefaults;
 
 import java.util.Map;
 
@@ -70,7 +71,8 @@ public class ApicurioProxyContainerBuilder {
                     .endHttpGet()
                     .withInitialDelaySeconds(10)
                     .withPeriodSeconds(10)
-                .endReadinessProbe();
+                .endReadinessProbe()
+                .withSecurityContext(SecurityContextDefaults.containerDefaults());
 
         if (oidc != null) {
             container.addToEnv(new EnvVarBuilder()

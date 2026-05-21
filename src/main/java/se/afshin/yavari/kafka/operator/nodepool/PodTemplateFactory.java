@@ -35,6 +35,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.MetricsConfig;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
+import se.afshin.yavari.kafka.operator.infra.SecurityContextDefaults;
 
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -115,6 +116,7 @@ public class PodTemplateFactory {
                     .withEnv(env)
                     .withVolumeMounts(mounts)
                     .withResources(pool.getSpec().getResources())
+                    .withSecurityContext(SecurityContextDefaults.containerDefaults())
                     .withReadinessProbe(new ProbeBuilder()
                             .withNewTcpSocket()
                                 .withPort(new IntOrString(brokerReadinessPort(isBroker, listeners)))
@@ -130,7 +132,8 @@ public class PodTemplateFactory {
                     .withVolumes(volumes)
                     .withRestartPolicy("Always")
                     .withHostname(podName)
-                    .withSubdomain(poolName + "-headless");
+                    .withSubdomain(poolName + "-headless")
+                    .withSecurityContext(SecurityContextDefaults.podDefaults());
 
             podSpecBuilder.withAffinity(buildAffinity(rackTopologyKey, hasRack ? zone : "", poolName, clusterName));
             if (hasRack) {

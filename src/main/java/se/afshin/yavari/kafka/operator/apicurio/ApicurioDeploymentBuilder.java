@@ -17,6 +17,7 @@ import io.fabric8.kubernetes.api.model.apps.DeploymentBuilder;
 import jakarta.enterprise.context.ApplicationScoped;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistry;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistryStorageConfig;
+import se.afshin.yavari.kafka.operator.infra.SecurityContextDefaults;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -138,6 +139,7 @@ public class ApicurioDeploymentBuilder {
                     .withInitialDelaySeconds(10)
                     .withPeriodSeconds(10)
                 .endReadinessProbe()
+                .withSecurityContext(SecurityContextDefaults.containerDefaults())
                 .build();
 
         List<Container> containers = new ArrayList<>();
@@ -191,6 +193,7 @@ public class ApicurioDeploymentBuilder {
                             .withInitContainers(initContainers)
                             .withContainers(containers)
                             .withVolumes(volumes)
+                            .withSecurityContext(SecurityContextDefaults.podDefaults())
                         .endSpec()
                     .endTemplate()
                 .endSpec()
@@ -234,6 +237,7 @@ public class ApicurioDeploymentBuilder {
                                 .withName(KAFKASQL_PKCS12_VOLUME)
                                 .withMountPath(KAFKASQL_PKCS12_MOUNT)
                                 .build())
+                .withSecurityContext(SecurityContextDefaults.containerDefaults())
                 .build();
     }
 
