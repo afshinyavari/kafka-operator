@@ -81,6 +81,51 @@ class KafkaRbacConfigMapBuilderTest {
     }
 
     @Test
+    void buildKafkaRules_groupWithFetch_injectsConsumerOffsetsTopic() {
+        // A consumer-group consume hangs (no DENY in proxy log) when the rendered rule
+        // doesn't grant FETCH on __consumer_offsets — the Kroxylicious AuthorizationFilter
+        // silently filters the broker's offset response. The builder must inject the
+        // internal topic whenever FETCH is in the operations list.
+        KafkaRbac rbac = rbac(List.of(groupWithKafka("orders-team", List.of("orders"), List.of("PRODUCE", "FETCH"))), List.of());
+
+        String yaml = builder.buildKafkaRules(rbac, NS).getData().get("rbac-rules.yaml");
+
+        assertThat(yaml).contains("- orders");
+        assertThat(yaml).contains("- __consumer_offsets");
+    }
+
+    @Test
+    void buildKafkaRules_groupWithProduceOnly_doesNotInjectConsumerOffsets() {
+        // PRODUCE-only roles have no consumer-group state, so no injection.
+        KafkaRbac rbac = rbac(List.of(groupWithKafka("orders-prod", List.of("orders"), List.of("PRODUCE"))), List.of());
+
+        String yaml = builder.buildKafkaRules(rbac, NS).getData().get("rbac-rules.yaml");
+
+        assertThat(yaml).doesNotContain("__consumer_offsets");
+    }
+
+    @Test
+    void buildKafkaRules_userWithFetch_injectsConsumerOffsetsTopic() {
+        // Same logic for user (mTLS CN) rules.
+        KafkaRbac rbac = rbac(List.of(), List.of(userWithKafka("alice", List.of("orders"), List.of("FETCH"))));
+
+        String yaml = builder.buildKafkaRules(rbac, NS).getData().get("rbac-rules.yaml");
+
+        assertThat(yaml).contains("- __consumer_offsets");
+    }
+
+    @Test
+    void buildKafkaRules_wildcardTopic_doesNotDuplicateConsumerOffsets() {
+        // '*' already covers everything; injecting __consumer_offsets alongside would
+        // produce a duplicate entry the YAML reader-side could trip over.
+        KafkaRbac rbac = rbac(List.of(groupWithKafka("any", List.of("*"), List.of("FETCH"))), List.of());
+
+        String yaml = builder.buildKafkaRules(rbac, NS).getData().get("rbac-rules.yaml");
+
+        assertThat(yaml).doesNotContain("__consumer_offsets");
+    }
+
+    @Test
     void buildApicurioPolicy_groupWithSchemaRegistry_included() {
         KafkaRbacGroup g = groupWithSchemaRegistry("devs", List.of("my-schema"), List.of("READ"));
         KafkaRbac rbac = rbac(List.of(g), List.of());

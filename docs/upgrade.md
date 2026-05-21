@@ -59,8 +59,11 @@ version changes (it follows the broker upgrade phase via the cross-cluster
 roll coordinator — see `architecture.md`).
 
 For an MCS topology, the upgrade rolls cluster A → B → C in
-`spec.clusterRollOrder` order. Each cluster's brokers reach READY before the
-next begins.
+`spec.clusterRollOrder` order. Every cluster-spanning workload follows the
+same gate: controllers, brokers, the Kroxylicious proxy Deployment, and the
+Apicurio Registry Deployment. Each cluster's workloads reach READY before
+the next begins, so a synchronized image bump or cert rotation can never
+take down a quorum-spanning replica set simultaneously.
 
 ## CRD migration
 

@@ -32,8 +32,11 @@ import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 import se.afshin.yavari.kafka.operator.infra.ServiceExportManager;
 import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolution;
 import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolver;
+import se.afshin.yavari.kafka.operator.rolling.CrossClusterRollCoordinator;
+import se.afshin.yavari.kafka.operator.rolling.RollTracker;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.stream.Collectors;
 
 /**
@@ -76,6 +79,8 @@ public class ApicurioOrchestrator {
     @Inject SecretRevisionTracker secretRevisionTracker;
     @Inject ServiceExportManager serviceExportManager;
     @Inject OptionalResourceApplier optionalApplier;
+    @Inject CrossClusterRollCoordinator rollCoordinator;
+    @Inject RollTracker rollTracker;
 
     /** Reconciles the registry described by {@code cr.spec.apicurio}. Returns the new sub-status. */
     public ApicurioRegistryStatus reconcile(KafkaCluster cr, String namespace, String localClusterId) {
@@ -154,6 +159,29 @@ public class ApicurioOrchestrator {
             Deployment dep = deploymentBuilder.build(syn, namespace, proxyContainer,
                     policyVolume, kafkasqlConfig, configHash);
             attachOwnerRef(dep, cr);
+
+            // Cross-cluster roll gate (same shape as KafkaProxyOrchestrator). A synchronized
+            // kafkasql cert rotation across all 3 MCS clusters would otherwise roll every
+            // Apicurio replica at once — clusterRollOrder serialises them.
+            String depName = APICURIO_NAME + "-registry";
+            Deployment existing = client.apps().deployments()
+                    .inNamespace(namespace).withName(depName).get();
+            if (existing != null
+                    && cr.getSpec().getClusterRollOrder() != null
+                    && !cr.getSpec().getClusterRollOrder().isEmpty()) {
+                boolean rollIsRequired = rollWillHappen(existing, spec.getImage(), configHash);
+                if (rollIsRequired && !rollCoordinator.isMyTurnToRoll(cr.getSpec(), localClusterId)) {
+                    LOG.infof("Apicurio for %s/%s: waiting for preceding cluster per clusterRollOrder %s",
+                            namespace, clusterName, cr.getSpec().getClusterRollOrder());
+                    status.setMessage("Waiting for preceding cluster per spec.clusterRollOrder "
+                            + "before rolling Apicurio (image or config change)");
+                    return status;
+                }
+            }
+            if (rollWillHappen(existing, spec.getImage(), configHash)) {
+                rollTracker.markRolling("apicurio", namespace, depName);
+            }
+
             client.apps().deployments().inNamespace(namespace).resource(dep).serverSideApply();
 
             String proxySvcName = APICURIO_NAME + "-rbac-proxy";
@@ -211,6 +239,7 @@ public class ApicurioOrchestrator {
             if (ready >= spec.getReplicas()) {
                 status.setPhase(ApicurioRegistryStatus.Phase.READY);
                 if (!rescheduleForLb) status.setMessage(null);
+                rollTracker.markComplete("apicurio", namespace, APICURIO_NAME + "-registry");
             } else {
                 status.setMessage("Waiting for registry pods: " + ready + "/" + spec.getReplicas());
             }
@@ -362,5 +391,25 @@ public class ApicurioOrchestrator {
             return 0;
         }
         return dep.getStatus().getReadyReplicas();
+    }
+
+    static boolean rollWillHappen(Deployment existing, String desiredImage, String desiredHash) {
+        if (existing == null) return true;
+        if (existing.getSpec() == null || existing.getSpec().getTemplate() == null) return true;
+        var podSpec = existing.getSpec().getTemplate().getSpec();
+        // The "registry" container is the one whose image is driven by spec.apicurio.image.
+        // Defaulted images (where spec.image is null) shouldn't roll on null≠"defaultImg" —
+        // Objects.equals treats null inputs from the spec as "no change requested".
+        String existingImage = (podSpec != null
+                && podSpec.getContainers() != null
+                && !podSpec.getContainers().isEmpty())
+            ? podSpec.getContainers().get(0).getImage()
+            : null;
+        if (desiredImage != null && !Objects.equals(desiredImage, existingImage)) return true;
+        var meta = existing.getSpec().getTemplate().getMetadata();
+        String existingHash = (meta != null && meta.getAnnotations() != null)
+            ? meta.getAnnotations().getOrDefault(ApicurioDeploymentBuilder.CONFIG_HASH_ANNOTATION, "")
+            : "";
+        return !desiredHash.equals(existingHash);
     }
 }

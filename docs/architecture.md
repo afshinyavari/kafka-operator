@@ -160,9 +160,13 @@ KafkaNodePoolReconciler recomputes PodSpec → new hash → updates KafkaPodSet
   ▼
 KafkaPodSetReconciler sees hash mismatch on pod P
   │
-  ├── (controller pool) CrossClusterRollCoordinator.isMyTurnToRoll()?
+  ├── CrossClusterRollCoordinator.isMyTurnToRoll()?   ← brokers AND controllers
   │     Polls GET /operator/upgrade-phase on preceding clusters in clusterRollOrder.
   │     Blocks until all predecessors report upgradePhase=IDLE.
+  │     RollTracker.markRolling("podset", …) flips this cluster to ROLLING for the
+  │     duration of the roll, so successor clusters see ROLLING even on the
+  │     success path (etcd never observes status.currentRollingPod=non-empty
+  │     during a successful roll).
   │
   ▼
 RollingUpdateController.rollPod(P)
@@ -214,7 +218,7 @@ Per-component Secret coverage:
 | `KafkaProxy`               | `clientCertSecretRef` (default `{name}-client-tls`), `serverCertSecretRef` (default `{name}-server-tls`) |
 | `ApicurioRegistry`         | `storage.tlsSecretRef` (kafkasql client cert)                                            |
 
-The blast radius of a rotation is just the pool / Deployment whose Secret changed. Cross-cluster ordering still follows `KafkaCluster.spec.clusterRollOrder`, so a synchronized rotation across all three MCS clusters still rolls one cluster at a time.
+The blast radius of a rotation is just the pool / Deployment whose Secret changed. Cross-cluster ordering follows `KafkaCluster.spec.clusterRollOrder` for every cluster-spanning workload (controllers, brokers, proxy, Apicurio), so a synchronized rotation across all three MCS clusters rolls strictly one cluster at a time. The `RollTracker` in-memory marker closes the visibility window where a successful roll wouldn't otherwise surface in etcd (status is patched only after the multi-minute `rollPod()` returns).
 
 The `configHash` itself is a 12-char truncated SHA-256 emitted on the PodTemplate annotation `kafka.yavari.afshin.se/config-hash`. Two trade-offs worth knowing:
 

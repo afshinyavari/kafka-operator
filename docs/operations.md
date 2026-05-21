@@ -105,7 +105,7 @@ In production (`quarkus.operator-sdk.activate-leader-election-for-profiles=prod`
 3. The operator detects the config hash change, sets `upgradePhase = ROLLING`, and rolls one pod at a time using ISR/quorum safety checks.
 4. When all pods are ready, `upgradePhase` returns to `IDLE`.
 
-If `clusterRollOrder` is set, controller pods wait for preceding clusters to reach `IDLE` before rolling. Broker pods roll independently without cross-cluster gating.
+If `clusterRollOrder` is set, every cluster-spanning workload — controller pods, broker pods, the Kroxylicious proxy Deployment, and the Apicurio Registry Deployment — waits for preceding clusters to reach `IDLE` before rolling. A synchronized image bump or cert rotation across all three MCS clusters therefore rolls strictly one cluster at a time.
 
 ### Bumping the metadata version
 
@@ -141,7 +141,7 @@ A Secret is "tracked" by a workload if the operator includes its `metadata.resou
 
 For cert-manager-issued Secrets the rotation is hands-off — the `Certificate` resource controls renewal cadence, cert-manager writes a new Secret, the operator's Secret informer fires, the workload rolls. For manually-rotated Secrets, just `kubectl apply` the new Secret.
 
-Across an MCS topology, rotations triggered simultaneously on all three clusters still respect `KafkaCluster.spec.clusterRollOrder` — controllers roll one cluster at a time. Brokers roll independently per cluster.
+Across an MCS topology, rotations triggered simultaneously on all three clusters respect `KafkaCluster.spec.clusterRollOrder` for every cluster-spanning workload: controllers, brokers, the proxy Deployment, and the Apicurio Registry Deployment. A successor cluster polls `GET /operator/upgrade-phase` on each predecessor and waits until it reports `upgradePhase=IDLE` before starting its own roll, so even synchronized cert-manager rotations roll strictly one cluster at a time.
 
 ### Verifying a rotation
 

@@ -22,7 +22,12 @@ import se.afshin.yavari.kafka.operator.crd.KafkaPodSetSpec;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
 import se.afshin.yavari.kafka.operator.metrics.OperatorMetrics;
+import se.afshin.yavari.kafka.operator.crd.ClusterEntry;
+import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
+import se.afshin.yavari.kafka.operator.crd.KafkaClusterSpec;
+import se.afshin.yavari.kafka.operator.rolling.CrossClusterRollCoordinator;
 import se.afshin.yavari.kafka.operator.rolling.IsrChecker;
+import se.afshin.yavari.kafka.operator.rolling.RollTracker;
 import se.afshin.yavari.kafka.operator.rolling.RollingUpdateController;
 
 import java.util.HashMap;
@@ -66,8 +71,15 @@ class KafkaPodSetReconcilerTest {
     private PodSpecHasher podSpecHasher;
     private PvcFactory pvcFactory;
     private OperatorMetrics metrics;
+    private CrossClusterRollCoordinator rollCoordinator;
+    private RollTracker rollTracker;
     private Context<KafkaPodSet> context;
     private KafkaPodSetReconciler reconciler;
+
+    // KafkaCluster lookup chain (lookupParentCluster — only used when the cluster label is set)
+    private MixedOperation kcMixedOp;
+    private NonNamespaceOperation kcNsOp;
+    private Resource<KafkaCluster> namedKcOp;
 
     @BeforeEach
     void setup() throws Exception {
@@ -97,11 +109,23 @@ class KafkaPodSetReconcilerTest {
         when(nsNpOp.withName(POOL)).thenReturn(namedNpOp);
         when(namedNpOp.get()).thenReturn(brokerNodePool());
 
+        // KafkaCluster lookup chain (only consulted when KafkaPodSet has CLUSTER_LABEL set).
+        kcMixedOp = mock(MixedOperation.class);
+        kcNsOp = mock(NonNamespaceOperation.class);
+        namedKcOp = mock(Resource.class);
+        when(client.resources(KafkaCluster.class)).thenReturn(kcMixedOp);
+        when(kcMixedOp.inNamespace(NS)).thenReturn(kcNsOp);
+        when(kcNsOp.withName(anyString())).thenReturn(namedKcOp);
+        when(namedKcOp.get()).thenReturn(null);
+
         rollingController = mock(RollingUpdateController.class);
         isrChecker = mock(IsrChecker.class);
         podSpecHasher = mock(PodSpecHasher.class);
         pvcFactory = mock(PvcFactory.class);
         metrics = mock(OperatorMetrics.class);
+        rollCoordinator = mock(CrossClusterRollCoordinator.class);
+        when(rollCoordinator.isMyTurnToRoll(any(), anyString())).thenReturn(true);
+        rollTracker = new RollTracker(); // real, in-memory
         context = mock(Context.class);
 
         reconciler = new KafkaPodSetReconciler();
@@ -111,6 +135,9 @@ class KafkaPodSetReconcilerTest {
         injectField(reconciler, "podSpecHasher", podSpecHasher);
         injectField(reconciler, "pvcFactory", pvcFactory);
         injectField(reconciler, "metrics", metrics);
+        injectField(reconciler, "rollCoordinator", rollCoordinator);
+        injectField(reconciler, "rollTracker", rollTracker);
+        injectField(reconciler, "localClusterId", "A");
     }
 
     @Test
@@ -174,6 +201,39 @@ class KafkaPodSetReconcilerTest {
         verify(namedPodOp, never()).delete();
     }
 
+    @Test
+    void brokerPool_clusterRollOrderPredecessorRolling_defers() {
+        // Broker pool with a hash mismatch should now be gated by clusterRollOrder
+        // (previously controllers-only). Predecessor reports ROLLING → defer, don't roll.
+        when(podSpecHasher.hash(any())).thenReturn(HASH_NEW);
+        stubActualPods(List.of(actualPod(POD_NAME, HASH_OLD, true)));
+        givenParentClusterWithRollOrder(List.of("Z", "A")); // A waits for Z
+        when(rollCoordinator.isMyTurnToRoll(any(KafkaClusterSpec.class), anyString())).thenReturn(false);
+
+        reconciler.reconcile(podSetWithClusterLabel(List.of(desiredEntry(POD_NAME))), context);
+
+        verify(rollingController, never()).rollPod(any(), any(), anyString(), anyInt(), any(), anyString());
+    }
+
+    @Test
+    void brokerPool_rollRequired_marksRollTrackerBeforeRollPod() {
+        // The in-memory RollTracker must flip to ROLLING before rollPod returns, so
+        // /operator/upgrade-phase reports ROLLING during the multi-minute roll window.
+        when(podSpecHasher.hash(any())).thenReturn(HASH_NEW);
+        stubActualPods(List.of(actualPod(POD_NAME, HASH_OLD, true)));
+        givenParentClusterWithRollOrder(List.of("A")); // single-cluster order, my turn
+
+        org.mockito.Mockito.doAnswer(inv -> {
+            // At the moment rollPod is invoked, the tracker must already report ROLLING.
+            org.assertj.core.api.Assertions.assertThat(rollTracker.isAnyRolling()).isTrue();
+            return null;
+        }).when(rollingController).rollPod(any(), any(), anyString(), anyInt(), any(), anyString());
+
+        reconciler.reconcile(podSetWithClusterLabel(List.of(desiredEntry(POD_NAME))), context);
+
+        verify(rollingController).rollPod(any(), any(), anyString(), anyInt(), any(), anyString());
+    }
+
     // --- Helpers ---
 
     private void stubActualPods(List<Pod> pods) {
@@ -200,6 +260,31 @@ class KafkaPodSetReconcilerTest {
         ps.setSpec(spec);
 
         return ps;
+    }
+
+    private KafkaPodSet podSetWithClusterLabel(List<PodEntry> desiredPods) {
+        KafkaPodSet ps = podSet(desiredPods);
+        Map<String, String> labels = new HashMap<>(ps.getMetadata().getLabels());
+        labels.put(KafkaPodSet.CLUSTER_LABEL, "my-cluster");
+        ps.getMetadata().setLabels(labels);
+        return ps;
+    }
+
+    private void givenParentClusterWithRollOrder(List<String> order) {
+        KafkaCluster kc = new KafkaCluster();
+        ObjectMeta m = new ObjectMeta();
+        m.setName("my-cluster");
+        m.setNamespace(NS);
+        kc.setMetadata(m);
+        KafkaClusterSpec spec = new KafkaClusterSpec();
+        spec.setClusterRollOrder(order);
+        spec.setClusters(order.stream().map(id -> {
+            ClusterEntry e = new ClusterEntry();
+            e.setId(id);
+            return e;
+        }).toList());
+        kc.setSpec(spec);
+        when(namedKcOp.get()).thenReturn(kc);
     }
 
     private PodEntry desiredEntry(String podName) {

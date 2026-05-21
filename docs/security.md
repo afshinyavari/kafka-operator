@@ -54,6 +54,19 @@ Pod. A `Secret` `InformerEventSource` wakes the reconciler immediately rather
 than waiting for the next periodic tick. This works the same for brokers, the
 proxy, and Apicurio.
 
+### Synchronized rotations across MCS clusters
+
+cert-manager typically rotates Certificates on the same schedule across all
+three K8s clusters, so the operator must serialize the resulting rolls or it
+risks taking out every replica of a cross-cluster partition at once. Set
+`KafkaCluster.spec.clusterRollOrder` and the cross-cluster gate applies
+uniformly to controllers, brokers, the Kroxylicious proxy Deployment, and the
+Apicurio Registry Deployment — each successor cluster waits for predecessors
+to report `upgradePhase=IDLE` via `GET /operator/upgrade-phase` before
+starting its own roll. The `RollTracker` in-memory marker keeps the ROLLING
+signal visible for the duration of a `KafkaPodSet` roll, which would
+otherwise be invisible in etcd until after `rollPod()` returns.
+
 ## BYO IDP
 
 The operator does not deploy or manage an IDP. Production users supply their

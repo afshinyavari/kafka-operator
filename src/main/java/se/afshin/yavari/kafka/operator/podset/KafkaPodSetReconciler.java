@@ -29,6 +29,7 @@ import se.afshin.yavari.kafka.operator.crd.PodStatus;
 import se.afshin.yavari.kafka.operator.crd.StorageSpec;
 import se.afshin.yavari.kafka.operator.metrics.OperatorMetrics;
 import se.afshin.yavari.kafka.operator.rolling.IsrChecker;
+import se.afshin.yavari.kafka.operator.rolling.RollTracker;
 import se.afshin.yavari.kafka.operator.rolling.RollingUpdateController;
 
 import org.eclipse.microprofile.config.inject.ConfigProperty;
@@ -50,6 +51,7 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
     @Inject PvcFactory pvcFactory;
     @Inject OperatorMetrics metrics;
     @Inject se.afshin.yavari.kafka.operator.rolling.CrossClusterRollCoordinator rollCoordinator;
+    @Inject RollTracker rollTracker;
     @ConfigProperty(name = "kafka.cluster.id") String localClusterId;
 
     @Override
@@ -127,9 +129,14 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
             }
         }
 
-        // Cross-cluster roll order gate: for controller pools, check that all preceding clusters
-        // in spec.clusterRollOrder have finished rolling before we begin rolling our controllers.
-        if (controllerPool) {
+        // Cross-cluster roll order gate: applies to ALL pools (brokers and controllers).
+        // Previously controllers-only — broker rolls now follow the same clusterRollOrder
+        // sequencing so simultaneous spec changes (cert rotation, image bumps) can't roll
+        // every replica across clusters at once and breach min.insync.replicas.
+        // Skip the gate when no roll is actually pending — we don't want to block a healthy
+        // reconcile pass that's just refreshing status.
+        boolean rollIsRequired = anyDesiredHashMismatch(desired, actualByName);
+        if (rollIsRequired) {
             KafkaCluster parentCluster = lookupParentCluster(podSet, namespace);
             if (parentCluster != null
                     && !rollCoordinator.isMyTurnToRoll(parentCluster.getSpec(), localClusterId)) {
@@ -138,6 +145,12 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
                 podSet.setStatus(status);
                 return UpdateControl.patchStatus(podSet).rescheduleAfter(Duration.ofSeconds(15));
             }
+            // Claim the ROLLING signal BEFORE calling into rollPod() so a successor cluster
+            // polling /operator/upgrade-phase sees ROLLING during the multi-minute roll
+            // window. Without this the etcd-backed status check at UpgradePhaseResource
+            // never observes a successful roll (status.currentRollingPod is cleared back
+            // to "" before patchStatus runs).
+            rollTracker.markRolling("podset", namespace, name);
         }
 
         String currentRolling = status.getCurrentRollingPod();
@@ -204,10 +217,27 @@ public class KafkaPodSetReconciler implements Reconciler<KafkaPodSet>, Cleaner<K
 
         podSet.setStatus(status);
         boolean needsRecheck = readyCount < status.getReplicas() || !status.getCurrentRollingPod().isEmpty() || pendingScaleDown;
+        if (!needsRecheck) {
+            // Steady state: clear the ROLLING signal so a successor cluster can claim its turn.
+            rollTracker.markComplete("podset", namespace, name);
+        }
         if (needsRecheck) {
             return UpdateControl.patchStatus(podSet).rescheduleAfter(Duration.ofSeconds(15));
         }
         return UpdateControl.patchStatus(podSet);
+    }
+
+    private boolean anyDesiredHashMismatch(List<PodEntry> desired, Map<String, Pod> actualByName) {
+        for (PodEntry entry : desired) {
+            Pod actual = actualByName.get(entry.getMetadata().getName());
+            if (actual == null) continue; // scale-up, not a roll
+            String desiredHash = podSpecHasher.hash(entry.getSpec());
+            String currentHash = actual.getMetadata().getAnnotations() != null
+                    ? actual.getMetadata().getAnnotations().getOrDefault(KafkaPodSet.SPEC_HASH_ANNOTATION, "")
+                    : "";
+            if (!desiredHash.equals(currentHash)) return true;
+        }
+        return false;
     }
 
     @Override

@@ -10,10 +10,12 @@ import io.fabric8.kubernetes.api.model.apps.Deployment;
 import io.fabric8.kubernetes.api.model.apps.DeploymentStatus;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import se.afshin.yavari.kafka.operator.apicurio.ApicurioOrchestrator;
 import se.afshin.yavari.kafka.operator.crd.ClusterEntry;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
-import se.afshin.yavari.kafka.operator.proxy.ProxyRollTracker;
+import se.afshin.yavari.kafka.operator.proxy.KafkaProxyOrchestrator;
+import se.afshin.yavari.kafka.operator.rolling.RollTracker;
 
 import java.util.List;
 import java.util.stream.Collectors;
@@ -23,7 +25,7 @@ import java.util.stream.Collectors;
 public class UpgradePhaseResource {
 
     @Inject KubernetesClient client;
-    @Inject ProxyRollTracker proxyRollTracker;
+    @Inject RollTracker rollTracker;
     @ConfigProperty(name = "kafka.cluster.id") String localClusterId;
 
     @GET
@@ -36,39 +38,55 @@ public class UpgradePhaseResource {
                         && !ps.getStatus().getCurrentRollingPod().isEmpty());
 
         // CrossClusterRollCoordinator polls this endpoint from a *successor* cluster that
-        // wants to roll its own proxy. We flip to ROLLING while THIS cluster's local proxy
+        // wants to roll. We flip to ROLLING while THIS cluster's local proxy or Apicurio
         // Deployment is mid-roll, but only when this cluster is actually a target — a
         // non-target cluster has no local Deployment to roll, so it must not falsely gate
-        // downstream clusters. Post-merge the proxy is a sub-spec on KafkaCluster, so we
-        // iterate the cluster CRs and check each one's local Deployment.
-        boolean anyProxyRolling = client.resources(KafkaCluster.class).inAnyNamespace()
+        // downstream clusters. Post-merge the proxy and Apicurio are sub-specs on
+        // KafkaCluster, so we iterate the cluster CRs and check each component's local
+        // Deployment by its fixed name.
+        boolean anyDeploymentRolling = client.resources(KafkaCluster.class).inAnyNamespace()
                 .list().getItems().stream()
                 .filter(this::isLocalATarget)
-                .anyMatch(this::isLocalDeploymentMidRoll);
+                .anyMatch(this::anyComponentDeploymentMidRoll);
 
-        // proxyRollTracker.isAnyRolling() flips true for the brief window between
-        // "operator decided to roll" and "Kubernetes status fields actually reflect it" —
-        // without it, fast rolls (sub-second on tiny clusters) slip past the status-based
-        // check entirely and successor clusters race their own rolls in parallel.
-        String phase = (anyPodSetRolling || anyProxyRolling || proxyRollTracker.isAnyRolling())
+        // rollTracker.isAnyRolling() flips true for the brief window between "operator
+        // decided to roll" and "Kubernetes status fields actually reflect it" — without it,
+        // fast rolls (sub-second on tiny clusters) slip past the status-based check, and
+        // KafkaPodSet rolls don't surface in etcd at all on the success path (status is
+        // patched only after rollPod returns, with currentRollingPod cleared back to "").
+        String phase = (anyPodSetRolling || anyDeploymentRolling || rollTracker.isAnyRolling())
                 ? "ROLLING" : clusterUpgradePhase();
         return "{\"clusterId\":\"" + localClusterId + "\",\"upgradePhase\":\"" + phase + "\"}";
     }
 
     private boolean isLocalATarget(KafkaCluster cr) {
-        if (cr.getSpec().getProxy() == null) return false;
-        // No targetClusters field anymore: a cluster is a proxy target iff its id appears
-        // in spec.clusters. An empty/missing clusters list (legacy fixture) defaults to true.
+        if (cr.getSpec().getProxy() == null && cr.getSpec().getApicurio() == null) return false;
+        // No targetClusters field anymore: a cluster is a target iff its id appears in
+        // spec.clusters. An empty/missing clusters list (legacy fixture) defaults to true.
         List<ClusterEntry> clusters = cr.getSpec().getClusters();
         if (clusters == null || clusters.isEmpty()) return true;
         return clusters.stream().map(ClusterEntry::getId)
                 .collect(Collectors.toSet()).contains(localClusterId);
     }
 
-    private boolean isLocalDeploymentMidRoll(KafkaCluster cr) {
-        String name = cr.getMetadata().getName();
+    private boolean anyComponentDeploymentMidRoll(KafkaCluster cr) {
         String ns = cr.getMetadata().getNamespace();
-        Deployment dep = client.apps().deployments().inNamespace(ns).withName(name).get();
+        // Proxy Deployment uses the fixed PROXY_NAME; Apicurio uses APICURIO_NAME. Both
+        // names are constants on the orchestrator classes — keep this in sync if they ever
+        // become per-cluster suffixed.
+        if (cr.getSpec().getProxy() != null
+                && isDeploymentMidRoll(ns, KafkaProxyOrchestrator.PROXY_NAME)) {
+            return true;
+        }
+        if (cr.getSpec().getApicurio() != null
+                && isDeploymentMidRoll(ns, ApicurioOrchestrator.APICURIO_NAME)) {
+            return true;
+        }
+        return false;
+    }
+
+    private boolean isDeploymentMidRoll(String namespace, String name) {
+        Deployment dep = client.apps().deployments().inNamespace(namespace).withName(name).get();
         if (dep == null || dep.getStatus() == null) return false;
         DeploymentStatus s = dep.getStatus();
         Integer desired = dep.getSpec().getReplicas();

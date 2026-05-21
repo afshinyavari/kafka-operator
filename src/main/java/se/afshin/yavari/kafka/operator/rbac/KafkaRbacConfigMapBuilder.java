@@ -81,6 +81,12 @@ public class KafkaRbacConfigMapBuilder {
         String apply(T t);
     }
 
+    /** Kafka internal topic that consumers MUST read to recover their committed offset on
+     *  startup. The Kroxylicious AuthorizationFilter checks every resource a request touches —
+     *  including this internal topic — so omitting it makes the consumer silently hang on
+     *  every JoinGroup-then-Fetch flow even when the user-visible topic is granted. */
+    private static final String CONSUMER_OFFSETS_TOPIC = "__consumer_offsets";
+
     private static <T> List<Map<String, Object>> kafkaEntries(List<T> source,
                                                               NameOf<T> nameOf,
                                                               KafkaAccessFor<T> kafkaOf) {
@@ -91,11 +97,26 @@ public class KafkaRbacConfigMapBuilder {
             if (kafka == null) continue;
             Map<String, Object> entry = new LinkedHashMap<>();
             entry.put("name", nameOf.apply(item));
-            entry.put("topics", kafka.getTopics());
+            entry.put("topics", topicsWithInternalsIfFetching(kafka.getTopics(), kafka.getOperations()));
             entry.put("operations", kafka.getOperations());
             out.add(entry);
         }
         return out;
+    }
+
+    /** If the role is allowed to FETCH (or has * operation), auto-inject {@code __consumer_offsets}
+     *  into its topic list so the consumer-group machinery works end-to-end. PRODUCE-only roles
+     *  don't need offsets and stay narrow. A wildcard topic list already covers it, so skip
+     *  injection there to avoid producing duplicate entries. */
+    private static List<String> topicsWithInternalsIfFetching(List<String> topics, List<String> operations) {
+        if (topics == null || operations == null) return topics;
+        if (topics.contains("*") || topics.contains(CONSUMER_OFFSETS_TOPIC)) return topics;
+        boolean fetches = operations.contains("FETCH") || operations.contains("*");
+        if (!fetches) return topics;
+        List<String> expanded = new ArrayList<>(topics.size() + 1);
+        expanded.addAll(topics);
+        expanded.add(CONSUMER_OFFSETS_TOPIC);
+        return expanded;
     }
 
     private static String dump(Map<String, Object> root) {

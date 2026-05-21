@@ -31,6 +31,7 @@ import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
 import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 import se.afshin.yavari.kafka.operator.infra.ServiceExportManager;
 import se.afshin.yavari.kafka.operator.rolling.CrossClusterRollCoordinator;
+import se.afshin.yavari.kafka.operator.rolling.RollTracker;
 
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -77,7 +78,7 @@ public class KafkaProxyOrchestrator {
     @Inject TLSRouteBuilder tlsRouteBuilder;
     @Inject IngressBuilder ingressBuilder;
     @Inject CrossClusterRollCoordinator rollCoordinator;
-    @Inject ProxyRollTracker rollTracker;
+    @Inject RollTracker rollTracker;
     @Inject SecretRevisionTracker secretRevisionTracker;
     @Inject ServiceExportManager serviceExportManager;
     @Inject OptionalResourceApplier optionalApplier;
@@ -188,7 +189,7 @@ public class KafkaProxyOrchestrator {
                 }
             }
             if (rollWillHappen(existing, proxySpec.getImage(), configHash)) {
-                rollTracker.markRolling(namespace, name);
+                rollTracker.markRolling("proxy", namespace, name);
             }
 
             // Apply Deployment + Service.
@@ -226,7 +227,7 @@ public class KafkaProxyOrchestrator {
             if (ready >= proxySpec.getReplicas()) {
                 status.setPhase(KafkaProxyStatus.Phase.READY);
                 status.setMessage(null);
-                rollTracker.markComplete(namespace, name);
+                rollTracker.markComplete("proxy", namespace, name);
             } else {
                 status.setMessage("Waiting for proxy pods: " + ready + "/" + proxySpec.getReplicas());
             }

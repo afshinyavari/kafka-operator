@@ -16,9 +16,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import se.afshin.yavari.kafka.operator.crd.ClusterEntry;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
+import se.afshin.yavari.kafka.operator.crd.KafkaClusterApicurioSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterProxySpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
+import se.afshin.yavari.kafka.operator.rolling.RollTracker;
 
 import java.util.List;
 
@@ -91,9 +93,9 @@ class UpgradePhaseResourceTest {
         var idField = resource.getClass().getDeclaredField("localClusterId");
         idField.setAccessible(true);
         idField.set(resource, LOCAL_ID);
-        var trackerField = resource.getClass().getDeclaredField("proxyRollTracker");
+        var trackerField = resource.getClass().getDeclaredField("rollTracker");
         trackerField.setAccessible(true);
-        trackerField.set(resource, new se.afshin.yavari.kafka.operator.proxy.ProxyRollTracker());
+        trackerField.set(resource, new se.afshin.yavari.kafka.operator.rolling.RollTracker());
     }
 
     @Test
@@ -158,6 +160,35 @@ class UpgradePhaseResourceTest {
         assertThat(json).contains("\"upgradePhase\":\"ROLLING\"");
     }
 
+    @Test
+    void apicurioMidRoll_returnsRolling() {
+        // Apicurio-only cluster (no proxy sub-spec) — the Deployment scan must still pick
+        // up the apicurio Deployment when its observed generation lags.
+        givenClusters(clusterWithApicurio(List.of("A", "B")));
+        when(namedDep.get()).thenReturn(deployment(2L, 1L, 1, 1, 1));
+
+        String json = resource.get();
+
+        assertThat(json).contains("\"upgradePhase\":\"ROLLING\"");
+    }
+
+    @Test
+    void podsetRollTrackerEntry_returnsRolling() throws Exception {
+        // KafkaPodSet rolls never set currentRollingPod in etcd on the success path
+        // (cleared back to "" before patchStatus). The in-memory RollTracker is the only
+        // signal — verify the endpoint honors it.
+        givenClusters(clusterWithProxy(List.of("A", "B")));
+        when(namedDep.get()).thenReturn(deployment(1L, 1L, 1, 1, 1)); // proxy is stable
+        var trackerField = resource.getClass().getDeclaredField("rollTracker");
+        trackerField.setAccessible(true);
+        RollTracker tracker = (RollTracker) trackerField.get(resource);
+        tracker.markRolling("podset", NS, "kafka-broker-podset");
+
+        String json = resource.get();
+
+        assertThat(json).contains("\"upgradePhase\":\"ROLLING\"");
+    }
+
     // --- helpers ---
 
     private void givenClusters(KafkaCluster... clusters) {
@@ -184,6 +215,23 @@ class UpgradePhaseResourceTest {
             return e;
         }).toList());
         spec.setProxy(new KafkaClusterProxySpec());
+        c.setSpec(spec);
+        return c;
+    }
+
+    private KafkaCluster clusterWithApicurio(List<String> clusterIds) {
+        KafkaCluster c = new KafkaCluster();
+        ObjectMeta meta = new ObjectMeta();
+        meta.setName("apicurio");
+        meta.setNamespace(NS);
+        c.setMetadata(meta);
+        KafkaClusterSpec spec = new KafkaClusterSpec();
+        spec.setClusters(clusterIds.stream().map(id -> {
+            ClusterEntry e = new ClusterEntry();
+            e.setId(id);
+            return e;
+        }).toList());
+        spec.setApicurio(new KafkaClusterApicurioSpec());
         c.setSpec(spec);
         return c;
     }
