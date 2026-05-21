@@ -6,6 +6,7 @@ import io.quarkus.security.Authenticated;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.DefaultValue;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.NotFoundException;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.PathParam;
@@ -33,8 +34,11 @@ public class MessageBrowserResource {
         public static native TemplateInstance page(ClusterCoordinates cluster, String topic,
                                                    List<Integer> partitions, Page page,
                                                    String seek, int partition, long value, int latestN,
-                                                   String username,
-                                                   String errorMessage, String successMessage);
+                                                   String username);
+        public static native TemplateInstance page$body(ClusterCoordinates cluster, String topic,
+                                                        List<Integer> partitions, Page page,
+                                                        String seek, int partition, long value, int latestN,
+                                                        String username);
 
         public static native TemplateInstance rows(Page page);
     }
@@ -50,8 +54,7 @@ public class MessageBrowserResource {
                                  @QueryParam("latestN") @DefaultValue("50") int latestN,
                                  @QueryParam("size") @DefaultValue("50") int size,
                                  @QueryParam("fragment") @DefaultValue("false") boolean fragment,
-                                 @QueryParam("error") String error,
-                                 @QueryParam("success") String success) {
+                                 @HeaderParam("HX-Request") String hx) {
         ClusterCoordinates c = registry.byId(id)
                 .orElseThrow(() -> new NotFoundException("Unknown cluster: " + id));
 
@@ -64,11 +67,15 @@ public class MessageBrowserResource {
         SeekSpec spec = new SeekSpec(mode, partition, seekValue, latestN);
         List<Integer> partitions = browser.partitionsOf(id, name);
         Page p = browser.page(id, name, spec, size);
+        // The filter-toolbar uses ?fragment=true to ask for just the rows table.
         if (fragment) {
             return Templates.rows(p);
         }
-        return Templates.page(c, name, partitions, p, mode.name(), partition, seekValue, latestN,
-                user.username(), error, success);
+        // htmx-driven navigation gets only the body fragment; full requests get
+        // the full chrome-wrapped page.
+        return "true".equals(hx)
+                ? Templates.page$body(c, name, partitions, p, mode.name(), partition, seekValue, latestN, user.username())
+                : Templates.page(c, name, partitions, p, mode.name(), partition, seekValue, latestN, user.username());
     }
 
     private static SeekMode parseMode(String s) {

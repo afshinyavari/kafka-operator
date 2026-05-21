@@ -11,18 +11,20 @@
     <link rel="stylesheet" href="/css/app.css">
     <script src="/webjars/htmx.org/1.9.12/dist/htmx.min.js"></script>
     <script src="/webjars/bootstrap/5.3.3/js/bootstrap.bundle.min.js" defer></script>
+    <script src="/js/app.js" defer></script>
 </head>
 <body>
 <nav class="navbar navbar-dark navbar-kafkaui px-3">
-    <a class="navbar-brand d-flex align-items-center mb-0" href="/">
+    <a class="navbar-brand d-flex align-items-center mb-0"
+       href="/" hx-get="/" hx-target="#main" hx-swap="innerHTML" hx-push-url="true">
         <i class="bi bi-diagram-3 me-2"></i>
         <span>Kafka UI</span>
     </a>
     <span class="navbar-text small text-light">{#insert user}{/}</span>
 </nav>
-{#insert nav}{/}
-<main id="main" class="container-fluid px-4 pb-4">
+<main id="main">
     {#insert body}{/}
 </main>
+<div id="toast-container" class="toast-container position-fixed bottom-0 end-0 p-3"></div>
 </body>
 </html>

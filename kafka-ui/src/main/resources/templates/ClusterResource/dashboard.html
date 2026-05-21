@@ -3,72 +3,76 @@
 {@java.lang.String username}
 {#include base.html}
 {#title}Kafka UI · {cluster.id}{/title}
-{#nav}{#include _clusternav.html cluster=cluster active="dashboard" /}{/nav}
 {#user}Signed in as <strong>{username}</strong>{/user}
 {#body}
-<h2 class="mb-3">
-    <i class="bi bi-speedometer2 text-secondary me-2"></i>{cluster.id}
-</h2>
+{#fragment id="body"}
+{#include _clusternav.html cluster=cluster active="dashboard" /}
+<div class="container-fluid px-4 py-4">
+    <h2 class="mb-3">
+        <i class="bi bi-speedometer2 text-secondary me-2"></i>{cluster.id}
+    </h2>
 
-<div class="row row-cols-1 row-cols-md-3 g-3 mb-4">
-    <div class="col">
-        <div class="card h-100 shadow-sm">
-            <div class="card-body">
-                <div class="text-muted small mb-1">Kafka cluster.id</div>
-                <code class="d-block text-truncate">{dashboard.kafkaClusterId}</code>
+    <div class="row row-cols-1 row-cols-md-3 g-3 mb-4">
+        <div class="col">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body">
+                    <div class="text-muted small mb-1">Kafka cluster.id</div>
+                    <code class="d-block text-truncate">{dashboard.kafkaClusterId}</code>
+                </div>
+            </div>
+        </div>
+        <div class="col">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body">
+                    <div class="text-muted small mb-1">
+                        <i class="bi bi-server me-1"></i>Brokers
+                    </div>
+                    <div class="display-6 fw-semibold mb-0">{dashboard.brokers.size}</div>
+                </div>
+            </div>
+        </div>
+        <div class="col">
+            <div class="card h-100 shadow-sm">
+                <div class="card-body">
+                    <div class="text-muted small mb-1">
+                        <i class="bi bi-broadcast me-1"></i>Controller
+                    </div>
+                    {#if dashboard.controller}
+                    <code class="d-block">{dashboard.controller.host}:{dashboard.controller.port}</code>
+                    <span class="text-muted small">id={dashboard.controller.id}</span>
+                    {#else}
+                    <span class="text-muted">unknown</span>
+                    {/if}
+                </div>
             </div>
         </div>
     </div>
-    <div class="col">
-        <div class="card h-100 shadow-sm">
-            <div class="card-body">
-                <div class="text-muted small mb-1">
-                    <i class="bi bi-server me-1"></i>Brokers
-                </div>
-                <div class="display-6 fw-semibold mb-0">{dashboard.brokers.size}</div>
-            </div>
+
+    <div class="card shadow-sm">
+        <div class="card-header bg-white">
+            <h3 class="h6 mb-0">
+                <i class="bi bi-server text-secondary me-2"></i>Brokers
+            </h3>
         </div>
-    </div>
-    <div class="col">
-        <div class="card h-100 shadow-sm">
-            <div class="card-body">
-                <div class="text-muted small mb-1">
-                    <i class="bi bi-broadcast me-1"></i>Controller
-                </div>
-                {#if dashboard.controller}
-                <code class="d-block">{dashboard.controller.host}:{dashboard.controller.port}</code>
-                <span class="text-muted small">id={dashboard.controller.id}</span>
-                {#else}
-                <span class="text-muted">unknown</span>
-                {/if}
-            </div>
+        <div class="table-responsive">
+            <table class="table table-hover align-middle mb-0">
+                <thead class="table-light">
+                <tr><th>ID</th><th>Host</th><th>Port</th><th>Rack</th></tr>
+                </thead>
+                <tbody>
+                {#for b in dashboard.brokers}
+                <tr>
+                    <td><code>{b.id}</code></td>
+                    <td>{b.host}</td>
+                    <td>{b.port}</td>
+                    <td>{b.rack ?: '—'}</td>
+                </tr>
+                {/for}
+                </tbody>
+            </table>
         </div>
     </div>
 </div>
-
-<div class="card shadow-sm">
-    <div class="card-header bg-white">
-        <h3 class="h6 mb-0">
-            <i class="bi bi-server text-secondary me-2"></i>Brokers
-        </h3>
-    </div>
-    <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
-            <thead class="table-light">
-            <tr><th>ID</th><th>Host</th><th>Port</th><th>Rack</th></tr>
-            </thead>
-            <tbody>
-            {#for b in dashboard.brokers}
-            <tr>
-                <td><code>{b.id}</code></td>
-                <td>{b.host}</td>
-                <td>{b.port}</td>
-                <td>{b.rack ?: '—'}</td>
-            </tr>
-            {/for}
-            </tbody>
-        </table>
-    </div>
-</div>
+{/fragment}
 {/body}
 {/include}

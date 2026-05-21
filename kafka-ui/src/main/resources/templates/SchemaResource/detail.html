@@ -1,118 +1,122 @@
 {@se.afshin.yavari.kafka.ui.cluster.ClusterCoordinates cluster}
 {@se.afshin.yavari.kafka.ui.service.SchemaService$SchemaContent schema}
 {@java.lang.String username}
-{@java.lang.String errorMessage}
-{@java.lang.String successMessage}
 {#include base.html}
 {#title}Kafka UI · {cluster.id} · {schema.id}{/title}
-{#nav}{#include _clusternav.html cluster=cluster active="schemas" /}{/nav}
 {#user}Signed in as <strong>{username}</strong>{/user}
 {#body}
-<nav aria-label="breadcrumb" class="small mb-2">
-    <ol class="breadcrumb mb-0">
-        <li class="breadcrumb-item"><a href="/clusters/{cluster.id}/schemas" class="text-decoration-none">Schemas</a></li>
-        <li class="breadcrumb-item active" aria-current="page">{schema.id}</li>
-    </ol>
-</nav>
-<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
-    <h2 class="mb-0">
-        <i class="bi bi-file-earmark-code text-secondary me-2"></i>{schema.id}
-        <span class="badge text-bg-primary align-middle">{schema.type}</span>
-    </h2>
-    <div class="d-flex gap-2">
-        <button type="button" class="btn btn-outline-primary btn-sm"
-                data-bs-toggle="modal" data-bs-target="#newVersionModal">
-            <i class="bi bi-plus me-1"></i>New version
-        </button>
-        <button type="button" class="btn btn-outline-danger btn-sm"
-                data-bs-toggle="modal" data-bs-target="#deleteSchemaModal">
-            <i class="bi bi-trash me-1"></i>Delete
-        </button>
+{#fragment id="body"}
+{#include _clusternav.html cluster=cluster active="schemas" /}
+<div class="container-fluid px-4 py-4">
+    <nav aria-label="breadcrumb" class="small mb-2">
+        <ol class="breadcrumb mb-0">
+            <li class="breadcrumb-item">
+                <a href="/clusters/{cluster.id}/schemas"
+                   hx-get="/clusters/{cluster.id}/schemas" hx-target="#main" hx-swap="innerHTML" hx-push-url="true"
+                   class="text-decoration-none">Schemas</a>
+            </li>
+            <li class="breadcrumb-item active" aria-current="page">{schema.id}</li>
+        </ol>
+    </nav>
+    <div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+        <h2 class="mb-0">
+            <i class="bi bi-file-earmark-code text-secondary me-2"></i>{schema.id}
+            <span class="badge text-bg-primary align-middle">{schema.type}</span>
+        </h2>
+        <div class="d-flex gap-2">
+            <button type="button" class="btn btn-outline-primary btn-sm"
+                    data-bs-toggle="modal" data-bs-target="#newVersionModal">
+                <i class="bi bi-plus me-1"></i>New version
+            </button>
+            <button type="button" class="btn btn-outline-danger btn-sm"
+                    data-bs-toggle="modal" data-bs-target="#deleteSchemaModal">
+                <i class="bi bi-trash me-1"></i>Delete
+            </button>
+        </div>
     </div>
-</div>
 
-{#include _form_errors.html errorMessage=errorMessage successMessage=successMessage /}
-
-<div class="card shadow-sm mb-3">
-    <div class="card-body">
-        <div class="text-muted small mb-1">Versions</div>
-        {#if schema.versions.isEmpty}
-            <em class="text-muted">none</em>
-        {#else}
-            {#for v in schema.versions}
-                <span class="badge text-bg-light border me-1"><code>v{v}</code></span>
-            {/for}
-        {/if}
+    <div class="card shadow-sm mb-3">
+        <div class="card-body">
+            <div class="text-muted small mb-1">Versions</div>
+            {#if schema.versions.isEmpty}
+                <em class="text-muted">none</em>
+            {#else}
+                {#for v in schema.versions}
+                    <span class="badge text-bg-light border me-1"><code>v{v}</code></span>
+                {/for}
+            {/if}
+        </div>
     </div>
-</div>
 
-<div class="card shadow-sm">
-    <div class="card-header bg-white">
-        <h3 class="h6 mb-0"><i class="bi bi-code-slash text-secondary me-2"></i>Latest content</h3>
+    <div class="card shadow-sm">
+        <div class="card-header bg-white">
+            <h3 class="h6 mb-0"><i class="bi bi-code-slash text-secondary me-2"></i>Latest content</h3>
+        </div>
+        <div class="card-body p-0">
+            <pre class="schema-content mb-0">{schema.content}</pre>
+        </div>
     </div>
-    <div class="card-body p-0">
-        <pre class="schema-content mb-0">{schema.content}</pre>
-    </div>
-</div>
 
-<!-- New version modal -->
-<div class="modal fade" id="newVersionModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog modal-lg">
-        <form method="POST" action="/clusters/{cluster.id}/schemas/{schema.id}/versions">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title">
-                        <i class="bi bi-plus text-primary me-2"></i>New version — {schema.id}
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
-                </div>
-                <div class="modal-body">
-                    <input type="hidden" name="type" value="{schema.type}">
-                    <div class="alert alert-light border small">
-                        Type stays <span class="badge text-bg-primary">{schema.type}</span>. Apicurio enforces
-                        compatibility rules per artifact group.
+    <!-- New version modal -->
+    <div class="modal fade" id="newVersionModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-lg">
+            <form hx-post="/clusters/{cluster.id}/schemas/{schema.id}/versions" hx-target="#main" hx-swap="innerHTML">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title">
+                            <i class="bi bi-plus text-primary me-2"></i>New version — {schema.id}
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
                     </div>
-                    <div>
-                        <label class="form-label">Content</label>
-                        <textarea class="form-control font-monospace" name="content" rows="14" required>{schema.content}</textarea>
+                    <div class="modal-body">
+                        <input type="hidden" name="type" value="{schema.type}">
+                        <div class="alert alert-light border small">
+                            Type stays <span class="badge text-bg-primary">{schema.type}</span>. Apicurio enforces
+                            compatibility rules per artifact group.
+                        </div>
+                        <div>
+                            <label class="form-label">Content</label>
+                            <textarea class="form-control font-monospace" name="content" rows="14" required>{schema.content}</textarea>
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="bi bi-check2 me-1"></i>Publish version
+                        </button>
                     </div>
                 </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-primary">
-                        <i class="bi bi-check2 me-1"></i>Publish version
-                    </button>
-                </div>
-            </div>
-        </form>
+            </form>
+        </div>
     </div>
-</div>
 
-<!-- Delete confirm modal -->
-<div class="modal fade" id="deleteSchemaModal" tabindex="-1" aria-hidden="true">
-    <div class="modal-dialog">
-        <form method="POST" action="/clusters/{cluster.id}/schemas/{schema.id}/delete">
-            <div class="modal-content">
-                <div class="modal-header">
-                    <h5 class="modal-title text-danger">
-                        <i class="bi bi-exclamation-triangle me-2"></i>Delete schema
-                    </h5>
-                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+    <!-- Delete confirm modal -->
+    <div class="modal fade" id="deleteSchemaModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog">
+            <form hx-post="/clusters/{cluster.id}/schemas/{schema.id}/delete" hx-target="#main" hx-swap="innerHTML">
+                <div class="modal-content">
+                    <div class="modal-header">
+                        <h5 class="modal-title text-danger">
+                            <i class="bi bi-exclamation-triangle me-2"></i>Delete schema
+                        </h5>
+                        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                    </div>
+                    <div class="modal-body">
+                        <p>Permanently delete <code>{schema.id}</code> and all its versions. Type the artifact ID to confirm:</p>
+                        <input type="text" class="form-control font-monospace" name="confirm" required
+                               placeholder="{schema.id}" autocomplete="off">
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-danger">
+                            <i class="bi bi-trash me-1"></i>Delete schema
+                        </button>
+                    </div>
                 </div>
-                <div class="modal-body">
-                    <p>Permanently delete <code>{schema.id}</code> and all its versions. Type the artifact ID to confirm:</p>
-                    <input type="text" class="form-control font-monospace" name="confirm" required
-                           placeholder="{schema.id}" autocomplete="off">
-                </div>
-                <div class="modal-footer">
-                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                    <button type="submit" class="btn btn-danger">
-                        <i class="bi bi-trash me-1"></i>Delete schema
-                    </button>
-                </div>
-            </div>
-        </form>
+            </form>
+        </div>
     </div>
 </div>
+{/fragment}
 {/body}
 {/include}

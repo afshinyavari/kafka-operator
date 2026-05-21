@@ -5,6 +5,7 @@ import io.quarkus.qute.TemplateInstance;
 import io.quarkus.security.Authenticated;
 import jakarta.inject.Inject;
 import jakarta.ws.rs.GET;
+import jakarta.ws.rs.HeaderParam;
 import jakarta.ws.rs.Path;
 import jakarta.ws.rs.Produces;
 import jakarta.ws.rs.core.MediaType;
@@ -23,11 +24,16 @@ public class HomeResource {
     @CheckedTemplate
     static class Templates {
         public static native TemplateInstance home(List<ClusterCoordinates> clusters, String username);
+        public static native TemplateInstance home$body(List<ClusterCoordinates> clusters, String username);
     }
 
     @GET
     @Produces(MediaType.TEXT_HTML)
-    public TemplateInstance home() {
-        return Templates.home(registry.list(), user.username());
+    public TemplateInstance home(@HeaderParam("HX-Request") String hxRequest) {
+        var clusters = registry.list();
+        var name = user.username();
+        return "true".equals(hxRequest)
+                ? Templates.home$body(clusters, name)
+                : Templates.home(clusters, name);
     }
 }
