@@ -1,6 +1,9 @@
 {@java.lang.String message}
-<div class="card" style="border-left: 4px solid #dc2626;">
-    <h3 style="margin-top:0; color: #991b1b;">403 — Forbidden</h3>
-    <p>The proxy denied this operation. Your groups do not include a rule that permits it.</p>
-    {#if message}<pre>{message}</pre>{/if}
+<div class="alert alert-danger d-flex align-items-start" role="alert">
+    <i class="bi bi-shield-exclamation fs-3 me-3"></i>
+    <div class="flex-grow-1">
+        <h3 class="h5 alert-heading">403 — Forbidden</h3>
+        <p class="mb-2">The proxy denied this operation. Your groups do not include a rule that permits it.</p>
+        {#if message}<pre class="bg-light border rounded p-2 small mb-0">{message}</pre>{/if}
+    </div>
 </div>

@@ -33,7 +33,8 @@ public class MessageBrowserResource {
         public static native TemplateInstance page(ClusterCoordinates cluster, String topic,
                                                    List<Integer> partitions, Page page,
                                                    String seek, int partition, long value, int latestN,
-                                                   String username);
+                                                   String username,
+                                                   String errorMessage, String successMessage);
 
         public static native TemplateInstance rows(Page page);
     }
@@ -48,7 +49,9 @@ public class MessageBrowserResource {
                                  @QueryParam("timestamp") @DefaultValue("0") long timestamp,
                                  @QueryParam("latestN") @DefaultValue("50") int latestN,
                                  @QueryParam("size") @DefaultValue("50") int size,
-                                 @QueryParam("fragment") @DefaultValue("false") boolean fragment) {
+                                 @QueryParam("fragment") @DefaultValue("false") boolean fragment,
+                                 @QueryParam("error") String error,
+                                 @QueryParam("success") String success) {
         ClusterCoordinates c = registry.byId(id)
                 .orElseThrow(() -> new NotFoundException("Unknown cluster: " + id));
 
@@ -64,7 +67,8 @@ public class MessageBrowserResource {
         if (fragment) {
             return Templates.rows(p);
         }
-        return Templates.page(c, name, partitions, p, mode.name(), partition, seekValue, latestN, user.username());
+        return Templates.page(c, name, partitions, p, mode.name(), partition, seekValue, latestN,
+                user.username(), error, success);
     }
 
     private static SeekMode parseMode(String s) {

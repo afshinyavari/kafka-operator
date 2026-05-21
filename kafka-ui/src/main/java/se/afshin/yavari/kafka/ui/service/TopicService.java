@@ -3,9 +3,11 @@ package se.afshin.yavari.kafka.ui.service;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.inject.Inject;
 import org.apache.kafka.clients.admin.AdminClient;
+import org.apache.kafka.clients.admin.AlterConfigOp;
 import org.apache.kafka.clients.admin.Config;
 import org.apache.kafka.clients.admin.ConfigEntry;
 import org.apache.kafka.clients.admin.ListTopicsOptions;
+import org.apache.kafka.clients.admin.NewTopic;
 import org.apache.kafka.clients.admin.TopicDescription;
 import org.apache.kafka.clients.admin.TopicListing;
 import org.apache.kafka.common.config.ConfigResource;
@@ -15,6 +17,7 @@ import se.afshin.yavari.kafka.ui.rbac.UserRbac;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -92,5 +95,46 @@ public class TopicService {
         parts.sort(Comparator.comparingInt(PartitionInfo::id));
 
         return new TopicDetail(d.name(), parts, configs, d.isInternal());
+    }
+
+    /* ---------------------------------------------------------------------
+     * Write operations (Phase 2). Permissions are enforced at the Kafka layer
+     * (Kroxylicious validates the user JWT and applies KafkaRbac ACLs before
+     * the request reaches the broker). The methods below propagate
+     * AuthorizationException up so the Resource layer can map to 403.
+     * ------------------------------------------------------------------ */
+
+    public void create(String clusterId, String name, int partitions, short replicationFactor,
+                       Map<String, String> configs)
+            throws ExecutionException, InterruptedException {
+        AdminClient admin = clients.admin(clusterId);
+        NewTopic nt = new NewTopic(name, partitions, replicationFactor);
+        if (configs != null && !configs.isEmpty()) nt.configs(configs);
+        admin.createTopics(List.of(nt)).all().get();
+    }
+
+    public void alterConfigs(String clusterId, String name, Map<String, String> changes)
+            throws ExecutionException, InterruptedException {
+        if (changes == null || changes.isEmpty()) return;
+        AdminClient admin = clients.admin(clusterId);
+        ConfigResource res = new ConfigResource(ConfigResource.Type.TOPIC, name);
+        List<AlterConfigOp> ops = new ArrayList<>(changes.size());
+        for (Map.Entry<String, String> e : changes.entrySet()) {
+            // Empty value -> reset to default (DELETE op); otherwise SET.
+            if (e.getValue() == null || e.getValue().isBlank()) {
+                ops.add(new AlterConfigOp(new ConfigEntry(e.getKey(), null), AlterConfigOp.OpType.DELETE));
+            } else {
+                ops.add(new AlterConfigOp(new ConfigEntry(e.getKey(), e.getValue()), AlterConfigOp.OpType.SET));
+            }
+        }
+        Map<ConfigResource, Collection<AlterConfigOp>> req = new LinkedHashMap<>();
+        req.put(res, ops);
+        admin.incrementalAlterConfigs(req).all().get();
+    }
+
+    public void delete(String clusterId, String name)
+            throws ExecutionException, InterruptedException {
+        AdminClient admin = clients.admin(clusterId);
+        admin.deleteTopics(List.of(name)).all().get();
     }
 }

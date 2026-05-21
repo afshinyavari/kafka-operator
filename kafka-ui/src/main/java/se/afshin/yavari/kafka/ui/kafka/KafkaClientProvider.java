@@ -12,9 +12,13 @@ import org.apache.kafka.clients.admin.AdminClientConfig;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.KafkaConsumer;
+import org.apache.kafka.clients.producer.KafkaProducer;
+import org.apache.kafka.clients.producer.Producer;
+import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.config.SaslConfigs;
 import org.apache.kafka.common.security.auth.SecurityProtocol;
 import org.apache.kafka.common.serialization.ByteArrayDeserializer;
+import org.apache.kafka.common.serialization.ByteArraySerializer;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 import se.afshin.yavari.kafka.ui.cluster.ClusterCoordinates;
@@ -61,6 +65,7 @@ public class KafkaClientProvider {
 
     private final Map<String, AdminClient> admins = new HashMap<>();
     private final Map<String, Consumer<byte[], byte[]>> consumers = new HashMap<>();
+    private final Map<String, Producer<byte[], byte[]>> producers = new HashMap<>();
 
     public AdminClient admin(String clusterId) {
         return admins.computeIfAbsent(clusterId, id -> AdminClient.create(adminProps(coordinates(id))));
@@ -73,6 +78,10 @@ public class KafkaClientProvider {
         Consumer<byte[], byte[]> c = new KafkaConsumer<>(consumerProps(coordinates(clusterId)));
         consumers.put(key, c);
         return c;
+    }
+
+    public Producer<byte[], byte[]> producer(String clusterId) {
+        return producers.computeIfAbsent(clusterId, id -> new KafkaProducer<>(producerProps(coordinates(id))));
     }
 
     private ClusterCoordinates coordinates(String clusterId) {
@@ -96,6 +105,18 @@ public class KafkaClientProvider {
         p.put(ConsumerConfig.VALUE_DESERIALIZER_CLASS_CONFIG, ByteArrayDeserializer.class.getName());
         p.put(ConsumerConfig.MAX_POLL_RECORDS_CONFIG, "200");
         p.put(ConsumerConfig.FETCH_MAX_BYTES_CONFIG, "4194304");
+        return p;
+    }
+
+    private Properties producerProps(ClusterCoordinates c) {
+        Properties p = baseProps(c.bootstrapUrl());
+        p.put(ProducerConfig.CLIENT_ID_CONFIG, "kafka-ui-producer-" + UUID.randomUUID());
+        p.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        p.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, ByteArraySerializer.class.getName());
+        p.put(ProducerConfig.ACKS_CONFIG, "all");
+        p.put(ProducerConfig.MAX_BLOCK_MS_CONFIG, "5000");
+        p.put(ProducerConfig.REQUEST_TIMEOUT_MS_CONFIG, "5000");
+        p.put(ProducerConfig.DELIVERY_TIMEOUT_MS_CONFIG, "10000");
         return p;
     }
 
@@ -154,6 +175,10 @@ public class KafkaClientProvider {
         consumers.forEach((id, co) -> {
             try { co.close(Duration.ofSeconds(2)); }
             catch (Exception e) { LOG.debugf(e, "Consumer close failed for %s", id); }
+        });
+        producers.forEach((id, pr) -> {
+            try { pr.close(Duration.ofSeconds(2)); }
+            catch (Exception e) { LOG.debugf(e, "Producer close failed for %s", id); }
         });
     }
 }

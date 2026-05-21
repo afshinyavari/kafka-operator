@@ -482,6 +482,59 @@ that cluster — sticky by IP rather than by user. For cross-cluster failover
 (load balancer drops a backend), point users at the cluster-local URL or use a
 DNS record that resolves to all 3 LB IPs.
 
+### Phase 2 write operations
+
+The UI is no longer read-only. Authenticated users can issue writes whose
+permissions are enforced downstream by Kafka (via Kroxylicious) or Apicurio:
+
+| Operation | UI surface | Underlying call | Enforcer |
+|---|---|---|---|
+| Create topic | Topics list → "New topic" modal | `AdminClient.createTopics` | Broker (Kroxy RBAC) |
+| Alter topic configs | Topic detail → "Edit configs" modal | `AdminClient.incrementalAlterConfigs` | Broker |
+| Delete topic | Topic detail → "Delete" modal (typed confirm) | `AdminClient.deleteTopics` | Broker |
+| Produce message | Message browser → "Produce" modal | `KafkaProducer.send` (acks=all, 5s timeout) | Broker |
+| Reset consumer offsets | Groups → ⋮ → "Reset offsets" modal | `AdminClient.alterConsumerGroupOffsets` (EARLIEST / LATEST / explicit) | Broker |
+| Delete consumer group | Groups → ⋮ → "Delete" modal (typed confirm) | `AdminClient.deleteConsumerGroups` | Broker |
+| Create schema | Schemas → "New schema" modal | `POST /apis/registry/v2/groups/default/artifacts` | apicurio-rbac-proxy |
+| New schema version | Schema detail → "New version" modal | `PUT /apis/registry/v2/groups/default/artifacts/{id}` | apicurio-rbac-proxy |
+| Delete schema | Schema detail → "Delete" modal (typed confirm) | `DELETE /apis/registry/v2/groups/default/artifacts/{id}` | apicurio-rbac-proxy |
+
+ACL editing is **not** exposed in the UI; `KafkaRbac` CRs continue to be
+managed via GitOps. See [security.md → UI Phase 2 trust model](security.md#ui-phase-2-trust-model).
+
+### Audit log
+
+Every write emits one JSON line on the `kafka-ui.audit` logger:
+
+```bash
+# Tail audit events from any single pod
+kubectl --context kind-kafka-a -n kafka logs -l app=kafka-ui --tail=200 \
+  | grep '"action"' | jq -c 'select(.action)'
+```
+
+Fields: `ts`, `user`, `action` (e.g. `topic.create`, `message.produce`,
+`group.resetOffsets`, `schema.delete`), `target` (`cluster/object`), `outcome`
+(`success` / `failure`), optional `details`, and `correlationId` (from the
+operator-wide MDC).
+
+### CSRF
+
+State-changing requests (POST/PUT/PATCH/DELETE) are checked by
+`OriginCsrfFilter`: the `Origin` header (or `Referer` fallback) must match
+the `Host` header, or appear in `kafka-ui.csrf.allowed-origins` (comma-separated).
+SameSite=Lax on the OIDC session cookie is the primary protection; this filter
+is defence-in-depth. Disable with `kafka-ui.csrf.enabled=false` only for
+explicit embed scenarios.
+
+### Troubleshooting writes
+
+| Symptom | Likely cause |
+|---|---|
+| Write button returns "Forbidden" or HTTP 403 | User's KafkaRbac group lacks the relevant operation (`CREATE`, `DELETE`, `WRITE`, `ALTER`, `DESCRIBE_CONFIGS`). Update the `KafkaRbac` CR. |
+| "CSRF: origin mismatch" 403 | Browser sent an `Origin` that doesn't match the UI's host. Verify the user is on the canonical URL, not a stale proxy. |
+| "Schema registry denied access (HTTP 401/403)" | apicurio-rbac-proxy rejected the user's JWT — check the `KafkaRbac.spec.groups[].schemaRegistry.actions` list. |
+| Topic created via UI but not visible in `kubectl get kafkatopic` | Intentional: Phase 2 UI writes go directly to Kafka via AdminClient, no `KafkaTopic` CR is created. To track via CR, create the `KafkaTopic` resource separately. |
+
 ---
 
 ## Monitoring

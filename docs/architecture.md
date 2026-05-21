@@ -506,13 +506,16 @@ underlying Kafka topic is retained per `deletionPolicy=RETAIN`.
 
 ---
 
-## Kafka UI (Quarkus + htmx)
+## Kafka UI (Quarkus + htmx + Bootstrap 5)
 
-The `kafka-ui` sibling module is a single-instance Quarkus web app that lets
-authenticated users browse the Kafka cluster(s) through a server-rendered HTML
-UI. It does **not** hold privileged credentials of its own; every request to
-the proxy or the schema registry carries the logged-in user's JWT, so the
-existing `GroupAwareAuthorizer` + `apicurio-rbac-proxy` enforce all access.
+The `kafka-ui` sibling module is a Quarkus web app that lets authenticated
+users browse and operate the Kafka cluster(s) through a server-rendered HTML
+UI styled with Bootstrap 5 + Bootstrap Icons. It does **not** hold privileged
+credentials of its own; every Kafka/Apicurio call carries the logged-in user's
+JWT, so the existing `GroupAwareAuthorizer` + `apicurio-rbac-proxy` enforce
+access. Phase 2 added write operations (topic CRUD, produce, consumer-group
+reset/delete, schema CRUD); ACL editing remains out of scope for the UI —
+`KafkaRbac` CRs are managed via GitOps.
 
 The UI is deployed via the **`KafkaUI` CRD** (`kui`, group `kafka.yavari.afshin.se`)
 — see [api-reference.md → KafkaUI](api-reference.md#kafkaui). The operator
@@ -536,18 +539,48 @@ kafka-ui (Quarkus + Qute + htmx)
 
 ### Endpoints
 
-| Path | Purpose |
-|---|---|
-| `GET /` | Cluster picker (lists `KafkaCluster` CRs) |
-| `GET /clusters/{id}` | Broker dashboard |
-| `GET /clusters/{id}/topics` | Topic list, filtered by KafkaRbac |
-| `GET /clusters/{id}/topics/{name}` | Topic configs + partitions |
-| `GET /clusters/{id}/topics/{name}/messages` | Paginated message browser with auto-deserializer |
-| `GET …/messages/stream` | SSE live tail |
-| `GET /clusters/{id}/groups` | Consumer groups |
-| `GET /clusters/{id}/acls` | KafkaRbac rules (header copy: "Access rules") |
-| `GET /clusters/{id}/schemas` | Apicurio artifact list |
-| `GET /clusters/{id}/schemas/{id}` | Artifact content + versions |
+| Path | Method | Purpose |
+|---|---|---|
+| `/` | GET | Cluster picker (lists `KafkaCluster` CRs) |
+| `/clusters/{id}` | GET | Broker dashboard |
+| `/clusters/{id}/topics` | GET | Topic list, filtered by KafkaRbac |
+| `/clusters/{id}/topics` | POST | Create topic (name, partitions, RF, configs) |
+| `/clusters/{id}/topics/{name}` | GET | Topic configs + partitions |
+| `/clusters/{id}/topics/{name}/configs` | POST | Alter configs (incremental, blank value = reset) |
+| `/clusters/{id}/topics/{name}/delete` | POST | Delete topic (typed-name confirmation required) |
+| `/clusters/{id}/topics/{name}/messages` | GET | Paginated message browser with auto-deserializer |
+| `/clusters/{id}/topics/{name}/messages/stream` | GET | SSE live tail |
+| `/clusters/{id}/topics/{name}/produce` | POST | Produce a single record (key, value, headers, partition) |
+| `/clusters/{id}/groups` | GET | Consumer groups |
+| `/clusters/{id}/groups/{groupId}/delete` | POST | Delete consumer group (typed-id confirmation) |
+| `/clusters/{id}/groups/{groupId}/reset-offsets` | POST | Reset committed offset (EARLIEST / LATEST / explicit) |
+| `/clusters/{id}/acls` | GET | KafkaRbac rules (read-only, header "Access rules") |
+| `/clusters/{id}/schemas` | GET | Apicurio artifact list |
+| `/clusters/{id}/schemas` | POST | Create artifact (AVRO / JSON / PROTOBUF / JSONSCHEMA) |
+| `/clusters/{id}/schemas/{id}` | GET | Artifact content + versions |
+| `/clusters/{id}/schemas/{id}/versions` | POST | Publish a new version |
+| `/clusters/{id}/schemas/{id}/delete` | POST | Delete artifact (typed-id confirmation) |
+
+All state-changing endpoints redirect (`303 See Other`) with a `success=` or
+`error=` query parameter; the templates pick these up and render Bootstrap
+alerts. Every write also emits a JSON line on the `kafka-ui.audit` logger
+(fields: `ts`, `user`, `action`, `target`, `outcome`, `details`,
+`correlationId`).
+
+### CSRF + write trust model
+
+POST/PUT/PATCH/DELETE requests are checked by `OriginCsrfFilter`: the `Origin`
+(or `Referer`) header must match the `Host` header, or appear on the
+configurable allow-list (`kafka-ui.csrf.allowed-origins`). This is
+defence-in-depth — the primary protection is Quarkus OIDC's SameSite=Lax
+session cookie, which already blocks the canonical cookie-replay attack.
+
+All write paths flow through systems that already see the user's identity:
+Kafka writes via Kroxylicious (broker enforces Kroxy RBAC), schema writes via
+the apicurio-rbac-proxy (Bearer JWT). The UI's ServiceAccount has only
+read-only permissions on `KafkaCluster` and `KafkaRbac` CRs — there is **no
+K8s API write path** from the UI. ACL changes go through GitOps on
+`KafkaRbac` CRs.
 
 ### Smart deserializer
 

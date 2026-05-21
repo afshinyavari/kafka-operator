@@ -98,6 +98,48 @@ the user's choice; the operator reacts (see Cert Rotation above).
 In tests, `kind/mcs-setup.sh` provisions self-signed certs into the same
 Secret names.
 
+## UI Phase 2 trust model
+
+The KafkaUI gained write operations (topic CRUD, produce, consumer-group
+reset/delete, schema CRUD) in Phase 2. The model deliberately avoids any K8s
+API write path from the UI:
+
+| Surface | Path | Enforced by |
+|---|---|---|
+| Topic create / alter / delete | AdminClient → Kroxylicious → broker | Broker (Kroxy validates user JWT, applies `KafkaRbac` ACLs) |
+| Produce | Producer → Kroxylicious → broker | Broker |
+| Consumer group delete / reset offsets | AdminClient → Kroxylicious | Broker |
+| Schema create / new version / delete | HTTP → apicurio-rbac-proxy (Bearer user JWT) | apicurio-rbac-proxy |
+| **ACL edit** | **not exposed in UI** | — (GitOps on `KafkaRbac` CR) |
+
+Every surface flows through a system that already sees the user's identity
+via JWT. The UI's ServiceAccount has only read on `KafkaCluster` / `KafkaRbac`
+— there is no K8s API write path from the UI, so the UI cannot escalate a
+user's privileges by writing CRs.
+
+Defence in depth on the browser side:
+
+- OIDC web-app session cookie is `SameSite=Lax` (Quarkus OIDC default), which
+  already blocks the canonical cookie-replay CSRF attack on cross-site POSTs.
+- `OriginCsrfFilter` additionally rejects POST / PUT / PATCH / DELETE whose
+  `Origin` (or `Referer`) doesn't match the request `Host`, with an optional
+  allow-list via `kafka-ui.csrf.allowed-origins`.
+- Every write emits a structured JSON audit line on the `kafka-ui.audit`
+  logger (fields: `ts`, `user`, `action`, `target`, `outcome`, `details`,
+  `correlationId`). See [operations.md → Audit log](operations.md#audit-log).
+- Delete operations (topic / group / schema) require typing the target name
+  in the confirmation modal — prevents accidental wipes from a misclick.
+
+### Why no UI-driven ACL editing?
+
+The single global `KafkaRbac` ConfigMap is consumed by both Kroxylicious and
+the apicurio-rbac-proxy as configuration. Any UI write path to it would have
+to be performed under the UI's ServiceAccount (K8s sees the SA, not the end
+user), so per-user K8s RBAC could not be enforced without K8s impersonation —
+which in turn requires per-user K8s `Role`s provisioned externally. The
+operational cost outweighed the value, so `KafkaRbac` stays GitOps-only and
+the UI exposes it read-only.
+
 ## Threats considered but not (yet) defended
 
 - **Compromised operator pod**: today the operator has full Kafka admin via

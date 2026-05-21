@@ -1,0 +1,14 @@
+{@java.lang.String errorMessage}
+{@java.lang.String successMessage}
+{#if errorMessage}
+<div class="alert alert-danger d-flex align-items-start" role="alert">
+    <i class="bi bi-exclamation-triangle-fill me-2 mt-1"></i>
+    <div class="flex-grow-1">{errorMessage}</div>
+</div>
+{/if}
+{#if successMessage}
+<div class="alert alert-success d-flex align-items-start" role="alert">
+    <i class="bi bi-check-circle-fill me-2 mt-1"></i>
+    <div class="flex-grow-1">{successMessage}</div>
+</div>
+{/if}

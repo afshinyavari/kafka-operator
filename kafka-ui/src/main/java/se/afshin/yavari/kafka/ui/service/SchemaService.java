@@ -158,4 +158,101 @@ public class SchemaService {
             throw new WebApplicationException("Schema registry unreachable", Response.Status.BAD_GATEWAY);
         }
     }
+
+    /* ---------- writes (Phase 2) — apicurio-rbac-proxy enforces permissions ---------- */
+
+    public void createArtifact(String clusterId, String artifactId, String type, String content) {
+        ClusterCoordinates c = coords(clusterId);
+        validateContent(type, content);
+        HttpRequest req = HttpRequest.newBuilder(URI.create(
+                        c.apicurioUrl() + "/apis/registry/v2/groups/default/artifacts"))
+                .timeout(TIMEOUT)
+                .header("Authorization", "Bearer " + token.getToken())
+                .header("X-Registry-ArtifactId", artifactId)
+                .header("X-Registry-ArtifactType", type)
+                .header("Content-Type", contentTypeFor(type))
+                .POST(HttpRequest.BodyPublishers.ofString(content, StandardCharsets.UTF_8))
+                .build();
+        execute(req);
+    }
+
+    public void updateArtifact(String clusterId, String artifactId, String type, String content) {
+        ClusterCoordinates c = coords(clusterId);
+        validateContent(type, content);
+        HttpRequest req = HttpRequest.newBuilder(URI.create(
+                        c.apicurioUrl() + "/apis/registry/v2/groups/default/artifacts/" + artifactId))
+                .timeout(TIMEOUT)
+                .header("Authorization", "Bearer " + token.getToken())
+                .header("X-Registry-ArtifactType", type)
+                .header("Content-Type", contentTypeFor(type))
+                .PUT(HttpRequest.BodyPublishers.ofString(content, StandardCharsets.UTF_8))
+                .build();
+        execute(req);
+    }
+
+    public void deleteArtifact(String clusterId, String artifactId) {
+        ClusterCoordinates c = coords(clusterId);
+        HttpRequest req = HttpRequest.newBuilder(URI.create(
+                        c.apicurioUrl() + "/apis/registry/v2/groups/default/artifacts/" + artifactId))
+                .timeout(TIMEOUT)
+                .header("Authorization", "Bearer " + token.getToken())
+                .DELETE()
+                .build();
+        execute(req);
+    }
+
+    static void validateContent(String type, String content) {
+        if (content == null || content.isBlank()) {
+            throw new IllegalArgumentException("Schema content is empty.");
+        }
+        String t = type == null ? "" : type.toUpperCase();
+        if ("JSON".equals(t) || "AVRO".equals(t)) {
+            try {
+                MAPPER.readTree(content);
+            } catch (Exception e) {
+                throw new IllegalArgumentException("Schema content is not valid JSON: " + e.getMessage());
+            }
+        }
+    }
+
+    static String contentTypeFor(String type) {
+        String t = type == null ? "" : type.toUpperCase();
+        return switch (t) {
+            case "PROTOBUF" -> "application/x-protobuf";
+            case "AVRO", "JSON", "JSONSCHEMA" -> "application/json";
+            default -> "application/json";
+        };
+    }
+
+    /** Executes the request and maps non-2xx to {@link WebApplicationException}. Package-private for tests. */
+    HttpResponse<byte[]> execute(HttpRequest req) {
+        try {
+            HttpResponse<byte[]> resp = http.send(req, HttpResponse.BodyHandlers.ofByteArray());
+            int status = resp.statusCode();
+            if (status >= 200 && status < 300) return resp;
+            String body = new String(resp.body(), StandardCharsets.UTF_8);
+            if (status == 401 || status == 403) {
+                throw new WebApplicationException("Schema registry denied access: " + truncate(body), status);
+            }
+            if (status == 404) {
+                throw new WebApplicationException("Schema not found: " + truncate(body), Response.Status.NOT_FOUND);
+            }
+            if (status == 409) {
+                throw new WebApplicationException("Conflict (artifact exists or version conflict): " + truncate(body),
+                        Response.Status.CONFLICT);
+            }
+            throw new WebApplicationException("Schema registry error (HTTP " + status + "): " + truncate(body),
+                    Response.Status.BAD_GATEWAY);
+        } catch (WebApplicationException e) {
+            throw e;
+        } catch (Exception e) {
+            LOG.warnf(e, "Apicurio write call failed: %s", req.uri());
+            throw new WebApplicationException("Schema registry unreachable", Response.Status.BAD_GATEWAY);
+        }
+    }
+
+    private static String truncate(String body) {
+        if (body == null) return "";
+        return body.length() > 200 ? body.substring(0, 200) + "…" : body;
+    }
 }

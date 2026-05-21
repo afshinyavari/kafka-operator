@@ -1,6 +1,31 @@
 {@se.afshin.yavari.kafka.ui.cluster.ClusterCoordinates cluster}
-<a href="/clusters/{cluster.id}">Dashboard</a>
-<a href="/clusters/{cluster.id}/topics">Topics</a>
-<a href="/clusters/{cluster.id}/groups">Consumer groups</a>
-<a href="/clusters/{cluster.id}/acls">Access rules</a>
-<a href="/clusters/{cluster.id}/schemas">Schemas</a>
+{@java.lang.String active}
+<div class="cluster-subnav">
+    <ul class="nav nav-tabs container-fluid px-3 border-0">
+        <li class="nav-item">
+            <a class="nav-link {#if active == 'dashboard'}active{/if}" href="/clusters/{cluster.id}">
+                <i class="bi bi-speedometer2"></i>Dashboard
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link {#if active == 'topics'}active{/if}" href="/clusters/{cluster.id}/topics">
+                <i class="bi bi-list-ul"></i>Topics
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link {#if active == 'groups'}active{/if}" href="/clusters/{cluster.id}/groups">
+                <i class="bi bi-people"></i>Consumer groups
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link {#if active == 'access'}active{/if}" href="/clusters/{cluster.id}/acls">
+                <i class="bi bi-shield-lock"></i>Access rules
+            </a>
+        </li>
+        <li class="nav-item">
+            <a class="nav-link {#if active == 'schemas'}active{/if}" href="/clusters/{cluster.id}/schemas">
+                <i class="bi bi-file-earmark-code"></i>Schemas
+            </a>
+        </li>
+    </ul>
+</div>

@@ -2,13 +2,13 @@
 <tr>
     <td><code>{row.offset}</code></td>
     <td><code>{row.partition}</code></td>
-    <td class="muted">{row.timestamp}</td>
+    <td class="text-muted small">{row.timestamp}</td>
     <td>
         <span class="badge badge-{row.key.strategy.toLowerCase}">{row.key.strategy}{#if row.key.schemaRef}:{row.key.schemaRef}{/if}</span>
-        <pre style="margin:0.25rem 0; max-height:6rem; overflow:auto;">{row.key.text}</pre>
+        <pre class="message-payload message-payload-key">{row.key.text}</pre>
     </td>
     <td>
         <span class="badge badge-{row.value.strategy.toLowerCase}">{row.value.strategy}{#if row.value.schemaRef}:{row.value.schemaRef}{/if}</span>
-        <pre style="margin:0.25rem 0; max-height:8rem; overflow:auto;">{row.value.text}</pre>
+        <pre class="message-payload">{row.value.text}</pre>
     </td>
 </tr>

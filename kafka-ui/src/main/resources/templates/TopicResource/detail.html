@@ -1,50 +1,155 @@
 {@se.afshin.yavari.kafka.ui.cluster.ClusterCoordinates cluster}
 {@se.afshin.yavari.kafka.ui.service.TopicService$TopicDetail topic}
 {@java.lang.String username}
+{@java.lang.String errorMessage}
+{@java.lang.String successMessage}
 {#include base.html}
 {#title}Kafka UI · {cluster.id} · {topic.name}{/title}
-{#nav}{#include _clusternav.html cluster=cluster /}{/nav}
+{#nav}{#include _clusternav.html cluster=cluster active="topics" /}{/nav}
 {#user}Signed in as <strong>{username}</strong>{/user}
 {#body}
-<h2>{topic.name}{#if topic.internal} <span class="badge badge-internal">internal</span>{/if}</h2>
-<p><a href="/clusters/{cluster.id}/topics/{topic.name}/messages">Browse messages →</a></p>
-
-<div class="card">
-    <h3 style="margin-top:0;">Partitions</h3>
-    <table>
-        <thead><tr><th>ID</th><th>Leader</th><th>Replicas</th><th>ISR</th></tr></thead>
-        <tbody>
-        {#for p in topic.partitions}
-        <tr>
-            <td>{p.id}</td>
-            <td><code>{p.leader}</code></td>
-            <td><code>{p.replicas}</code></td>
-            <td><code>{p.isr}</code></td>
-        </tr>
-        {/for}
-        </tbody>
-    </table>
+<nav aria-label="breadcrumb" class="small mb-2">
+    <ol class="breadcrumb mb-0">
+        <li class="breadcrumb-item"><a href="/clusters/{cluster.id}/topics" class="text-decoration-none">Topics</a></li>
+        <li class="breadcrumb-item active" aria-current="page">{topic.name}</li>
+    </ol>
+</nav>
+<div class="d-flex align-items-center justify-content-between mb-3 flex-wrap gap-2">
+    <h2 class="mb-0">
+        <i class="bi bi-stack text-secondary me-2"></i>{topic.name}
+        {#if topic.internal}<span class="badge badge-internal ms-2 align-middle">internal</span>{/if}
+    </h2>
+    <div class="d-flex gap-2 flex-wrap">
+        <a href="/clusters/{cluster.id}/topics/{topic.name}/messages" class="btn btn-primary btn-sm">
+            <i class="bi bi-chat-left-text me-1"></i>Browse messages
+        </a>
+        {#if !topic.internal}
+        <button type="button" class="btn btn-outline-secondary btn-sm"
+                data-bs-toggle="modal" data-bs-target="#editConfigsModal">
+            <i class="bi bi-pencil me-1"></i>Edit configs
+        </button>
+        <button type="button" class="btn btn-outline-danger btn-sm"
+                data-bs-toggle="modal" data-bs-target="#deleteTopicModal">
+            <i class="bi bi-trash me-1"></i>Delete
+        </button>
+        {/if}
+    </div>
 </div>
 
-<div class="card">
-    <h3 style="margin-top:0;">Config</h3>
-    {#if topic.configs.isEmpty}
-    <p class="muted">Topic config not visible to your role
-        (needs the <code>DESCRIBE_CONFIGS</code> Kafka operation).</p>
-    {#else}
-    <table>
-        <thead><tr><th>Key</th><th>Value</th><th></th></tr></thead>
-        <tbody>
-        {#for c in topic.configs}
-        <tr>
-            <td><code>{c.key}</code></td>
-            <td><code>{c.sensitive ? '••••••' : (c.value ?: '')}</code></td>
-            <td>{#if c.isDefault}<span class="badge">default</span>{/if}</td>
-        </tr>
-        {/for}
-        </tbody>
-    </table>
-    {/if}
+{#include _form_errors.html errorMessage=errorMessage successMessage=successMessage /}
+
+<div class="card shadow-sm mb-3">
+    <div class="card-header bg-white">
+        <h3 class="h6 mb-0"><i class="bi bi-grid-3x3-gap text-secondary me-2"></i>Partitions</h3>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover table-sm align-middle mb-0">
+            <thead class="table-light">
+            <tr><th>ID</th><th>Leader</th><th>Replicas</th><th>ISR</th></tr>
+            </thead>
+            <tbody>
+            {#for p in topic.partitions}
+            <tr>
+                <td><code>{p.id}</code></td>
+                <td><code>{p.leader}</code></td>
+                <td><code>{p.replicas}</code></td>
+                <td><code>{p.isr}</code></td>
+            </tr>
+            {/for}
+            </tbody>
+        </table>
+    </div>
 </div>
+
+<div class="card shadow-sm">
+    <div class="card-header bg-white">
+        <h3 class="h6 mb-0"><i class="bi bi-sliders text-secondary me-2"></i>Config</h3>
+    </div>
+    <div class="card-body">
+        {#if topic.configs.isEmpty}
+        <p class="text-muted mb-0">Topic config not visible to your role
+            (needs the <code>DESCRIBE_CONFIGS</code> Kafka operation).</p>
+        {#else}
+        <div class="table-responsive">
+            <table class="table table-hover table-sm align-middle mb-0">
+                <thead class="table-light">
+                <tr><th>Key</th><th>Value</th><th></th></tr>
+                </thead>
+                <tbody>
+                {#for c in topic.configs}
+                <tr>
+                    <td><code>{c.key}</code></td>
+                    <td><code>{c.sensitive ? '••••••' : (c.value ?: '')}</code></td>
+                    <td>{#if c.isDefault}<span class="badge text-bg-secondary">default</span>{/if}</td>
+                </tr>
+                {/for}
+                </tbody>
+            </table>
+        </div>
+        {/if}
+    </div>
+</div>
+
+{#if !topic.internal}
+<!-- Edit configs modal -->
+<div class="modal fade" id="editConfigsModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-lg">
+        <form method="POST" action="/clusters/{cluster.id}/topics/{topic.name}/configs">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-pencil text-secondary me-2"></i>Edit configs — {topic.name}
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="cfgChanges" class="form-label">Config changes</label>
+                        <input type="text" class="form-control font-monospace" id="cfgChanges" name="configs"
+                               placeholder="retention.ms=604800000, cleanup.policy=delete">
+                        <div class="form-text">
+                            Comma-separated <code>key=value</code> pairs. Leave a value blank to reset to default
+                            (e.g. <code>retention.ms=</code>).
+                        </div>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check2 me-1"></i>Apply
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<!-- Delete confirm modal -->
+<div class="modal fade" id="deleteTopicModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog">
+        <form method="POST" action="/clusters/{cluster.id}/topics/{topic.name}/delete">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title text-danger">
+                        <i class="bi bi-exclamation-triangle me-2"></i>Delete topic
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <p>This will permanently delete <code>{topic.name}</code> and all its messages. Type the topic name to confirm:</p>
+                    <input type="text" class="form-control font-monospace" name="confirm" required
+                           placeholder="{topic.name}" autocomplete="off">
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-danger">
+                        <i class="bi bi-trash me-1"></i>Delete topic
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+{/if}
 {/body}
 {/include}
