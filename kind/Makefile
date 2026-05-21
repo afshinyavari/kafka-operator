@@ -213,24 +213,40 @@ rolling-restart-test:  ## Rolling broker restart preserves quorum + no message l
 broker-kill-test:  ## Kill a broker; producers/consumers keep going; broker rejoins ISR
 	@chmod +x broker-kill-test.sh && ./broker-kill-test.sh
 
-# ── Unified e2e: one target that exercises every shipped feature ──────────────
-# Composes the existing tests in dependency order, including the new ones above.
-# Assumes mcs-setup is already done (it bakes in MetalLB + KafkaProxy on all 3
-# clusters + kafkasql Apicurio). Run `make teardown && make mcs-setup && make e2e`
-# from a clean shell for the full flow.
+# ── Tiered e2e: smoke (fast default) / extended (slow) / full (both) ──────────
+# All tiers assume mcs-setup is already done (it bakes in MetalLB + KafkaProxy
+# on all 3 clusters + kafkasql Apicurio). Run `make teardown && make mcs-setup`
+# from a clean shell before the first tier run.
+#
+# Tiers:
+#   make e2e           — smoke: fast feature-coverage sweep for everyday iteration
+#   make e2e-extended  — slow/destructive tests (rolling restart, broker kill, etc.)
+#   make e2e-full      — smoke followed by extended; equivalent to the old `e2e`
+#
 # Note: mcs-proxy-test is NOT included — Submariner Lighthouse only registers
 # ClusterIP/Headless Services in clusterset.local DNS, so the LoadBalancer-type
 # kafka-proxy Service (when externalAccess=LOADBALANCER is enabled) isn't
 # resolvable as `kafka-proxy.kafka.svc.clusterset.local`. Cross-cluster reach is
-# instead covered by `proxy-external-lb-test`, which has clients outside K8s
-# hitting any cluster's MetalLB-assigned LB IP. Run `make mcs-proxy-test`
-# manually only on a topology without externalAccess.
-e2e: quorum kafkatopic-test rbac-test apicurio-rbac-test xml-filter-test \
-     json-schema-test proxy-external-lb-test durability-test \
-     rolling-restart-test broker-kill-test kafka-ui-setup ui-test
+# instead covered by `proxy-external-lb-test` (in the extended tier), which has
+# clients outside K8s hitting any cluster's MetalLB-assigned LB IP. Run
+# `make mcs-proxy-test` manually only on a topology without externalAccess.
+SMOKE_E2E := quorum kafkatopic-test rbac-test apicurio-rbac-test \
+             xml-filter-test json-schema-test kafka-ui-setup ui-test
+EXTENDED_E2E := proxy-external-lb-test durability-test \
+                rolling-restart-test broker-kill-test
+
+e2e: $(SMOKE_E2E)  ## Smoke e2e: fast feature-coverage sweep
 	@echo ""
-	@echo "✓ All e2e checks passed"
+	@echo "✓ Smoke e2e passed"
+
+e2e-extended: $(EXTENDED_E2E)  ## Extended e2e: slow/destructive tests
+	@echo ""
+	@echo "✓ Extended e2e passed"
+
+e2e-full: e2e e2e-extended  ## Full e2e: smoke + extended (the old `make e2e`)
+	@echo ""
+	@echo "✓ Full e2e passed"
 
 help:  ## Show this help
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
+	@grep -E '^[a-zA-Z0-9_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
 	  awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-20s\033[0m %s\n", $$1, $$2}'
