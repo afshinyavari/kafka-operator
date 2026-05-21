@@ -37,6 +37,9 @@ rules:
       - kafkauis
       - kafkauis/status
       - kafkauis/finalizers
+      - mirrormaker2s
+      - mirrormaker2s/status
+      - mirrormaker2s/finalizers
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["nodes"]

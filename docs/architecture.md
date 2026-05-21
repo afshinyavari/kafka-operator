@@ -653,3 +653,99 @@ that drops the Quarkus session cookie and redirects to Keycloak's
 end-session endpoint to terminate the SSO session too. Without this,
 clearing the local cookie alone leaves a Keycloak SSO cookie that silently
 re-logs the user back in.
+
+## MirrorMaker2 (cross-cluster replication)
+
+The `MirrorMaker2` CRD is a **standalone** CRD parallel to `KafkaUI` — it is
+not a sub-spec of `KafkaCluster`. One CR drives one replication flow
+(`source -> target`). The reconciler renders an `mm2.properties` file into a
+ConfigMap and drives a single Deployment that runs
+`bin/connect-mirror-maker.sh` (Connect's dedicated MM2 driver). Workers across
+all replicas join one Connect group via the `mm2-{configs,offsets,status}.{flow}`
+topics on the **target** Kafka; Kafka's group coordinator distributes the
+MirrorSource / MirrorCheckpoint / MirrorHeartbeat tasks.
+
+```
+source proxy bootstrap            target proxy bootstrap
+        │                                    │
+        │  records (Apicurio V3 envelope)    │
+        ▼                                    ▼
+   ┌─────────────────────────────────────────────┐
+   │ MM2 worker Deployment (replicas=1|3)        │
+   │   ┌──────────────────────────────────────┐  │
+   │   │ MirrorSourceConnector                │  │
+   │   │   transforms.schemaSync (optional)   │──┼── source Apicurio  GET /ids/globalIds/{id}
+   │   │     • parse 0x00 + 8-byte globalId   │  │   target Apicurio  POST /groups/{g}/artifacts
+   │   │     • DFS resolve refs               │  │
+   │   │     • rewrite envelope globalId      │  │
+   │   ├──────────────────────────────────────┤  │
+   │   │ MirrorCheckpointConnector            │  │
+   │   │ MirrorHeartbeatConnector             │  │
+   │   └──────────────────────────────────────┘  │
+   └─────────────────────────────────────────────┘
+```
+
+### Endpoint resolution
+
+`Mm2EndpointResolver` translates each side of the CR (`spec.source`,
+`spec.target`) into a `ResolvedEndpoint`:
+
+- **Managed (`kafkaClusterRef`)**: looks up the referenced `KafkaCluster`,
+  resolves bootstrap to the proxy Service (not broker headless) —
+  `kafka-proxy.{ns}.svc.cluster.local:9094` — and pulls the admin client
+  cert from `proxyMtls.adminClientCertSecretRef` (default
+  `kafka-operator-client-tls`). When the cluster has Apicurio configured,
+  the schema-registry URL is derived from
+  `apicurio-rbac-proxy.{ns}.svc.cluster.local:8080`.
+- **External**: passes through `bootstrap`, `tlsSecretRef`, `sasl`, and
+  `schemaRegistry` verbatim.
+
+CONFLUENT schema-registry type is rejected at reconcile (wire format
+differs; reserved for a future release).
+
+### Schema-sync SMT
+
+The bundled `ApicurioSchemaTransferSmt` (in `schema-sync-smt/`) is wired
+into the source→target transforms chain when `spec.schemaSync.enabled=true`
+AND both ends expose a schema registry URL. Per record:
+
+1. Topic regex check (`applyToTopics`).
+2. Envelope detection — `bytes != null && length ≥ 9 && bytes[0] == 0x00`.
+3. Parse 8-byte big-endian globalId.
+4. Cache lookup → on miss, DFS resolve the source artifact (with
+   `HashSet<Long> visiting` cycle guard, `maxDepth=16`) and recursively
+   upsert references on the target before the parent
+   (`?ifExists=FIND_OR_CREATE_VERSION`).
+5. Rewrite the envelope's 8 bytes with the target globalId; payload
+   unchanged.
+
+Six layers of safety make the SMT safe to drop on mixed-format clusters:
+per-record detection, tombstone passthrough, `applyTo` knob, topic
+allowlist, default `behavior.on.error=WARN`, and per-record evaluation. See
+[api-reference.md#non-apicurio-topics](api-reference.md#non-apicurio-topics).
+
+### Internal topics
+
+The reconciler creates three KafkaTopic CRs on the target managed cluster
+(`mm2-configs.{flow}` p=1, `mm2-offsets.{flow}` p=25, `mm2-status.{flow}` p=5,
+all `cleanup.policy=compact`). Owner-refs cascade to the MM2 CR. When the
+target is external, topic creation is skipped and the worker auto-creates
+on first start.
+
+### Replicas and placement
+
+Default replicas = 3 when the target is a multi-cluster managed KafkaCluster
+(spreads across MCS clusters via topology spread on
+`topology.kubernetes.io/zone`); otherwise 1. Workers form one Connect group
+via the internal topics, so distributing replicas across K8s clusters in
+MCS gives single-K8s-cluster fault tolerance for the same flow.
+
+### Where this lives
+
+- `src/main/java/se/afshin/yavari/kafka/operator/mm2/` — reconciler + builders
+- `src/main/java/se/afshin/yavari/kafka/operator/crd/MirrorMaker2*.java` — CRD classes
+- `schema-sync-smt/` — Connect SMT JAR (shaded with Jackson)
+- `mm2-image/Dockerfile` — kafka-ubi:4.0.0 + the SMT JAR
+- `kind/mm2-smoke-test.sh` — smoke e2e
+- See [api-reference.md#mirrormaker2](api-reference.md#mirrormaker2) for the
+  full CRD reference.

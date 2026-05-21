@@ -23,6 +23,7 @@ A Kubernetes operator for running Apache Kafka 4.x in KRaft mode across multiple
 - **KafkaRbac** — declarative topic-level ACLs (group and user) and schema-registry artifact-level ACLs in a single CR; operator generates Kroxylicious and Apicurio policy ConfigMaps from it
 - **Apicurio schema registry** — `ApicurioRegistry` CRD deploys Apicurio Registry with an optional HTTP RBAC proxy that enforces per-artifact READ/WRITE/DELETE access via JWT roles. Supports `mem`, `postgresql`, and `kafkasql` (durable Kafka-backed) storage with auto-provisioned journal topic and broker ACLs
 - **OIDC/Keycloak integration** — JWT claims extracted from `realm_access.roles` become authorization groups; same JWT used for both Kafka proxy RBAC and schema registry proxy RBAC
+- **MirrorMaker2 with Apicurio schema mirroring** — `MirrorMaker2` CRD deploys MM2 in dedicated mode. Each end (source/target) is independently a managed `KafkaCluster` ref or an external endpoint. When both ends carry Apicurio, an opt-in custom Connect SMT (`ApicurioSchemaTransferSmt`) rewrites the V3 envelope's globalId per record so consumers can decode mirrored payloads. See [api-reference.md#mirrormaker2](docs/api-reference.md#mirrormaker2).
 
 ## Prerequisites
 
@@ -213,6 +214,11 @@ kafka-operator/
 │       ├── ProxyResource.java      # JAX-RS proxy with OIDC auth + RBAC check
 │       └── PolicyEngine.java       # YAML policy loader with hot-reload via WatchService
 ├── kafka-image/      # UBI9-based Kafka wrapper image (Dockerfile + start.sh)
+├── schema-sync-smt/  # Apicurio-aware Kafka Connect SMT (shaded JAR; bundled into mm2:dev)
+│   └── src/main/java/se/afshin/yavari/kafka/smt/
+│       ├── ApicurioSchemaTransferSmt.java  # Envelope rewrite + reference DFS + LRU cache
+│       └── ApicurioClient.java             # Minimal Apicurio v3 REST client
+├── mm2-image/        # MirrorMaker2 worker image (kafka-ubi base + schema-sync-smt JAR)
 ├── kind/
 │   ├── mcs-setup.sh  # Full cluster bootstrap script
 │   ├── Makefile      # All development targets

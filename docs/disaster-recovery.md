@@ -21,15 +21,24 @@ three MCS-joined K8s clusters. A single-cluster loss is transparent to
 producers/consumers. Beyond that, the operator does not back up topic data
 itself.
 
-For cross-region replication, deploy [MirrorMaker2](https://kafka.apache.org/documentation/#georeplication-overview)
-as a separate workload — the operator doesn't ship a CRD for it yet (it's on
-the feature backlog). Until then, a typical setup runs MM2 as a `Deployment`
-peering this cluster to a remote backup cluster, configured against the
-proxy's bootstrap.
+For cross-region replication, the operator ships a [`MirrorMaker2`](api-reference.md#mirrormaker2)
+CRD that drives a dedicated-mode MM2 worker Deployment. Each end (source and
+target) is independently either a managed `KafkaCluster` reference (the operator
+resolves to the proxy bootstrap and reuses the admin client cert) or an external
+endpoint (raw bootstrap + TLS/SASL Secrets). At least one end must be managed by
+this operator so it has somewhere to run.
+
+If both ends carry Apicurio (managed) or another Apicurio-compatible registry
+(external), set `spec.schemaSync.enabled=true` to enable the Apicurio-aware
+schema-mirroring SMT bundled with the MM2 image. The SMT rewrites the V3 envelope
+`globalId` per record to the target registry's ID, so consumers can decode
+mirrored payloads. Non-Apicurio topics pass through untouched (see
+`docs/api-reference.md#mirrormaker2` for the six-layer passthrough rules).
 
 To restore from a remote cluster after total loss: deploy a fresh KafkaCluster
-CR, then run MM2 in the opposite direction with `replication.policy.class`
-configured for source-cluster topic naming.
+CR, then apply a `MirrorMaker2` CR with the source/target swapped relative to
+your normal flow. `flow.replicationPolicy` (in `flow.additionalProperties` if
+needed) controls topic naming.
 
 ## Apicurio schema registry
 

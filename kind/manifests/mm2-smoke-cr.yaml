@@ -1,0 +1,22 @@
+# Smoke MirrorMaker2 CR for `make e2e`. Points at a dummy external bootstrap so the
+# operator runs through validation + ConfigMap + Deployment generation, then the
+# worker pod fails to start (no real source broker). We assert PENDING phase only.
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: MirrorMaker2
+metadata:
+  name: mm2-smoke
+  namespace: kafka
+spec:
+  image: mm2:dev
+  replicas: 1
+  source:
+    external:
+      bootstrap: smoke-source.invalid:9093
+  target:
+    kafkaClusterRef:
+      name: my-kafka
+  flow:
+    flowName: smoke
+    topics: ["smoke-events"]
+    replicationFactor: 1
+    tasksMax: 1

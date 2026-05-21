@@ -17,6 +17,7 @@ import io.fabric8.kubernetes.api.model.apps.DeploymentBuilder;
 import jakarta.enterprise.context.ApplicationScoped;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistry;
 import se.afshin.yavari.kafka.operator.crd.ApicurioRegistryStorageConfig;
+import se.afshin.yavari.kafka.operator.infra.PemToPkcs12InitContainer;
 import se.afshin.yavari.kafka.operator.infra.SecurityContextDefaults;
 
 import java.util.ArrayList;
@@ -168,7 +169,14 @@ public class ApicurioDeploymentBuilder {
                     .withName(KAFKASQL_PKCS12_VOLUME)
                     .withNewEmptyDir().endEmptyDir()
                     .build());
-            initContainers.add(buildPemToPkcs12InitContainer(kafkasql.initImage()));
+            initContainers.add(PemToPkcs12InitContainer.build(
+                    "pem-to-pkcs12",
+                    kafkasql.initImage(),
+                    KAFKASQL_TLS_VOLUME,
+                    KAFKASQL_TLS_MOUNT,
+                    KAFKASQL_PKCS12_VOLUME,
+                    KAFKASQL_PKCS12_MOUNT,
+                    KAFKASQL_KEYSTORE_PASS));
         }
 
         return new DeploymentBuilder()
@@ -202,43 +210,6 @@ public class ApicurioDeploymentBuilder {
 
     private static EnvVar envVar(String name, String value) {
         return new EnvVarBuilder().withName(name).withValue(value).build();
-    }
-
-    private static Container buildPemToPkcs12InitContainer(String image) {
-        // The init container's image (kafka-ubi:4.0.0) runs as UID 1000; the Apicurio
-        // registry container runs as UID 1001. Output files default to mode 600 owned by
-        // the init UID, so the registry can't read them. chmod 0644 on the outputs makes
-        // them world-readable, which is fine for the keystore password-protected files.
-        String script =
-                "set -euo pipefail\n"
-                + "rm -f " + KAFKASQL_PKCS12_MOUNT + "/keystore.p12 " + KAFKASQL_PKCS12_MOUNT + "/truststore.p12\n"
-                + "openssl pkcs12 -export"
-                + " -inkey " + KAFKASQL_TLS_MOUNT + "/tls.key"
-                + " -in " + KAFKASQL_TLS_MOUNT + "/tls.crt"
-                + " -out " + KAFKASQL_PKCS12_MOUNT + "/keystore.p12"
-                + " -passout pass:" + KAFKASQL_KEYSTORE_PASS + "\n"
-                + "keytool -importcert -noprompt -trustcacerts"
-                + " -alias ca -file " + KAFKASQL_TLS_MOUNT + "/ca.crt"
-                + " -keystore " + KAFKASQL_PKCS12_MOUNT + "/truststore.p12"
-                + " -storetype PKCS12 -storepass " + KAFKASQL_KEYSTORE_PASS + "\n"
-                + "chmod 0644 " + KAFKASQL_PKCS12_MOUNT + "/keystore.p12 "
-                + KAFKASQL_PKCS12_MOUNT + "/truststore.p12\n";
-        return new ContainerBuilder()
-                .withName("pem-to-pkcs12")
-                .withImage(image)
-                .withCommand("/bin/bash", "-c", script)
-                .withVolumeMounts(
-                        new VolumeMountBuilder()
-                                .withName(KAFKASQL_TLS_VOLUME)
-                                .withMountPath(KAFKASQL_TLS_MOUNT)
-                                .withReadOnly(true)
-                                .build(),
-                        new VolumeMountBuilder()
-                                .withName(KAFKASQL_PKCS12_VOLUME)
-                                .withMountPath(KAFKASQL_PKCS12_MOUNT)
-                                .build())
-                .withSecurityContext(SecurityContextDefaults.containerDefaults())
-                .build();
     }
 
     static Map<String, String> labels(String name) {

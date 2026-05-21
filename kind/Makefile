@@ -8,6 +8,7 @@ KAFKA_VERSION      := 4.0.0
 KROXY_IMAGE        := kroxy-filters:dev
 APICURIO_PROXY_IMG := apicurio-rbac-proxy:dev
 KAFKA_UI_IMG       := kafka-ui:dev
+MM2_IMG            := mm2:dev
 OPERATOR_DIR       := ..
 MANIFESTS_DIR      := manifests
 
@@ -15,11 +16,12 @@ MANIFESTS_DIR      := manifests
         logs-a logs-b logs-c build image \
         kroxy-image reload-kroxy-image apicurio-proxy-image reload-apicurio-proxy-image \
         kafka-ui-image reload-kafka-ui-image kafka-ui-setup ui-test \
+        mm2-image reload-mm2-image \
         keycloak-setup proxy-setup rbac-test apicurio-setup apicurio-rbac-test \
         setup-external proxy-external-lb-test proxy-external-gateway-test \
         proxy-external-ingress-test help \
         kafkatopic-test json-schema-test durability-test rolling-restart-test \
-        broker-kill-test e2e
+        broker-kill-test mm2-smoke-test e2e
 
 all: setup  ## Full setup: build → image → clusters → deploy
 
@@ -137,6 +139,16 @@ reload-kafka-ui-image: kafka-ui-image  ## Rebuild + reload kafka-ui image into a
 	  kubectl --context kind-$$cluster -n $(NAMESPACE) rollout restart deployment kafka-ui 2>/dev/null || true; \
 	done
 
+mm2-image:  ## Build the MirrorMaker2 Docker image (kafka-ubi + schema-sync-smt JAR)
+	cd $(OPERATOR_DIR)/schema-sync-smt && mvn package -DskipTests -q
+	docker build -f $(OPERATOR_DIR)/mm2-image/Dockerfile -t $(MM2_IMG) $(OPERATOR_DIR)/schema-sync-smt
+
+reload-mm2-image: mm2-image  ## Rebuild + reload mm2 image into all Kind clusters
+	@for cluster in $(CLUSTERS); do \
+	  kind load docker-image $(MM2_IMG) --name $$cluster; \
+	  kubectl --context kind-$$cluster -n $(NAMESPACE) rollout restart deployment mirrormaker2 2>/dev/null || true; \
+	done
+
 kafka-ui-setup:  ## Deploy kafka-ui to all clusters via KafkaUI CR (HA #20; operator filters by targetClusters)
 	$(MAKE) reload-kafka-ui-image
 	@for cluster in $(CLUSTERS); do \
@@ -218,6 +230,9 @@ rolling-restart-test:  ## Rolling broker restart preserves quorum + no message l
 broker-kill-test:  ## Kill a broker; producers/consumers keep going; broker rejoins ISR
 	@chmod +x broker-kill-test.sh && ./broker-kill-test.sh
 
+mm2-smoke-test:  ## MM2 CRD + reconciler smoke (managed→external dummy bootstrap)
+	@chmod +x mm2-smoke-test.sh && ./mm2-smoke-test.sh
+
 # ── Tiered e2e: smoke (fast default) / extended (slow) / full (both) ──────────
 # All tiers assume mcs-setup is already done (it bakes in MetalLB + KafkaProxy
 # on all 3 clusters + kafkasql Apicurio). Run `make teardown && make mcs-setup`
@@ -236,7 +251,8 @@ broker-kill-test:  ## Kill a broker; producers/consumers keep going; broker rejo
 # clients outside K8s hitting any cluster's MetalLB-assigned LB IP. Run
 # `make mcs-proxy-test` manually only on a topology without externalAccess.
 SMOKE_E2E := quorum kafkatopic-test rbac-test apicurio-rbac-test \
-             xml-filter-test json-schema-test kafka-ui-setup ui-test
+             xml-filter-test json-schema-test kafka-ui-setup ui-test \
+             mm2-smoke-test
 EXTENDED_E2E := proxy-external-lb-test durability-test \
                 rolling-restart-test broker-kill-test
 

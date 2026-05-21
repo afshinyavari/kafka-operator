@@ -965,6 +965,169 @@ spec:
 
 ---
 
+## MirrorMaker2
+
+Cross-cluster (and cross-region) Kafka topic + schema replication driven by Apache Kafka's `connect-mirror-maker.sh`. The operator runs MM2 in **dedicated mode** — a single Deployment per CR hosting all replication connectors in one process group; workers form a Connect group via the internal topics on the target.
+
+Each end (`spec.source` / `spec.target`) is independently either a **managed** reference to a `KafkaCluster` CR in this operator (bootstrap resolves to the cluster's Kroxylicious proxy, TLS material is reused from `proxyMtls`) or an **external** descriptor (raw bootstrap + optional TLS/SASL Secrets + optional schema registry). At least one end must be managed — there's nowhere for the operator to run MM2 otherwise.
+
+When both ends carry an Apicurio schema registry (managed clusters with `spec.apicurio`, or external endpoints with `schemaRegistry` set) and `spec.schemaSync.enabled=true`, the operator wires an Apicurio-aware Connect SMT (`ApicurioSchemaTransferSmt`) into the MirrorSourceConnector. Per-record it parses the V3 envelope (`0x00` + 8-byte big-endian globalId), ensures the schema exists in the target registry (recursively for references), and rewrites the envelope with the target's globalId. See [Non-Apicurio topics](#non-apicurio-topics) below for the passthrough safety net.
+
+### spec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `image` | string | no | `mm2:dev` | MM2 worker image. The default `mm2:dev` image is built from `mm2-image/Dockerfile` (apache/kafka:4.0.0 + the schema-sync-smt JAR). |
+| `imagePullPolicy` | string | no | `IfNotPresent` | Standard k8s pull policy. |
+| `replicas` | integer | no | _derived_ | Worker count. When unset: 3 when the target is a multi-cluster managed KafkaCluster (MCS), otherwise 1. |
+| `source` | [Mm2Endpoint](#mm2endpoint) | **yes** | — | The source end of the replication flow. |
+| `target` | [Mm2Endpoint](#mm2endpoint) | **yes** | — | The target end of the replication flow. |
+| `flow` | [Mm2FlowConfig](#mm2flowconfig) | no | — | Replication tuning (topic regexes, RF, tasks). |
+| `schemaSync` | [Mm2SchemaSyncConfig](#mm2schemasyncconfig) | no | — | Schema-mirroring SMT config. When unset or `enabled=false`, MM2 mirrors topic data only. |
+| `mcs.enabled` | bool | no | `false` | When true, the reconciler only runs on K8s clusters listed in `targetClusters`. |
+| `targetClusters` | string[] | no | `[]` | K8s cluster IDs where this MM2 should be reconciled (MCS placement gate). |
+| `clusterRollOrder` | string[] | no | — | Ordered cluster IDs for sequenced Deployment rolls on config/image change. |
+| `resources` / `probes` | — | no | — | Same shapes as the KafkaUI resource/probes fields. |
+
+### Mm2Endpoint
+
+Discriminated union — exactly one of `kafkaClusterRef` or `external` must be set (CEL-validated).
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `kafkaClusterRef.name` | string | Name of a `KafkaCluster` CR in the same namespace (cross-namespace not supported in v1). |
+| `kafkaClusterRef.namespace` | string | Optional override (must match the MM2 CR's namespace in v1). |
+| `external.bootstrap` | string | `host:port[,host:port,...]` for the external Kafka. |
+| `external.tlsSecretRef` | string | PEM-shaped Secret (`tls.crt`/`tls.key`/`ca.crt`) for TLS or mTLS. |
+| `external.sasl` | [Mm2SaslConfig](#mm2saslconfig) | Optional SASL credentials. |
+| `external.schemaRegistry` | [Mm2SchemaRegistryRef](#mm2schemaregistryref) | Optional schema registry on this end. |
+
+### Mm2SaslConfig
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `mechanism` | string | One of `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`, `OAUTHBEARER`. |
+| `secretRef` | string | Secret with `username` + `password` (or OAUTHBEARER token). |
+
+### Mm2SchemaRegistryRef
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `url` | string | Base URL of the schema registry. |
+| `type` | enum | `APICURIO` (v1) or `CONFLUENT` (reserved — rejected at reconcile in v1). |
+| `authSecretRef` | string | Optional Secret with `username`/`password` or `token`. |
+
+### Mm2FlowConfig
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `flowName` | string | `metadata.name` | Suffix on internal topics (`mm2-{configs,offsets,status}.{flow}`). Distinct flow names let bi-directional MM2 CRs coexist. |
+| `topics` / `topicsExclude` | string[] | `[".*"]` / `[]` | Topic regex allow/deny. |
+| `groups` / `groupsExclude` | string[] | `[".*"]` / `[]` | Consumer group regex allow/deny (for checkpoint emission). |
+| `replicationFactor` | integer | `3` | Target-side RF for mirrored topics + internal topics. |
+| `syncTopicAcls` / `syncTopicConfigs` | bool | `false` / `true` | Mirror ACLs / topic configs from source. |
+| `emitHeartbeats` | bool | `true` | Run the MirrorHeartbeatConnector. |
+| `tasksMax` | integer | `4` | Connect `tasks.max`. Distributed across workers. |
+| `additionalProperties` | map | `{}` | Passthrough escape hatch — keys are appended verbatim. |
+
+### Mm2SchemaSyncConfig
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | bool | `false` | Master switch. |
+| `cacheSize` | integer | `10000` | LRU cache size for source→target globalId mappings per worker. |
+| `behaviorOnError` | enum | `WARN` | `FAIL` re-throws (worker dies); `WARN` logs + passes through; `IGNORE` drops. Default WARN for false-positive resilience. |
+| `applyTo` | enum | `VALUE` | `VALUE`, `KEY`, or `BOTH`. |
+| `applyToTopics` | string[] | `[".*"]` | Topic regex allowlist. Tighten in mixed-format clusters. |
+
+### status
+
+| Field | Description |
+|-------|-------------|
+| `phase` | `RECONCILING` / `READY` / `PENDING` / `FAILED` / `SKIPPED`. PENDING means workers haven't come up yet. |
+| `message` | Human-readable detail. |
+| `observedGeneration` | `metadata.generation` last reconciled. |
+| `readyReplicas` | Worker Deployment ready replicas. |
+| `sourceBootstrap` / `targetBootstrap` | Resolved bootstrap URLs (the proxy address for managed refs). |
+| `connectors[]` | Per-connector state (RUNNING/FAILED/PAUSED/UNASSIGNED) — populated from the `mm2-status.{flow}` topic. _v1: empty (placeholder)._ |
+| `conditions[]` | Standard Kubernetes Condition list. |
+
+### Non-Apicurio topics
+
+The schema-sync SMT coexists with topics that don't use Apicurio. Six layers of safety:
+
+1. **Per-record envelope detection.** Only acts when `bytes != null && bytes.length >= 9 && bytes[0] == 0x00`. Plain strings, JSON, XML, and BOM-prefixed text never trip this.
+2. **Tombstones (null values)** pass through untouched.
+3. **`applyTo`** keeps the SMT off the side you didn't intend to process (default `VALUE`).
+4. **`applyToTopics`** allowlist skips non-Apicurio topics entirely.
+5. **`behaviorOnError=WARN` (default)** swallows a source-404 (false positive) or target write failure and passes the record through. `FAIL` is available for strict environments.
+6. **Per-record evaluation** — mixed-format topics (some records schema'd, some not) are handled per record.
+
+Edge case: UTF-16BE-encoded XML without a BOM starts with `0x00 0x3C` — the envelope check fires, source registry returns 404, default behavior logs and passes through.
+
+### Configuration recipes
+
+#### Managed → managed with schema sync (DR within the same operator)
+
+```yaml
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: MirrorMaker2
+metadata:
+  name: prod-to-dr
+  namespace: kafka
+spec:
+  source:
+    kafkaClusterRef:
+      name: prod
+  target:
+    kafkaClusterRef:
+      name: dr
+  flow:
+    topics: ["events\\..*", "orders\\..*"]
+    replicationFactor: 3
+  schemaSync:
+    enabled: true
+```
+
+#### Managed → external (Confluent Cloud, MSK, etc.)
+
+```yaml
+spec:
+  source:
+    kafkaClusterRef:
+      name: my-kafka
+  target:
+    external:
+      bootstrap: SASL_SSL_BROKER.aws.region.amazonaws.com:9098
+      sasl:
+        mechanism: SCRAM-SHA-512
+        secretRef: msk-creds
+```
+
+`tasksMax` distributes across replicas (`tasks.max=4` on 3 replicas → 2/1/1 distribution).
+
+### Internal topics
+
+Three KafkaTopic CRs are created on the target managed cluster, owner-ref'd to the MM2 CR (cascade on delete):
+
+| Topic | Partitions | RF | `cleanup.policy` |
+|---|---|---|---|
+| `mm2-configs.{flow}` | 1 | from `flow.replicationFactor` | `compact` |
+| `mm2-offsets.{flow}` | 25 | from `flow.replicationFactor` | `compact` |
+| `mm2-status.{flow}` | 5 | from `flow.replicationFactor` | `compact` |
+
+When the target is external, these are skipped — the worker auto-creates on first start, or fails loudly if the external broker forbids auto-create.
+
+### Known limitations (v1)
+
+- **Confluent Schema Registry not supported.** `schemaRegistry.type=CONFLUENT` is reserved but rejected at reconcile time. Confluent's wire format uses a 4-byte schema ID, not Apicurio's 8-byte globalId.
+- **No distributed Connect cluster mode.** Forward-compatible — a `spec.connectClusterRef` field will be added when the `KafkaConnect` CRD lands.
+- **Per-connector status is a placeholder.** `status.connectors[]` is empty in v1; full status requires reading the `mm2-status.{flow}` topic via AdminClient. Phase = READY when all worker replicas are ready.
+- **Worker client cert** reuses the operator's `kafka-operator-client-tls`. A future hardening pass will issue per-MM2-CR client certs via the per-pool cert pipeline.
+- **Cross-namespace `kafkaClusterRef`** is rejected; managed source/target must live in the same namespace as the MM2 CR.
+
+---
+
 ## HTTP external access
 
 Shared sub-spec used by `KafkaUI.spec.externalAccess` and `ApicurioRegistry.spec.externalAccess`. (`KafkaProxy.spec.externalAccess` is similar but uses Gateway-API `TLSRoute` + nginx `ssl-passthrough` because the proxy terminates Kafka mTLS end-to-end — see [KafkaProxy](#kafkaproxy).)

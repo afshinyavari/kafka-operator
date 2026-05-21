@@ -537,6 +537,81 @@ explicit embed scenarios.
 
 ---
 
+## MirrorMaker2
+
+The `MirrorMaker2` CRD drives cross-cluster (and cross-region) Kafka replication using Apache Kafka's `connect-mirror-maker.sh`. Schema mirroring is opt-in via a bundled Connect SMT that rewrites the Apicurio V3 envelope's globalId per record so consumers can decode replicated payloads. See [api-reference.md#mirrormaker2](api-reference.md#mirrormaker2) for the full CRD reference.
+
+### Deploying a flow
+
+Build and load the image, then apply a CR:
+
+```bash
+make mm2-image
+for c in kafka-a kafka-b kafka-c; do
+  kind load docker-image mm2:dev --name "$c"
+done
+
+kubectl apply -f - <<'EOF'
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: MirrorMaker2
+metadata: { name: prod-to-dr, namespace: kafka }
+spec:
+  source: { kafkaClusterRef: { name: prod } }
+  target: { kafkaClusterRef: { name: dr   } }
+  flow:
+    topics: ["events\\..*"]
+    replicationFactor: 3
+  schemaSync:
+    enabled: true
+EOF
+```
+
+The reconciler creates one ConfigMap, one Deployment (3 replicas by default when the target is multi-cluster managed), and three KafkaTopic CRs (`mm2-configs.{flow}`, `mm2-offsets.{flow}`, `mm2-status.{flow}`) on the target.
+
+### Observing status
+
+```bash
+kubectl get mm2 prod-to-dr -o yaml | yq '.status'
+kubectl logs deploy/prod-to-dr -f
+```
+
+`.status.phase` cycles through `RECONCILING` → `PENDING` (workers booting) → `READY`. Per-connector telemetry from the `mm2-status.{flow}` topic is a v1 placeholder (always empty); use the worker logs and Connect's internal topics for now.
+
+### Restarting a stuck connector
+
+In dedicated mode there's no REST API. Delete the pod — the remaining replicas absorb the load via the Connect group rebalance, and the pod re-joins on restart:
+
+```bash
+kubectl delete pod -l app=mirrormaker2,app.instance=prod-to-dr --field-selector status.phase=Running --grace-period=10
+```
+
+For a hard reset (clear consumer-group state on the source), delete and recreate the CR with a different `flow.flowName` — that changes the internal topic suffixes so the new flow starts fresh.
+
+### Upgrading the schema-sync SMT
+
+The SMT lives in `schema-sync-smt/`. After editing:
+
+```bash
+make reload-mm2-image   # builds JAR, rebuilds image, kind load, restart MM2 Deployments
+```
+
+The Deployment annotation `kafka.yavari.afshin.se/config-hash` only flips on properties/Secret changes, not image changes — `reload-mm2-image` issues an explicit rollout restart.
+
+### Schema mirroring failure modes
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Worker logs `ApicurioSchemaTransferSmt passthrough … globalId=N … 404` | Source registry has no schema for that globalId (typically a non-Apicurio record on a topic in `applyToTopics`). Default WARN behavior is to pass through. | Tighten `applyToTopics` to exclude the topic, or accept the WARN noise. |
+| Worker fails on every record | `behaviorOnError=FAIL` + a non-Apicurio record snuck through | Switch to `WARN` or narrow `applyToTopics`. |
+| Schemas appear on target but consumers fail | Target registry assigns different globalIds (expected — the SMT rewrites the envelope). If a consumer caches the source globalId out-of-band, it will miss. | Stop bypassing the envelope. The SMT is the only safe way to mirror when both ends use Apicurio. |
+| Reference resolution loops or hits `maxDepth` | Schema graph cycle in source registry (data bug) | Fix the source registry; the cycle guard prevents runaway DFS. |
+
+### Decommissioning
+
+Delete the CR. Owner-refs cascade the Deployment, ConfigMap, and the three internal KafkaTopic CRs. ServiceExport (MCS mode) is cleaned up by `cleanup()`.
+
+---
+
 ## Monitoring
 
 ### Prometheus metrics
