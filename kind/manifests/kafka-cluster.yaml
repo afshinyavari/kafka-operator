@@ -43,6 +43,36 @@ spec:
   # KRaft quorum cannot form.
   controllerTls:
     mutualTls: true
+  # Kroxylicious proxy — mandatory sub-spec as of Wave 4b of the audit. mcs/targetClusters
+  # are derived from `clusters[]` above (size > 1 == MCS-enabled, target = every cluster id).
+  # The operator looks up the broker KafkaNodePool by label and derives brokerNodeIdRanges
+  # from the deterministic node-id scheme (clusterIndex * 1000 + i).
+  proxy:
+    replicas: 1
+    image: kroxy-filters:dev
+    clientPort: 9094
+    rbacRef: kafka-rbac
+    # apicurioRef: apicurio   # disabled: Kroxylicious 0.21 RecordValidation requires one
+    #                           hardcoded apicurioId per rule (not per-topic schema lookup).
+    oidc:
+      # clusterset.local so the proxy in any cluster reaches Keycloak via Submariner.
+      jwksEndpointUrl: http://keycloak.kafka.svc.clusterset.local:8080/realms/demo/protocol/openid-connect/certs
+      groupsClaim: realm_access.roles
+      expectedIssuer: http://keycloak.kafka.svc.clusterset.local:8080/realms/demo
+      expectedAudience: rbac-proxy
+    filters:
+      # XML filter validates produce payloads on `schemaTopic`-registered topics against XSDs.
+      xmlValidation:
+        enabled: true
+        schemaTopic: xml-schemas
+      schemaRegistry:
+        enabled: false
+        schemaType: JSON_SCHEMA
+        topics:
+          - orders-json
+    externalAccess:
+      type: LOADBALANCER
+      # advertisedHostTemplate: ""    # optional override; supports ${clusterId}
 # Uncomment to enable user-facing TLS listeners. Requires per-pod secrets named {podName}-tls
 # with keys tls.crt, tls.key, ca.crt (cert-manager convention).
 #  listeners:

@@ -38,8 +38,8 @@ pass() { echo -e "${GREEN}[PASS]${NC}  $*"; }
 # 1. Patch the KafkaProxy CR onto LOADBALANCER mode (idempotent) + read the assigned IP.
 # ------------------------------------------------------------------------------
 info "Patching ${PROXY_NAME} to externalAccess.type=LOADBALANCER..."
-kubectl --context "${CTX}" -n "${NS}" patch kafkaproxy "${PROXY_NAME}" --type merge \
-  -p '{"spec":{"externalAccess":{"type":"LOADBALANCER"}}}' >/dev/null
+kubectl --context "${CTX}" -n "${NS}" patch kafkacluster my-kafka --type merge \
+  -p '{"spec":{"proxy":{"externalAccess":{"type":"LOADBALANCER"}}}}' >/dev/null
 
 info "Waiting for MetalLB to assign a LoadBalancer ingress IP..."
 LB_IP=""

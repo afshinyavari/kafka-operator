@@ -52,6 +52,11 @@ public class KafkaClusterSpec {
      *  when the proxy Deployment runs only on cluster-a. */
     private KafkaProxyMtlsConfig proxyMtls;
 
+    /** Kroxylicious proxy sub-spec. Mandatory: every KafkaCluster has a proxy. */
+    @ValidationRule(value = "self != null",
+            message = "spec.proxy is required: every KafkaCluster has a Kroxylicious proxy")
+    private KafkaClusterProxySpec proxy;
+
     public String getKafkaImage() { return kafkaImage; }
     public void setKafkaImage(String kafkaImage) { this.kafkaImage = kafkaImage; }
 
@@ -81,4 +86,7 @@ public class KafkaClusterSpec {
 
     public KafkaProxyMtlsConfig getProxyMtls() { return proxyMtls; }
     public void setProxyMtls(KafkaProxyMtlsConfig proxyMtls) { this.proxyMtls = proxyMtls; }
+
+    public KafkaClusterProxySpec getProxy() { return proxy; }
+    public void setProxy(KafkaClusterProxySpec proxy) { this.proxy = proxy; }
 }

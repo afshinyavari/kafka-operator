@@ -10,12 +10,13 @@ import io.fabric8.kubernetes.api.model.apps.Deployment;
 import io.fabric8.kubernetes.api.model.apps.DeploymentStatus;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import se.afshin.yavari.kafka.operator.crd.ClusterEntry;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
-import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
 import se.afshin.yavari.kafka.operator.proxy.ProxyRollTracker;
 
 import java.util.List;
+import java.util.stream.Collectors;
 
 @Path("/operator/upgrade-phase")
 @ApplicationScoped
@@ -36,10 +37,11 @@ public class UpgradePhaseResource {
 
         // CrossClusterRollCoordinator polls this endpoint from a *successor* cluster that
         // wants to roll its own proxy. We flip to ROLLING while THIS cluster's local proxy
-        // Deployment is mid-roll, but only when this cluster is actually a target of the
-        // proxy CR — a SKIPPED proxy on a non-target cluster has no local Deployment to
-        // roll, so it must not falsely gate downstream clusters.
-        boolean anyProxyRolling = client.resources(KafkaProxy.class).inAnyNamespace()
+        // Deployment is mid-roll, but only when this cluster is actually a target — a
+        // non-target cluster has no local Deployment to roll, so it must not falsely gate
+        // downstream clusters. Post-merge the proxy is a sub-spec on KafkaCluster, so we
+        // iterate the cluster CRs and check each one's local Deployment.
+        boolean anyProxyRolling = client.resources(KafkaCluster.class).inAnyNamespace()
                 .list().getItems().stream()
                 .filter(this::isLocalATarget)
                 .anyMatch(this::isLocalDeploymentMidRoll);
@@ -53,18 +55,19 @@ public class UpgradePhaseResource {
         return "{\"clusterId\":\"" + localClusterId + "\",\"upgradePhase\":\"" + phase + "\"}";
     }
 
-    private boolean isLocalATarget(KafkaProxy kp) {
-        var mcs = kp.getSpec().getMcs();
-        if (mcs == null || !mcs.isEnabled()) {
-            return true;
-        }
-        List<String> targets = kp.getSpec().getTargetClusters();
-        return targets != null && targets.contains(localClusterId);
+    private boolean isLocalATarget(KafkaCluster cr) {
+        if (cr.getSpec().getProxy() == null) return false;
+        // No targetClusters field anymore: a cluster is a proxy target iff its id appears
+        // in spec.clusters. An empty/missing clusters list (legacy fixture) defaults to true.
+        List<ClusterEntry> clusters = cr.getSpec().getClusters();
+        if (clusters == null || clusters.isEmpty()) return true;
+        return clusters.stream().map(ClusterEntry::getId)
+                .collect(Collectors.toSet()).contains(localClusterId);
     }
 
-    private boolean isLocalDeploymentMidRoll(KafkaProxy kp) {
-        String name = kp.getMetadata().getName();
-        String ns = kp.getMetadata().getNamespace();
+    private boolean isLocalDeploymentMidRoll(KafkaCluster cr) {
+        String name = cr.getMetadata().getName();
+        String ns = cr.getMetadata().getNamespace();
         Deployment dep = client.apps().deployments().inNamespace(ns).withName(name).get();
         if (dep == null || dep.getStatus() == null) return false;
         DeploymentStatus s = dep.getStatus();

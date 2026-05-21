@@ -34,9 +34,6 @@ rules:
       - kafkatopics
       - kafkatopics/status
       - kafkatopics/finalizers
-      - kafkaproxies
-      - kafkaproxies/status
-      - kafkaproxies/finalizers
       - kafkauis
       - kafkauis/status
       - kafkauis/finalizers

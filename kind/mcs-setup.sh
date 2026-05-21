@@ -309,7 +309,6 @@ for cluster in "${CLUSTERS[@]}"; do
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkanodepools.kafka.yavari.afshin.se-v1.yml" --server-side
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkapodsets.kafka.yavari.afshin.se-v1.yml" --server-side
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkarbacs.kafka.yavari.afshin.se-v1.yml" --server-side
-    kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkaproxies.kafka.yavari.afshin.se-v1.yml" --server-side
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkauis.kafka.yavari.afshin.se-v1.yml" --server-side
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/apicurioregistries.kafka.yavari.afshin.se-v1.yml" --server-side
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkatopics.kafka.yavari.afshin.se-v1.yml" --server-side
@@ -659,15 +658,12 @@ EOF
 done
 ok "MetalLB ready (pools: A=172.19.255.200-210 B=220-230 C=240-250)"
 
-info "Deploying KafkaProxy CR to: ${PROXY_CLUSTERS[*]} (each operator decides whether to deploy locally based on spec.targetClusters)..."
+info "Proxy is a sub-spec of KafkaCluster as of Wave 4b — the rendered kafka-cluster.yaml"
+info "applied earlier already includes spec.proxy. Waiting for proxy READY on each cluster..."
 for cluster in "${PROXY_CLUSTERS[@]}"; do
-  kubectl --context "kind-${cluster}" apply -f "${MANIFESTS_DIR}/kafkaproxy.yaml" --server-side &>/dev/null
-done
-info "Waiting for KafkaProxy to reach READY on each target cluster (up to 5 min)..."
-for cluster in "${PROXY_CLUSTERS[@]}"; do
-  until kubectl --context "kind-${cluster}" -n "${NAMESPACE}" get kafkaproxy kafka-proxy \
-      -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
-  ok "KafkaProxy READY on ${cluster}"
+  until kubectl --context "kind-${cluster}" -n "${NAMESPACE}" get kafkacluster my-kafka \
+      -o jsonpath='{.status.proxy.phase}' 2>/dev/null | grep -q READY; do sleep 5; done
+  ok "Proxy READY on ${cluster}"
 done
 
 echo ""

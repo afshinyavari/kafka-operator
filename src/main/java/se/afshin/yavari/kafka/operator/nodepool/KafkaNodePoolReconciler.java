@@ -37,7 +37,6 @@ import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaListenerSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePoolStatus;
-import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyMtlsConfig;
 import se.afshin.yavari.kafka.operator.crd.MetricsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
@@ -97,21 +96,8 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
                 .build(),
             context);
 
-        // Re-reconcile all pools in the cluster when a proxy changes (mTLS affects all broker pools)
-        var proxyEventSource = new InformerEventSource<>(
-            InformerConfiguration.from(KafkaProxy.class, context)
-                .withSecondaryToPrimaryMapper(proxy -> {
-                    String ns = proxy.getMetadata().getNamespace();
-                    return context.getClient()
-                        .resources(KafkaNodePool.class)
-                        .inNamespace(ns)
-                        .withLabel(KafkaNodePool.CLUSTER_LABEL, proxy.getSpec().getClusterRef())
-                        .list().getItems().stream()
-                        .map(p -> new ResourceID(p.getMetadata().getName(), ns))
-                        .collect(Collectors.toSet());
-                })
-                .build(),
-            context);
+        // KafkaProxy is no longer a CRD; proxy spec changes ride on KafkaCluster events
+        // (the clusterEventSource above already covers that).
 
         // Wake the reconciler when a TLS Secret one of our pools mounts is rotated.
         // The configHash is recomputed each reconcile, so this is the trigger that turns
@@ -123,7 +109,7 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
                 .build(),
             context);
 
-        return EventSourceInitializer.nameEventSources(clusterEventSource, proxyEventSource,
+        return EventSourceInitializer.nameEventSources(clusterEventSource,
                 secretEventSource);
     }
 

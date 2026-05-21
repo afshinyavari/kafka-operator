@@ -19,6 +19,9 @@ public class KafkaClusterStatus {
     private String upgradePhase;
     private Integer currentMetadataVersion;
 
+    /** Proxy sub-status (post-Wave-4 merger of KafkaProxy into KafkaCluster). */
+    private KafkaProxyStatus proxy;
+
     public Phase getPhase() { return phase; }
     public void setPhase(Phase phase) { this.phase = phase; }
 
@@ -42,4 +45,7 @@ public class KafkaClusterStatus {
 
     public Integer getCurrentMetadataVersion() { return currentMetadataVersion; }
     public void setCurrentMetadataVersion(Integer currentMetadataVersion) { this.currentMetadataVersion = currentMetadataVersion; }
+
+    public KafkaProxyStatus getProxy() { return proxy; }
+    public void setProxy(KafkaProxyStatus proxy) { this.proxy = proxy; }
 }

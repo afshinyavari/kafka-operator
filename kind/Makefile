@@ -179,15 +179,14 @@ keycloak-setup:  ## Deploy Keycloak to cluster-a (namespace: kafka) and wait for
 	  pod -l app=keycloak --timeout=300s
 	@echo "Keycloak ready (external=$(KEYCLOAK_EXTERNAL))."
 
-proxy-setup:  ## Apply KafkaProxy + KafkaRbac CRs to cluster-a, wait for READY
+proxy-setup:  ## Apply KafkaRbac CR + wait for the proxy sub-spec on KafkaCluster to be READY
 	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafkarbac.yaml
-	kubectl --context kind-kafka-a apply -f $(MANIFESTS_DIR)/kafkaproxy.yaml
-	@echo "Waiting for KafkaProxy to reach READY phase..."
-	@until kubectl --context kind-kafka-a -n $(NAMESPACE) get kafkaproxy kafka-proxy \
-	    -o jsonpath='{.status.phase}' 2>/dev/null | grep -q READY; do \
+	@echo "Waiting for KafkaCluster.status.proxy.phase to reach READY..."
+	@until kubectl --context kind-kafka-a -n $(NAMESPACE) get kafkacluster my-kafka \
+	    -o jsonpath='{.status.proxy.phase}' 2>/dev/null | grep -q READY; do \
 	  sleep 5; \
 	done
-	@echo "KafkaProxy READY."
+	@echo "Proxy READY."
 
 rbac-test:  ## Run end-to-end RBAC test via SASL/OAUTHBEARER
 	@chmod +x rbac-test.sh && ./rbac-test.sh

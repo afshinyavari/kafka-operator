@@ -21,7 +21,6 @@ import se.afshin.yavari.kafka.operator.crd.KafkaNodePoolSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePoolStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSetStatus;
-import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 
@@ -66,9 +65,6 @@ class KafkaNodePoolReconcilerTest {
     private NonNamespaceOperation nsClusterOp;
     private Resource namedClusterOp;
 
-    // KafkaProxy lookup chain
-    private MixedOperation proxyMixedOp;
-    private NonNamespaceOperation nsProxyOp;
 
     // ConfigMaps chain
     private MixedOperation cmOp;
@@ -109,15 +105,7 @@ class KafkaNodePoolReconcilerTest {
         when(nsClusterOp.withName(CLUSTER_NAME)).thenReturn(namedClusterOp);
         when(namedClusterOp.get()).thenReturn(validCluster());
 
-        // KafkaProxy list lookup (no proxy → no mTLS in basic tests)
-        proxyMixedOp = mock(MixedOperation.class);
-        nsProxyOp = mock(NonNamespaceOperation.class);
-        io.fabric8.kubernetes.api.model.KubernetesResourceList proxyList =
-                mock(io.fabric8.kubernetes.api.model.KubernetesResourceList.class);
-        when(client.resources(KafkaProxy.class)).thenReturn(proxyMixedOp);
-        when(proxyMixedOp.inNamespace(NS)).thenReturn(nsProxyOp);
-        when(nsProxyOp.list()).thenReturn(proxyList);
-        when(proxyList.getItems()).thenReturn(List.of());
+        // KafkaProxy is no longer a CRD as of Wave 4b — proxy spec lives on KafkaCluster.
 
         // ConfigMaps: withName for quorum CM, resource() for pool CM serverSideApply
         cmOp = mock(MixedOperation.class);

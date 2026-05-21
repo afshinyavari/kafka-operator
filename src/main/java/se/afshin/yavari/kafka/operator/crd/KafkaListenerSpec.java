@@ -2,7 +2,7 @@ package se.afshin.yavari.kafka.operator.crd;
 
 import io.fabric8.generator.annotation.ValidationRule;
 
-@ValidationRule(value = "self.externalAccess == null || self.tls != null",
+@ValidationRule(value = "!has(self.externalAccess) || has(self.tls)",
         message = "spec.listeners[].tls is required when externalAccess is set "
                 + "(externally-reachable PLAINTEXT listeners are forbidden).")
 public class KafkaListenerSpec {

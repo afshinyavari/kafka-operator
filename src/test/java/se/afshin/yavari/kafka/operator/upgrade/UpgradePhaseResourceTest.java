@@ -14,26 +14,24 @@ import io.fabric8.kubernetes.client.dsl.NonNamespaceOperation;
 import io.fabric8.kubernetes.client.dsl.RollableScalableResource;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import se.afshin.yavari.kafka.operator.crd.ClusterEntry;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
+import se.afshin.yavari.kafka.operator.crd.KafkaClusterProxySpec;
+import se.afshin.yavari.kafka.operator.crd.KafkaClusterSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
-import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
-import se.afshin.yavari.kafka.operator.crd.McsConfig;
-import se.afshin.yavari.kafka.operator.crd.KafkaProxySpec;
 
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 /**
- * Verifies that the /operator/upgrade-phase endpoint flips to ROLLING while the local
- * KafkaProxy Deployment is mid-roll, but only when this cluster is a target of the proxy CR.
- * CrossClusterRollCoordinator on the successor cluster polls this endpoint to decide whether
- * to start its own proxy roll, so a false ROLLING (e.g. for a SKIPPED proxy) would deadlock
- * the upgrade sequence.
+ * Verifies the /operator/upgrade-phase endpoint after the proxy CRD merge: the resource
+ * now iterates KafkaClusters and checks each one's local Deployment for mid-roll state.
+ * "Target" means the local cluster id appears in spec.clusters[] (multi-cluster) or the
+ * topology is single-cluster.
  */
 @SuppressWarnings({"unchecked", "rawtypes"})
 class UpgradePhaseResourceTest {
@@ -48,11 +46,7 @@ class UpgradePhaseResourceTest {
     private MixedOperation podSetOp;
     private AnyNamespaceOperation podSetList;
 
-    // Proxy chain
-    private MixedOperation proxyOp;
-    private AnyNamespaceOperation proxyList;
-
-    // Cluster chain (for fallback phase)
+    // Cluster chain (where the merged proxy spec lives)
     private MixedOperation clusterOp;
     private AnyNamespaceOperation clusterList;
 
@@ -66,10 +60,7 @@ class UpgradePhaseResourceTest {
     void setup() throws Exception {
         client = mock(KubernetesClient.class);
 
-        // Pre-build empty lists OUTSIDE the when() chain — resourceList() internally calls
-        // mock()/when(), which Mockito doesn't allow during an in-flight stubbing.
         KubernetesResourceList emptyPodSets = resourceList(List.of());
-        KubernetesResourceList emptyProxies = resourceList(List.of());
         KubernetesResourceList emptyClusters = resourceList(List.of());
 
         podSetOp = mock(MixedOperation.class);
@@ -78,19 +69,12 @@ class UpgradePhaseResourceTest {
         when(podSetOp.inAnyNamespace()).thenReturn(podSetList);
         when(podSetList.list()).thenReturn(emptyPodSets);
 
-        proxyOp = mock(MixedOperation.class);
-        proxyList = mock(AnyNamespaceOperation.class);
-        when(client.resources(KafkaProxy.class)).thenReturn(proxyOp);
-        when(proxyOp.inAnyNamespace()).thenReturn(proxyList);
-        when(proxyList.list()).thenReturn(emptyProxies);
-
         clusterOp = mock(MixedOperation.class);
         clusterList = mock(AnyNamespaceOperation.class);
         when(client.resources(KafkaCluster.class)).thenReturn(clusterOp);
         when(clusterOp.inAnyNamespace()).thenReturn(clusterList);
         when(clusterList.list()).thenReturn(emptyClusters);
 
-        // Deployment chain — tests override what .get() returns
         appsApi = mock(AppsAPIGroupDSL.class);
         depOp = mock(MixedOperation.class);
         nsDepOp = mock(NonNamespaceOperation.class);
@@ -113,7 +97,7 @@ class UpgradePhaseResourceTest {
     }
 
     @Test
-    void noProxies_returnsIdle() {
+    void noClusters_returnsIdle() {
         String json = resource.get();
 
         assertThat(json).contains("\"upgradePhase\":\"IDLE\"");
@@ -121,11 +105,9 @@ class UpgradePhaseResourceTest {
     }
 
     @Test
-    void targetProxyReady_returnsIdle() {
-        KafkaProxy kp = mcsProxy(List.of("A", "B"));
-        givenProxies(kp);
-        when(namedDep.get()).thenReturn(deployment(/*generation*/ 1L, /*observed*/ 1L,
-                /*desired*/ 1, /*updated*/ 1, /*available*/ 1));
+    void targetClusterProxyReady_returnsIdle() {
+        givenClusters(clusterWithProxy(List.of("A", "B")));
+        when(namedDep.get()).thenReturn(deployment(1L, 1L, 1, 1, 1));
 
         String json = resource.get();
 
@@ -133,9 +115,8 @@ class UpgradePhaseResourceTest {
     }
 
     @Test
-    void targetProxyMidRoll_returnsRolling() {
-        KafkaProxy kp = mcsProxy(List.of("A", "B"));
-        givenProxies(kp);
+    void targetClusterProxyMidRoll_returnsRolling() {
+        givenClusters(clusterWithProxy(List.of("A", "B")));
         // observedGeneration hasn't caught up — Kubernetes hasn't seen the new spec yet.
         when(namedDep.get()).thenReturn(deployment(2L, 1L, 1, 1, 1));
 
@@ -145,10 +126,8 @@ class UpgradePhaseResourceTest {
     }
 
     @Test
-    void targetProxyMidRoll_unavailableReplicas_returnsRolling() {
-        KafkaProxy kp = mcsProxy(List.of("A", "B"));
-        givenProxies(kp);
-        // Old pod terminated, new one not yet ready.
+    void targetClusterProxyMidRoll_unavailableReplicas_returnsRolling() {
+        givenClusters(clusterWithProxy(List.of("A", "B")));
         when(namedDep.get()).thenReturn(deployment(1L, 1L, 1, 1, 0));
 
         String json = resource.get();
@@ -157,12 +136,10 @@ class UpgradePhaseResourceTest {
     }
 
     @Test
-    void proxyNotTargetingLocalCluster_doesNotFlipPhase() {
-        // mcs.enabled=true and targetClusters=[B] — local cluster A is SKIPPED.
-        // Even if SOME deployment exists with stale generation, this proxy must NOT contribute
-        // to ROLLING, otherwise cluster B (rolling its own proxy) would block cluster C unfairly.
-        KafkaProxy kp = mcsProxy(List.of("B"));
-        givenProxies(kp);
+    void localNotInClustersList_doesNotFlipPhase() {
+        // Multi-cluster topology {B} — local cluster A isn't in spec.clusters, so even a
+        // stale deployment must NOT contribute to ROLLING.
+        givenClusters(clusterWithProxy(List.of("B")));
         when(namedDep.get()).thenReturn(deployment(2L, 1L, 1, 0, 0));
 
         String json = resource.get();
@@ -171,16 +148,9 @@ class UpgradePhaseResourceTest {
     }
 
     @Test
-    void nonMcsProxy_alwaysCountedAsTarget() {
-        // mcs is null/disabled: single-cluster mode, the proxy is local to this cluster by
-        // definition. A mid-roll must surface as ROLLING.
-        KafkaProxy kp = new KafkaProxy();
-        ObjectMeta meta = new ObjectMeta();
-        meta.setName("kafka-proxy");
-        meta.setNamespace(NS);
-        kp.setMetadata(meta);
-        kp.setSpec(new KafkaProxySpec());
-        givenProxies(kp);
+    void singleClusterProxy_alwaysCountedAsTarget() {
+        // Single-cluster topology: A is the only cluster, so a mid-roll surfaces as ROLLING.
+        givenClusters(clusterWithProxy(List.of("A")));
         when(namedDep.get()).thenReturn(deployment(2L, 1L, 1, 0, 0));
 
         String json = resource.get();
@@ -190,33 +160,32 @@ class UpgradePhaseResourceTest {
 
     // --- helpers ---
 
-    private void givenProxies(KafkaProxy... proxies) {
-        KubernetesResourceList list = resourceList(List.of(proxies));
-        when(proxyList.list()).thenReturn(list);
+    private void givenClusters(KafkaCluster... clusters) {
+        KubernetesResourceList list = resourceList(List.of(clusters));
+        when(clusterList.list()).thenReturn(list);
     }
 
-    /** Mocks a KubernetesResourceList with the given items — fabric8 doesn't ship a public
-     *  list class for our CRDs (only generic types), and we don't care about the other
-     *  metadata so a stub mock with just .getItems() is sufficient. */
     private <T extends io.fabric8.kubernetes.api.model.HasMetadata> KubernetesResourceList<T> resourceList(List<T> items) {
         KubernetesResourceList<T> list = mock(KubernetesResourceList.class);
         when(list.getItems()).thenReturn(items);
         return list;
     }
 
-    private KafkaProxy mcsProxy(List<String> targetClusters) {
-        KafkaProxy kp = new KafkaProxy();
+    private KafkaCluster clusterWithProxy(List<String> clusterIds) {
+        KafkaCluster c = new KafkaCluster();
         ObjectMeta meta = new ObjectMeta();
         meta.setName("kafka-proxy");
         meta.setNamespace(NS);
-        kp.setMetadata(meta);
-        KafkaProxySpec spec = new KafkaProxySpec();
-        McsConfig mcs = new McsConfig();
-        mcs.setEnabled(true);
-        spec.setMcs(mcs);
-        spec.setTargetClusters(targetClusters);
-        kp.setSpec(spec);
-        return kp;
+        c.setMetadata(meta);
+        KafkaClusterSpec spec = new KafkaClusterSpec();
+        spec.setClusters(clusterIds.stream().map(id -> {
+            ClusterEntry e = new ClusterEntry();
+            e.setId(id);
+            return e;
+        }).toList());
+        spec.setProxy(new KafkaClusterProxySpec());
+        c.setSpec(spec);
+        return c;
     }
 
     private Deployment deployment(long generation, long observedGeneration,

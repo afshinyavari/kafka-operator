@@ -41,13 +41,14 @@ pass() { echo -e "${GREEN}[PASS]${NC}  $*"; }
 # 1. Patch KafkaProxy → INGRESS mode.
 # ------------------------------------------------------------------------------
 info "Patching ${PROXY_NAME} to externalAccess.type=INGRESS..."
-kubectl --context "${CTX}" -n "${NS}" patch kafkaproxy "${PROXY_NAME}" --type merge -p "
+kubectl --context "${CTX}" -n "${NS}" patch kafkacluster my-kafka --type merge -p "
 spec:
-  externalAccess:
-    type: INGRESS
-    advertisedHostTemplate: \"\${clusterId}.kafka.example.com\"
-    ingress:
-      ingressClassName: nginx
+  proxy:
+    externalAccess:
+      type: INGRESS
+      advertisedHostTemplate: \"\${clusterId}.kafka.example.com\"
+      ingress:
+        ingressClassName: nginx
 " >/dev/null
 
 info "Waiting for operator to render sniHostIdentifiesNode + Ingress..."
@@ -124,8 +125,9 @@ EOF
 # 3. Produce + consume — host overrides point all SNI hostnames at the nginx-ingress LB IP.
 # ------------------------------------------------------------------------------
 ADD_HOSTS=( --add-host "bootstrap.${HOST}:${INGRESS_IP}" )
-NODE_IDS=$(kubectl --context "${CTX}" -n "${NS}" get kafkaproxy "${PROXY_NAME}" \
-  -o jsonpath='{range .spec.brokerNodeIdRanges[*]}{.start}-{.end} {end}')
+# Post-Wave-4b: brokerNodeIdRanges are derived by the orchestrator from spec.clusters
+# (clusterIndex * 1000 + brokerOrdinal). For the kind rig: 1 broker per cluster, 3 clusters.
+NODE_IDS="0-0 1000-1000 2000-2000"
 for range in ${NODE_IDS}; do
   start="${range%-*}"; end="${range#*-}"
   for (( id=start; id<=end; id++ )); do

@@ -2,6 +2,7 @@ package se.afshin.yavari.kafka.operator.cluster;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ConfigMapBuilder;
+import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.javaoperatorsdk.operator.api.config.informer.InformerConfiguration;
 import io.javaoperatorsdk.operator.api.reconciler.Cleaner;
@@ -24,8 +25,13 @@ import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaNodePool;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
+import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
+import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
+import se.afshin.yavari.kafka.operator.proxy.KafkaProxyOrchestrator;
 import se.afshin.yavari.kafka.operator.upgrade.VersionUpgradeController;
+
+import java.util.stream.Collectors;
 
 import java.time.Instant;
 import java.util.List;
@@ -53,6 +59,9 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
     @Inject
     VersionUpgradeController versionUpgradeController;
 
+    @Inject
+    KafkaProxyOrchestrator proxyOrchestrator;
+
     @ConfigProperty(name = "kafka.cluster.id")
     String localClusterId;
 
@@ -69,7 +78,51 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
                 })
                 .build(),
             context);
-        return EventSourceInitializer.nameEventSources(podSetEventSource);
+
+        // Wake on changes to a referenced KafkaRbac (proxy reads rules from it).
+        var rbacEventSource = new InformerEventSource<>(
+            InformerConfiguration.from(KafkaRbac.class, context)
+                .withSecondaryToPrimaryMapper(rbac -> {
+                    String ns = rbac.getMetadata().getNamespace();
+                    String rbacName = rbac.getMetadata().getName();
+                    return context.getClient()
+                            .resources(KafkaCluster.class).inNamespace(ns).list().getItems().stream()
+                            .filter(c -> c.getSpec().getProxy() != null
+                                    && rbacName.equals(c.getSpec().getProxy().getRbacRef()))
+                            .map(c -> new ResourceID(c.getMetadata().getName(), ns))
+                            .collect(Collectors.toSet());
+                })
+                .build(),
+            context);
+
+        // Wake on rotation of any Secret the proxy mounts (cert-manager rotations -> roll).
+        var secretEventSource = new InformerEventSource<>(
+            InformerConfiguration.from(Secret.class, context)
+                .withSecondaryToPrimaryMapper(secret -> {
+                    String ns = secret.getMetadata().getNamespace();
+                    String secretName = secret.getMetadata().getName();
+                    return context.getClient()
+                            .resources(KafkaCluster.class).inNamespace(ns).list().getItems().stream()
+                            .filter(c -> proxyReferencesSecret(c, secretName))
+                            .map(c -> new ResourceID(c.getMetadata().getName(), ns))
+                            .collect(Collectors.toSet());
+                })
+                .build(),
+            context);
+
+        return EventSourceInitializer.nameEventSources(podSetEventSource, rbacEventSource, secretEventSource);
+    }
+
+    static boolean proxyReferencesSecret(KafkaCluster c, String secretName) {
+        if (c.getSpec().getProxy() == null) return false;
+        KafkaProxyTlsConfig tls = c.getSpec().getProxy().getTls();
+        String client = (tls != null && tls.getClientCertSecretRef() != null)
+                ? tls.getClientCertSecretRef()
+                : KafkaProxyOrchestrator.defaultClientCertSecret(KafkaProxyOrchestrator.PROXY_NAME);
+        String server = (tls != null && tls.getServerCertSecretRef() != null)
+                ? tls.getServerCertSecretRef()
+                : KafkaProxyOrchestrator.defaultServerCertSecret(KafkaProxyOrchestrator.PROXY_NAME);
+        return secretName.equals(client) || secretName.equals(server);
     }
 
     @Override
@@ -116,6 +169,12 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
                 .withLabel(KafkaPodSet.CLUSTER_LABEL, name).list().getItems();
         versionUpgradeController.reconcile(cr, allPods, namespace, status);
 
+        // Reconcile the Kroxylicious proxy sub-spec. The orchestrator does the same work the
+        // old KafkaProxyReconciler did, but driven by cr.spec.proxy on the parent cluster.
+        if (cr.getSpec().getProxy() != null) {
+            status.setProxy(proxyOrchestrator.reconcile(cr, namespace, localClusterId));
+        }
+
         cr.setStatus(status);
         if (status.getPhase() != KafkaClusterStatus.Phase.READY) {
             return UpdateControl.patchStatus(cr).rescheduleAfter(java.time.Duration.ofSeconds(15));
@@ -128,6 +187,12 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
         String namespace = cr.getMetadata().getNamespace();
         String name = cr.getMetadata().getName();
         LOG.infof("KafkaCluster %s/%s deleted — ordered shutdown (brokers first, then controllers)", namespace, name);
+
+        // Tear down proxy resources up-front. Most are owner-ref'd to the cluster and would
+        // cascade, but Deployment/ConfigMap explicit delete keeps the order deterministic.
+        if (cr.getSpec().getProxy() != null) {
+            proxyOrchestrator.cleanup(cr, namespace);
+        }
 
         List<KafkaNodePool> pools = client.resources(KafkaNodePool.class)
                 .inNamespace(namespace)
