@@ -67,7 +67,7 @@ public class ApicurioKafkasqlSupport {
         }
 
         KafkaProxyMtlsConfig mtls = cluster.getSpec().getProxyMtls();
-        boolean mtlsEnabled = mtls != null && mtls.isEnabled();
+        boolean mtlsEnabled = mtls != null;
         if (mtlsEnabled) {
             if (storage.getTlsSecretRef() == null || storage.getTlsSecretRef().isBlank()) {
                 return new Result.Failed("storage.tlsSecretRef is required when the referenced "
@@ -131,7 +131,7 @@ public class ApicurioKafkasqlSupport {
         if (cluster == null) return; // nothing to clean
 
         KafkaProxyMtlsConfig mtls = cluster.getSpec().getProxyMtls();
-        if (mtls == null || !mtls.isEnabled() || storage.getPrincipal() == null) return;
+        if (mtls == null || storage.getPrincipal() == null) return;
 
         try {
             aclManager.delete(storage.getClusterRef(), ns,

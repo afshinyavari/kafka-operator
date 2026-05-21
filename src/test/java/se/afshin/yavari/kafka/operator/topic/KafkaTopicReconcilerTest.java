@@ -112,7 +112,6 @@ class KafkaTopicReconcilerTest {
     void reconcile_proxyMtlsEnabled_loadsTlsAndPassesToAdminClient() throws Exception {
         KafkaCluster cluster = cluster("a");
         KafkaProxyMtlsConfig mtls = new KafkaProxyMtlsConfig();
-        mtls.setEnabled(true);
         cluster.getSpec().setProxyMtls(mtls);
         when(clusterResource.get()).thenReturn(cluster);
         when(leader.isLeader(any(), any(), eq(LOCAL_CLUSTER))).thenReturn(true);
@@ -135,7 +134,6 @@ class KafkaTopicReconcilerTest {
     void reconcile_proxyMtlsEnabled_secretMissing_failsFast() throws Exception {
         KafkaCluster cluster = cluster("a");
         KafkaProxyMtlsConfig mtls = new KafkaProxyMtlsConfig();
-        mtls.setEnabled(true);
         cluster.getSpec().setProxyMtls(mtls);
         when(clusterResource.get()).thenReturn(cluster);
         when(leader.isLeader(any(), any(), eq(LOCAL_CLUSTER))).thenReturn(true);

@@ -146,7 +146,7 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
                     && pool.getSpec().getRoles().contains(NodeRole.BROKER);
             KafkaProxyMtlsConfig proxyMtls = cluster.getSpec().getProxyMtls();
             String brokerMtlsSecretName = null;
-            if (isBroker && proxyMtls != null && proxyMtls.isEnabled()) {
+            if (isBroker && proxyMtls != null) {
                 brokerMtlsSecretName = pool.getSpec().getBrokerCertSecretRef() != null
                         ? pool.getSpec().getBrokerCertSecretRef()
                         : pool.getMetadata().getName() + "-broker-tls";
@@ -212,7 +212,7 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         KafkaProxyMtlsConfig proxyMtls = cluster.getSpec().getProxyMtls();
         String proxyName = null;
         String brokerMtlsSecretName = null;
-        if (proxyMtls != null && proxyMtls.isEnabled()) {
+        if (proxyMtls != null) {
             // proxyName drives the authorizer + super.users block, which must apply to
             // controller-only pods as well (ACL writes in KRaft go through the controller).
             proxyName = proxyMtls.getProxyPrincipal();

@@ -143,11 +143,11 @@ echo "══ Consume + validate each payload against the fetched schema ══"
 CONSUMED=$(docker run --rm --network kind -v "${WORK_DIR}:/work" --entrypoint bash "${KAFKA_IMAGE}" -c "
   export KAFKA_HEAP_OPTS='-Xmx128m -Xms64m'
   export KAFKA_OPTS='-Dorg.apache.kafka.sasl.oauthbearer.allowed.urls=file:///work/jwt-token'
-  timeout 30 /opt/kafka/bin/kafka-console-consumer.sh \
+  timeout 90 /opt/kafka/bin/kafka-console-consumer.sh \
     --bootstrap-server '${LB_IP}:9094' \
     --topic '${TOPIC}' \
     --group '${GROUP}' \
-    --from-beginning --timeout-ms 20000 \
+    --from-beginning --timeout-ms 60000 \
     --consumer.config /work/sasl-ssl.properties 2>/dev/null
 ")
 echo "${CONSUMED}" > "${WORK_DIR}/consumed.jsonl"

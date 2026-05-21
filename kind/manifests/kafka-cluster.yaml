@@ -35,8 +35,8 @@ spec:
   # tests). Each broker pool reads "{poolName}-broker-tls" (overridable per pool
   # via KafkaNodePoolSpec.brokerCertSecretRef). proxyPrincipal is the CN the
   # proxy presents and is added to super.users.
+  # Setting proxyMtls at all opts the cluster into mTLS (no separate `enabled` toggle).
   proxyMtls:
-    enabled: true
     proxyPrincipal: kafka-proxy
   # CONTROLLER listener mTLS. Required when proxyMtls is enabled — without it, the
   # broker-side StandardAuthorizer denies ANONYMOUS inter-controller Raft traffic and

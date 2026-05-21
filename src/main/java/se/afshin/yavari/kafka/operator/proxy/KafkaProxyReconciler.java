@@ -214,8 +214,8 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
             brokerNodeIdBase = resolveNodeIdBase(pool.getMetadata().getName(), namespace);
         }
 
-        // Resolve the parent KafkaCluster to confirm spec.proxyMtls.enabled. The operator does
-        // NOT sign certs; it only mounts pre-provisioned secrets (cert-manager / mcs-setup).
+        // Resolve the parent KafkaCluster to confirm spec.proxyMtls is configured. The operator
+        // does NOT sign certs; it only mounts pre-provisioned secrets (cert-manager / mcs-setup).
         KafkaCluster cluster = client.resources(KafkaCluster.class)
                 .inNamespace(namespace).withName(proxy.getSpec().getClusterRef()).get();
         if (cluster == null) {
@@ -224,9 +224,9 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
             return UpdateControl.patchStatus(proxy).rescheduleAfter(Duration.ofSeconds(15));
         }
         KafkaProxyMtlsConfig proxyMtls = cluster.getSpec().getProxyMtls();
-        if (proxyMtls == null || !proxyMtls.isEnabled()) {
+        if (proxyMtls == null) {
             status.setMessage("KafkaCluster '" + cluster.getMetadata().getName()
-                    + "' spec.proxyMtls.enabled must be true");
+                    + "' spec.proxyMtls must be set");
             proxy.setStatus(status);
             return UpdateControl.patchStatus(proxy).rescheduleAfter(Duration.ofSeconds(15));
         }

@@ -514,7 +514,6 @@ class KafkaProxyReconcilerTest {
         c.setMetadata(meta);
         KafkaClusterSpec spec = new KafkaClusterSpec();
         KafkaProxyMtlsConfig pm = new KafkaProxyMtlsConfig();
-        pm.setEnabled(true);
         pm.setProxyPrincipal("kafka-proxy");
         spec.setProxyMtls(pm);
         c.setSpec(spec);

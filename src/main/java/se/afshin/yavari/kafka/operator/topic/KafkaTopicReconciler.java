@@ -72,7 +72,7 @@ public class KafkaTopicReconciler implements Reconciler<KafkaTopic>, Cleaner<Kaf
 
         java.util.Properties sslProps = null;
         var mtls = cluster.getSpec().getProxyMtls();
-        if (mtls != null && mtls.isEnabled()) {
+        if (mtls != null) {
             try {
                 sslProps = tlsLoader.loadAsAdminClientSslProps(ns, mtls.resolveAdminClientCertSecret());
             } catch (AdminClientTlsLoader.TlsSecretNotFoundException e) {
@@ -165,7 +165,7 @@ public class KafkaTopicReconciler implements Reconciler<KafkaTopic>, Cleaner<Kaf
 
         java.util.Properties sslProps = null;
         var mtls = cluster.getSpec().getProxyMtls();
-        if (mtls != null && mtls.isEnabled()) {
+        if (mtls != null) {
             try {
                 sslProps = tlsLoader.loadAsAdminClientSslProps(ns, mtls.resolveAdminClientCertSecret());
             } catch (AdminClientTlsLoader.TlsSecretNotFoundException e) {

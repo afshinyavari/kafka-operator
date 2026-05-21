@@ -298,9 +298,7 @@ class ApicurioKafkasqlSupportTest {
         KafkaClusterSpec spec = new KafkaClusterSpec();
         spec.setClusters(List.of(new ClusterEntry()));
         if (mtlsEnabled) {
-            KafkaProxyMtlsConfig mtls = new KafkaProxyMtlsConfig();
-            mtls.setEnabled(true);
-            spec.setProxyMtls(mtls);
+            spec.setProxyMtls(new KafkaProxyMtlsConfig());
         }
         c.setSpec(spec);
         return c;
