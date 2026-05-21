@@ -174,7 +174,7 @@ class ApicurioRegistryReconcilerTest {
         when(seNamespaced.resource(any(GenericKubernetesResource.class))).thenReturn(serviceExportResource);
 
         // Stubs
-        when(deploymentBuilder.build(any(), anyString(), any(), any(), any())).thenReturn(new Deployment());
+        when(deploymentBuilder.build(any(), anyString(), any(), any(), any(), anyString())).thenReturn(new Deployment());
         when(proxyContainerBuilder.build(any())).thenReturn(new Container());
         when(proxyContainerBuilder.policyVolume(anyString())).thenReturn(new Volume());
         when(proxyServiceBuilder.build(any(), anyString())).thenReturn(new Service());
@@ -192,6 +192,10 @@ class ApicurioRegistryReconcilerTest {
         injectField(reconciler, "externalAccessResolver", externalAccessResolver);
         injectField(reconciler, "httpIngressBuilder", httpIngressBuilder);
         injectField(reconciler, "httpRouteBuilder", httpRouteBuilder);
+        var secretRevisionTracker =
+                mock(se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker.class);
+        when(secretRevisionTracker.revisionsOf(any(), anyString())).thenReturn("");
+        injectField(reconciler, "secretRevisionTracker", secretRevisionTracker);
         injectField(reconciler, "mcsEnabled", false);
         injectField(reconciler, "localClusterId", "A");
     }
@@ -229,7 +233,7 @@ class ApicurioRegistryReconcilerTest {
 
         verify(proxyContainerBuilder).build(any());
         verify(proxyContainerBuilder).policyVolume(RBAC_REF);
-        verify(deploymentBuilder).build(any(), anyString(), any(Container.class), any(Volume.class), any());
+        verify(deploymentBuilder).build(any(), anyString(), any(Container.class), any(Volume.class), any(), anyString());
         verify(proxyServiceBuilder).build(any(), anyString());
         verify(depResource, times(1)).serverSideApply();
         verify(svcResource, times(1)).serverSideApply();
@@ -269,7 +273,7 @@ class ApicurioRegistryReconcilerTest {
 
         assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.FAILED);
         assertThat(registry.getStatus().getMessage()).contains("rbacRef");
-        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any());
+        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any(), anyString());
     }
 
     @Test
@@ -341,7 +345,7 @@ class ApicurioRegistryReconcilerTest {
         assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.RECONCILING);
         assertThat(registry.getStatus().getMessage()).contains("waiting for journal topic");
         assertThat(result.getScheduleDelay()).isPresent();
-        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any());
+        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any(), anyString());
     }
 
     @Test
@@ -354,7 +358,7 @@ class ApicurioRegistryReconcilerTest {
 
         assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.FAILED);
         assertThat(registry.getStatus().getMessage()).contains("clusterRef missing");
-        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any());
+        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any(), anyString());
     }
 
     @Test
@@ -365,7 +369,7 @@ class ApicurioRegistryReconcilerTest {
 
         reconciler.reconcile(registry, context);
 
-        verify(deploymentBuilder).build(any(), anyString(), any(), any(), org.mockito.ArgumentMatchers.eq(cfg));
+        verify(deploymentBuilder).build(any(), anyString(), any(), any(), org.mockito.ArgumentMatchers.eq(cfg), anyString());
     }
 
     @Test
@@ -401,7 +405,7 @@ class ApicurioRegistryReconcilerTest {
 
         assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.SKIPPED);
         assertThat(registry.getStatus().getMessage()).contains("'A'").contains("not a target");
-        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any());
+        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any(), anyString());
         verify(proxyServiceBuilder, never()).build(any(), anyString());
     }
 
@@ -417,7 +421,7 @@ class ApicurioRegistryReconcilerTest {
 
         assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.FAILED);
         assertThat(registry.getStatus().getMessage()).contains("targetClusters");
-        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any());
+        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any(), anyString());
     }
 
     @Test
@@ -429,7 +433,7 @@ class ApicurioRegistryReconcilerTest {
 
         assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.FAILED);
         assertThat(registry.getStatus().getMessage()).contains("targetClusters").contains("mcs.enabled");
-        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any());
+        verify(deploymentBuilder, never()).build(any(), anyString(), any(), any(), any(), anyString());
     }
 
     @Test
@@ -444,7 +448,7 @@ class ApicurioRegistryReconcilerTest {
         reconciler.reconcile(registry, context);
 
         assertThat(registry.getStatus().getPhase()).isEqualTo(ApicurioRegistryStatus.Phase.READY);
-        verify(deploymentBuilder, times(1)).build(any(), anyString(), any(), any(), any());
+        verify(deploymentBuilder, times(1)).build(any(), anyString(), any(), any(), any(), anyString());
         verify(serviceExportResource, times(1)).serverSideApply();
     }
 
@@ -483,6 +487,22 @@ class ApicurioRegistryReconcilerTest {
         status.setLoadBalancer(lb);
         svc.setStatus(status);
         return svc;
+    }
+
+    @Test
+    void referencesSecret_kafkasqlTlsSecretRefMatch() {
+        ApicurioRegistry r = registry(null, null);
+        var storage = new ApicurioRegistryStorageConfig();
+        storage.setTlsSecretRef("registry-tls");
+        r.getSpec().setStorage(storage);
+        assertThat(ApicurioRegistryReconciler.referencesSecret(r, "registry-tls")).isTrue();
+        assertThat(ApicurioRegistryReconciler.referencesSecret(r, "unrelated-tls")).isFalse();
+    }
+
+    @Test
+    void referencesSecret_noStorage_returnsFalse() {
+        ApicurioRegistry r = registry(null, null);
+        assertThat(ApicurioRegistryReconciler.referencesSecret(r, "anything")).isFalse();
     }
 
     private static void injectField(Object target, String name, Object value) throws Exception {

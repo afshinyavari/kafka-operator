@@ -182,6 +182,47 @@ If the ISR/quorum check fails, the reconciler reschedules after 15 seconds and r
 
 ---
 
+## Cert Rotation
+
+The operator does not own or sign TLS material — cert-manager (or whoever) provisions the Kubernetes `Secret`s and rotates them on its own schedule. The operator's job is to roll the affected workloads when those Secrets change, so the running pods stop serving the old in-memory cert.
+
+Two pieces wire this up:
+
+1. **Secret revisions are folded into `configHash`.** Each reconciler computes `configHash` over the rendered config + the `metadata.resourceVersion` of every TLS `Secret` the pod mounts, via `infra/SecretRevisionTracker`. When cert-manager writes a new cert, the resourceVersion bumps, the hash flips, the PodTemplate annotation changes, and Kubernetes rolls the workload.
+
+2. **A `Secret` informer wakes the reconciler.** Each reconciler registers `InformerEventSource<Secret>` with a `secondaryToPrimaryMapper` that returns the CRs whose Secret refs match the changed Secret's name. Without this, a rotation would sit unreconciled until the next periodic resync.
+
+```
+cert-manager rotates Secret S
+  │
+  ▼
+Informer fires → mapper returns matching CRs → reconciler wakes
+  │
+  ▼
+revisionsOf(...) reads S.metadata.resourceVersion (new value)
+configHash = SHA256(config || revisions) → flips
+  │
+  ▼
+PodTemplate annotation changes → standard rolling-update flow above
+```
+
+Per-component Secret coverage:
+
+| Component                  | Tracked Secrets                                                                          |
+|----------------------------|------------------------------------------------------------------------------------------|
+| `KafkaNodePool` (brokers)  | `{poolName}-broker-tls` (mTLS), `{podName}-tls` per replica (controller + listener TLS) |
+| `KafkaProxy`               | `clientCertSecretRef` (default `{name}-client-tls`), `serverCertSecretRef` (default `{name}-server-tls`) |
+| `ApicurioRegistry`         | `storage.tlsSecretRef` (kafkasql client cert)                                            |
+
+The blast radius of a rotation is just the pool / Deployment whose Secret changed. Cross-cluster ordering still follows `KafkaCluster.spec.clusterRollOrder`, so a synchronized rotation across all three MCS clusters still rolls one cluster at a time.
+
+The `configHash` itself is a 12-char truncated SHA-256 emitted on the PodTemplate annotation `kafka.yavari.afshin.se/config-hash`. Two trade-offs worth knowing:
+
+- **Watching all Secrets in the namespace.** The informer has no label filter (cert-manager doesn't set one we own), so the operator caches every Secret in the watched namespace. This is fine at typical scale; revisit if the namespace holds thousands of Secrets.
+- **No dynamic reload.** Kafka 2.4+ supports in-place TLS reload via `incrementalAlterConfigs`, but the operator restarts pods instead. This keeps the rotation path consistent with all other config changes and avoids broker-state edge cases.
+
+---
+
 ## External Access (NodePort)
 
 When a listener has `externalAccess: NODEPORT`, the operator creates one NodePort `Service` per broker pod, with a deterministic `nodePort = nodePortBase + podOrdinal`.

@@ -30,7 +30,7 @@ class ApicurioDeploymentBuilderTest {
     void memBackend_setsNoKafkaEnvVarsAndNoVolumes() {
         ApicurioRegistry r = registry("mem", null);
 
-        Deployment dep = builder.build(r, "ns", null, null, null);
+        Deployment dep = builder.build(r, "ns", null, null, null, "h");
         List<EnvVar> env = registryEnv(dep);
         Map<String, String> envMap = envAsMap(env);
 
@@ -46,7 +46,7 @@ class ApicurioDeploymentBuilderTest {
         storage.setJdbcUrl("jdbc:postgresql://db:5432/registry");
         storage.setJdbcSecretRef("pg-creds");
 
-        Deployment dep = builder.build(r, "ns", null, null, null);
+        Deployment dep = builder.build(r, "ns", null, null, null, "h");
         Map<String, String> envMap = envAsMap(registryEnv(dep));
 
         assertThat(envMap).containsKey("QUARKUS_DATASOURCE_JDBC_URL");
@@ -66,7 +66,7 @@ class ApicurioDeploymentBuilderTest {
                 "kafkasql-journal",
                 null,
                 "kafka-ubi:4.0.0");
-        Deployment dep = builder.build(r, "ns", null, null, cfg);
+        Deployment dep = builder.build(r, "ns", null, null, cfg, "h");
         Map<String, String> envMap = envAsMap(registryEnv(dep));
 
         assertThat(envMap.get("KAFKA_BOOTSTRAP_SERVERS"))
@@ -87,7 +87,7 @@ class ApicurioDeploymentBuilderTest {
                 "kafkasql-journal",
                 "schema-registry-client-tls",
                 "kafka-ubi:4.0.0");
-        Deployment dep = builder.build(r, "ns", null, null, cfg);
+        Deployment dep = builder.build(r, "ns", null, null, cfg, "h");
         Map<String, String> envMap = envAsMap(registryEnv(dep));
 
         // Env vars now point at the PKCS12 emptyDir, not the cert-manager PEM mount

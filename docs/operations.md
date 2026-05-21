@@ -122,6 +122,53 @@ The operator calls `AdminClient.updateFeatures()` and records the result in `sta
 
 ---
 
+## Certificate Rotation
+
+The operator does not provision TLS material — cert-manager (or whatever you use) owns the lifecycle of the Secrets it consumes. When a Secret rotates, the operator notices and rolls the affected workload so the new cert is actually in use.
+
+### What "tracked" means
+
+A Secret is "tracked" by a workload if the operator includes its `metadata.resourceVersion` in the workload's `configHash`. When the Secret changes, the hash flips, the PodTemplate annotation changes, Kubernetes rolls the pods. See `docs/architecture.md` → *Cert Rotation* for the implementation.
+
+| Workload          | Tracked Secrets                                                                          |
+|-------------------|------------------------------------------------------------------------------------------|
+| Kafka brokers     | `{poolName}-broker-tls` (or `KafkaNodePool.spec.brokerCertSecretRef`), `{podName}-tls` per replica when `controllerTls` is set or any listener uses TLS |
+| Kafka controllers | `{podName}-tls` per replica when `controllerTls` is set                                  |
+| Kafka proxy       | `clientCertSecretRef` (default `{name}-client-tls`), `serverCertSecretRef` (default `{name}-server-tls`) |
+| Apicurio Registry | `storage.tlsSecretRef` (kafkasql backend only)                                           |
+
+### Rotation procedure
+
+For cert-manager-issued Secrets the rotation is hands-off — the `Certificate` resource controls renewal cadence, cert-manager writes a new Secret, the operator's Secret informer fires, the workload rolls. For manually-rotated Secrets, just `kubectl apply` the new Secret.
+
+Across an MCS topology, rotations triggered simultaneously on all three clusters still respect `KafkaCluster.spec.clusterRollOrder` — controllers roll one cluster at a time. Brokers roll independently per cluster.
+
+### Verifying a rotation
+
+```bash
+# 1. Find the configHash annotation on a broker pod
+kubectl --context kind-kafka-a -n kafka get pod brokers-a-0 \
+  -o jsonpath='{.metadata.annotations.kafka\.yavari\.afshin\.se/config-hash}'
+
+# 2. Trigger a rotation (cert-manager-issued; or kubectl edit secret if manual)
+kubectl --context kind-kafka-a -n kafka annotate certificate brokers-a-broker-tls \
+  cert-manager.io/issue-temporary-certificate=true --overwrite
+
+# 3. Wait for the pod to roll, then re-read the annotation — it should differ
+```
+
+If the annotation does not change within ~30 seconds, check:
+- The Secret's `metadata.resourceVersion` actually changed (`kubectl describe secret …`).
+- The operator's Secret informer is running (`kubectl logs deploy/kafka-operator | grep -i informer`).
+- The Secret name matches one of the tracked names listed above — typo'd `brokerCertSecretRef` references are silently ignored.
+
+### Out of scope
+
+- Signing certs / running cert-manager. The operator only consumes Secrets that already exist; it does not create CAs, `Certificate` resources, or issue requests. If `Secret` X is missing the reconciler reschedules with a message like `'X' not found in namespace ... — waiting for cert-manager / mcs-setup to create it`.
+- In-place TLS reload via `incrementalAlterConfigs`. Kafka supports it; the operator chooses pod restart for consistency with all other config changes.
+
+---
+
 ## Scaling Brokers
 
 Change `spec.replicas` on the `KafkaNodePool`:

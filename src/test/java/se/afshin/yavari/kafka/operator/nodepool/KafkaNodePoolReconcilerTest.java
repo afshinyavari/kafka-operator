@@ -23,6 +23,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSetStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxy;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
+import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 
 import java.util.List;
 import java.util.Map;
@@ -33,6 +34,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -55,6 +57,7 @@ class KafkaNodePoolReconcilerTest {
     private HeadlessServiceBuilder headlessServiceBuilder;
     private ExternalAccessServiceBuilder externalServiceBuilder;
     private PodTemplateFactory podTemplateFactory;
+    private SecretRevisionTracker secretRevisionTracker;
     private Context<KafkaNodePool> context;
     private KafkaNodePoolReconciler reconciler;
 
@@ -92,6 +95,8 @@ class KafkaNodePoolReconcilerTest {
         headlessServiceBuilder = mock(HeadlessServiceBuilder.class);
         externalServiceBuilder = mock(ExternalAccessServiceBuilder.class);
         podTemplateFactory = mock(PodTemplateFactory.class);
+        secretRevisionTracker = mock(SecretRevisionTracker.class);
+        when(secretRevisionTracker.revisionsOf(any(), anyString())).thenReturn("");
         context = mock(Context.class);
         client = mock(KubernetesClient.class);
 
@@ -180,6 +185,7 @@ class KafkaNodePoolReconcilerTest {
         injectField(reconciler, "headlessServiceBuilder", headlessServiceBuilder);
         injectField(reconciler, "externalServiceBuilder", externalServiceBuilder);
         injectField(reconciler, "podTemplateFactory", podTemplateFactory);
+        injectField(reconciler, "secretRevisionTracker", secretRevisionTracker);
         injectField(reconciler, "localClusterId", LOCAL_CLUSTER_ID);
         injectField(reconciler, "mcsEnabled", false);
     }
@@ -230,6 +236,61 @@ class KafkaNodePoolReconcilerTest {
         verify(poolConfigMapBuilder).build(any(), any(), anyString(), anyInt(), anyString(), anyString(), any());
         verify(podTemplateFactory).build(any(), any(), anyString(), anyInt(), anyString(), anyString(), anyBoolean(), anyBoolean(), any());
         assertThat(pool.getStatus().getPhase()).isEqualTo(KafkaNodePoolStatus.Phase.READY);
+    }
+
+    @Test
+    void reconcile_secretRevisionChange_flipsConfigHash() {
+        KafkaPodSet readyPodSet = readyPodSet(1);
+        when(namedPodSetOp.get()).thenReturn(readyPodSet);
+        KafkaNodePool pool = pool(List.of(NodeRole.BROKER));
+
+        // First reconcile: tracker returns revision "10"
+        when(secretRevisionTracker.revisionsOf(any(), anyString())).thenReturn("brokers-a-broker-tls=10");
+        reconciler.reconcile(pool, context);
+
+        org.mockito.ArgumentCaptor<String> hashCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(podTemplateFactory, atLeastOnce()).build(
+                any(), any(), anyString(), anyInt(), anyString(), hashCaptor.capture(),
+                anyBoolean(), anyBoolean(), any());
+        String hashBefore = hashCaptor.getValue();
+
+        // Second reconcile: same config, different Secret revision -> hash must change
+        when(secretRevisionTracker.revisionsOf(any(), anyString())).thenReturn("brokers-a-broker-tls=11");
+        reconciler.reconcile(pool, context);
+
+        org.mockito.ArgumentCaptor<String> hashAfterCaptor = org.mockito.ArgumentCaptor.forClass(String.class);
+        verify(podTemplateFactory, atLeastOnce()).build(
+                any(), any(), anyString(), anyInt(), anyString(), hashAfterCaptor.capture(),
+                anyBoolean(), anyBoolean(), any());
+        String hashAfter = hashAfterCaptor.getValue();
+
+        assertThat(hashAfter).isNotEqualTo(hashBefore);
+    }
+
+    @Test
+    void mountedTlsSecretNames_brokerWithProxyMtls_includesBrokerAndPerPodSecrets() {
+        KafkaNodePool pool = pool(List.of(NodeRole.BROKER));
+        pool.getSpec().setReplicas(2);
+        KafkaCluster cluster = validCluster();
+        // Trigger needsTls via controllerTls
+        cluster.getSpec().setControllerTls(new se.afshin.yavari.kafka.operator.crd.KafkaListenerTlsConfig());
+
+        List<String> names = KafkaNodePoolReconciler.mountedTlsSecretNames(
+                pool, cluster, true, "brokers-a-broker-tls");
+
+        assertThat(names).containsExactlyInAnyOrder(
+                "brokers-a-broker-tls", "brokers-a-0-tls", "brokers-a-1-tls");
+    }
+
+    @Test
+    void mountedTlsSecretNames_noTls_returnsEmpty() {
+        KafkaNodePool pool = pool(List.of(NodeRole.BROKER));
+        KafkaCluster cluster = validCluster(); // no controllerTls, no listeners
+
+        List<String> names = KafkaNodePoolReconciler.mountedTlsSecretNames(
+                pool, cluster, true, null);
+
+        assertThat(names).isEmpty();
     }
 
     @Test

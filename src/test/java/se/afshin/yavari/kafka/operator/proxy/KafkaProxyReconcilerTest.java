@@ -195,6 +195,10 @@ class KafkaProxyReconcilerTest {
         injectField(reconciler, "ingressBuilder", ingressBuilder);
         injectField(reconciler, "rollCoordinator", rollCoordinator);
         injectField(reconciler, "rollTracker", new ProxyRollTracker());
+        var secretRevisionTracker =
+                mock(se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker.class);
+        when(secretRevisionTracker.revisionsOf(any(), anyString())).thenReturn("");
+        injectField(reconciler, "secretRevisionTracker", secretRevisionTracker);
         injectField(reconciler, "localClusterId", "A");
     }
 
@@ -571,15 +575,10 @@ class KafkaProxyReconcilerTest {
         return d;
     }
 
-    /** Mirror of the reconciler's private sha256() — same 12-char hex truncation. */
-    private static String sha12(String s) {
-        try {
-            byte[] digest = java.security.MessageDigest.getInstance("SHA-256")
-                    .digest(s.getBytes(java.nio.charset.StandardCharsets.UTF_8));
-            return java.util.HexFormat.of().formatHex(digest).substring(0, 12);
-        } catch (java.security.NoSuchAlgorithmException e) {
-            throw new IllegalStateException(e);
-        }
+    /** Mirror of the reconciler's configHash inputs. Tests inject an empty secret-revision
+     *  string (see setup()), so we pass "" as the second part to match. */
+    private static String sha12(String configYaml) {
+        return se.afshin.yavari.kafka.operator.infra.ConfigHasher.sha256(configYaml, "");
     }
 
     private KafkaCluster clusterWithProxyMtlsAndIds(String... ids) {
@@ -611,5 +610,25 @@ class KafkaProxyReconcilerTest {
         var field = target.getClass().getDeclaredField(name);
         field.setAccessible(true);
         field.set(target, value);
+    }
+
+    @Test
+    void referencesSecret_defaultNames_matches() {
+        KafkaProxy proxy = proxy(null);  // no tls override → defaults to {name}-client-tls + -server-tls
+        assertThat(KafkaProxyReconciler.referencesSecret(proxy, PROXY_NAME + "-client-tls")).isTrue();
+        assertThat(KafkaProxyReconciler.referencesSecret(proxy, PROXY_NAME + "-server-tls")).isTrue();
+        assertThat(KafkaProxyReconciler.referencesSecret(proxy, "unrelated-tls")).isFalse();
+    }
+
+    @Test
+    void referencesSecret_overriddenNames_matchesOverride() {
+        KafkaProxy proxy = proxy(null);
+        var tls = new se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig();
+        tls.setClientCertSecretRef("custom-client");
+        tls.setServerCertSecretRef("custom-server");
+        proxy.getSpec().setTls(tls);
+        assertThat(KafkaProxyReconciler.referencesSecret(proxy, "custom-client")).isTrue();
+        assertThat(KafkaProxyReconciler.referencesSecret(proxy, "custom-server")).isTrue();
+        assertThat(KafkaProxyReconciler.referencesSecret(proxy, PROXY_NAME + "-client-tls")).isFalse();
     }
 }

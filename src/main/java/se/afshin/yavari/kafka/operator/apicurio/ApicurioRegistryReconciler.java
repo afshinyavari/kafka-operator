@@ -4,6 +4,7 @@ import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
+import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.Service;
 import io.fabric8.kubernetes.api.model.Volume;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
@@ -33,6 +34,8 @@ import se.afshin.yavari.kafka.operator.crd.McsConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpExternalAccessConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpIngressBuilder;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpRouteBuilder;
+import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
+import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolution;
 import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolver;
 
@@ -56,6 +59,7 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
     @Inject ExternalAccessResolver externalAccessResolver;
     @Inject HttpIngressBuilder httpIngressBuilder;
     @Inject HttpRouteBuilder httpRouteBuilder;
+    @Inject SecretRevisionTracker secretRevisionTracker;
 
     @ConfigProperty(name = "kafka.networking.mcs-enabled")
     boolean mcsEnabled;
@@ -79,7 +83,33 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
                         })
                         .build(),
                 context);
-        return EventSourceInitializer.nameEventSources(rbacEventSource);
+
+        // Wake the reconciler when the kafkasql TLS Secret (the only Secret the registry pod
+        // mounts) is rotated, so configHash flips and the Deployment rolls.
+        var secretEventSource = new InformerEventSource<>(
+                InformerConfiguration.from(Secret.class, context)
+                        .withSecondaryToPrimaryMapper(secret -> {
+                            String ns = secret.getMetadata().getNamespace();
+                            String secretName = secret.getMetadata().getName();
+                            return context.getClient()
+                                    .resources(ApicurioRegistry.class)
+                                    .inNamespace(ns).list().getItems().stream()
+                                    .filter(r -> referencesSecret(r, secretName))
+                                    .map(r -> new ResourceID(r.getMetadata().getName(), ns))
+                                    .collect(Collectors.toSet());
+                        })
+                        .build(),
+                context);
+
+        return EventSourceInitializer.nameEventSources(rbacEventSource, secretEventSource);
+    }
+
+    /** True if the registry's kafkasql storage points at the given Secret. */
+    static boolean referencesSecret(ApicurioRegistry registry, String secretName) {
+        var storage = registry.getSpec().getStorage();
+        return storage != null
+                && secretName != null
+                && secretName.equals(storage.getTlsSecretRef());
     }
 
     @Override
@@ -170,7 +200,18 @@ public class ApicurioRegistryReconciler implements Reconciler<ApicurioRegistry>,
                 policyVolume = proxyContainerBuilder.policyVolume(rbacRef);
             }
 
-            Deployment dep = deploymentBuilder.build(registry, namespace, proxyContainer, policyVolume, kafkasqlConfig);
+            // Fold mounted Secret resourceVersions into a configHash so cert-manager
+            // rotations re-roll the registry. The only Secret mounted into the registry pod
+            // is the kafkasql client TLS secret (mTLS path). The rbac-proxy sidecar doesn't
+            // mount Secrets, so no extra inputs are needed for it.
+            String secretRevisions = "";
+            if (kafkasqlConfig != null && kafkasqlConfig.tlsSecretRef() != null) {
+                secretRevisions = secretRevisionTracker.revisionsOf(
+                        List.of(kafkasqlConfig.tlsSecretRef()), namespace);
+            }
+            String configHash = ConfigHasher.sha256(secretRevisions);
+            Deployment dep = deploymentBuilder.build(registry, namespace, proxyContainer,
+                    policyVolume, kafkasqlConfig, configHash);
             client.apps().deployments().inNamespace(namespace).resource(dep).serverSideApply();
 
             String proxySvcName = name + "-rbac-proxy";

@@ -4,6 +4,7 @@ import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.ConfigMapBuilder;
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
+import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.Service;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -33,13 +34,11 @@ import se.afshin.yavari.kafka.operator.crd.KafkaProxyMtlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
+import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
+import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 import se.afshin.yavari.kafka.operator.rolling.CrossClusterRollCoordinator;
 
-import java.nio.charset.StandardCharsets;
-import java.security.MessageDigest;
-import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
-import java.util.HexFormat;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -60,6 +59,7 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
     @Inject IngressBuilder ingressBuilder;
     @Inject CrossClusterRollCoordinator rollCoordinator;
     @Inject ProxyRollTracker rollTracker;
+    @Inject SecretRevisionTracker secretRevisionTracker;
 
     @ConfigProperty(name = "kafka.cluster.id")
     String localClusterId;
@@ -108,7 +108,37 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
                         .build(),
                 context);
 
-        return EventSourceInitializer.nameEventSources(poolSource, rbacSource, apicurioSource);
+        // Wake the reconciler when a Secret that a KafkaProxy CR references is rotated,
+        // so the configHash flips and the Deployment rolls.
+        var secretSource = new InformerEventSource<>(
+                InformerConfiguration.from(Secret.class, context)
+                        .withSecondaryToPrimaryMapper(secret -> {
+                            String ns = secret.getMetadata().getNamespace();
+                            String secretName = secret.getMetadata().getName();
+                            return context.getClient()
+                                    .resources(KafkaProxy.class).inNamespace(ns).list().getItems().stream()
+                                    .filter(p -> referencesSecret(p, secretName))
+                                    .map(p -> new ResourceID(p.getMetadata().getName(), ns))
+                                    .collect(Collectors.toSet());
+                        })
+                        .build(),
+                context);
+
+        return EventSourceInitializer.nameEventSources(poolSource, rbacSource, apicurioSource,
+                secretSource);
+    }
+
+    /** True if the given KafkaProxy's client-cert or server-cert Secret refs match {@code secretName}.
+     *  Defaults follow the same convention as {@link ProxyDeploymentBuilder}: {@code {name}-client-tls}
+     *  and {@code {name}-server-tls}. */
+    static boolean referencesSecret(KafkaProxy proxy, String secretName) {
+        String name = proxy.getMetadata().getName();
+        KafkaProxyTlsConfig tls = proxy.getSpec().getTls();
+        String client = (tls != null && tls.getClientCertSecretRef() != null)
+                ? tls.getClientCertSecretRef() : name + "-client-tls";
+        String server = (tls != null && tls.getServerCertSecretRef() != null)
+                ? tls.getServerCertSecretRef() : name + "-server-tls";
+        return secretName.equals(client) || secretName.equals(server);
     }
 
     @Override
@@ -250,7 +280,10 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
 
             // Generate and apply config ConfigMap
             String configYaml = configBuilder.build(proxy, brokerCount, brokerNodeIdBase, namespace, mcsEnabled, external);
-            String configHash = sha256(configYaml);
+            // Fold mounted Secret resourceVersions in so cert-manager rotations re-roll the proxy.
+            String secretRevisions = secretRevisionTracker.revisionsOf(
+                    List.of(clientCertSecret, serverCertSecret), namespace);
+            String configHash = ConfigHasher.sha256(configYaml, secretRevisions);
             ConfigMap configMap = new ConfigMapBuilder()
                     .withNewMetadata()
                         .withName(name + "-config")
@@ -454,18 +487,6 @@ public class KafkaProxyReconciler implements Reconciler<KafkaProxy>,
         return !desiredHash.equals(existingHash);
     }
 
-    /** Short SHA-256 of the generated config YAML — used as the PodTemplate annotation that
-     *  drives K8s rolling-updates on config change and as the reconciler's roll-detection
-     *  signal. 12 hex chars is enough collision-resistance for an annotation value. */
-    private static String sha256(String s) {
-        try {
-            MessageDigest md = MessageDigest.getInstance("SHA-256");
-            byte[] digest = md.digest(s.getBytes(StandardCharsets.UTF_8));
-            return HexFormat.of().formatHex(digest).substring(0, 12);
-        } catch (NoSuchAlgorithmException e) {
-            throw new IllegalStateException("SHA-256 not available", e);
-        }
-    }
 
     private int readyReplicas(String deploymentName, String namespace) {
         Deployment dep = client.apps().deployments().inNamespace(namespace)

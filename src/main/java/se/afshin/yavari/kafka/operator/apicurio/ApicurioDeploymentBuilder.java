@@ -28,6 +28,10 @@ public class ApicurioDeploymentBuilder {
     public static final int REGISTRY_PORT = 8080;
     public static final String KAFKASQL_TLS_MOUNT = "/etc/kafka/client-tls";
     public static final String KAFKASQL_PKCS12_MOUNT = "/tmp/pkcs12";
+    /** PodTemplate annotation carrying the operator's configHash. Flipping it triggers a
+     *  rolling restart — the reconciler folds Secret resourceVersions in so cert-manager
+     *  rotations propagate to the Apicurio pod. */
+    public static final String CONFIG_HASH_ANNOTATION = "kafka.yavari.afshin.se/config-hash";
     private static final String KAFKASQL_TLS_VOLUME = "kafkasql-client-tls";
     private static final String KAFKASQL_PKCS12_VOLUME = "kafkasql-pkcs12";
     private static final String KAFKASQL_KEYSTORE_PASS = "changeit";
@@ -47,7 +51,7 @@ public class ApicurioDeploymentBuilder {
 
     public Deployment build(ApicurioRegistry registry, String namespace,
                              Container proxyContainer, Volume policyVolume,
-                             KafkasqlConfig kafkasql) {
+                             KafkasqlConfig kafkasql, String configHash) {
         String name = registry.getMetadata().getName();
         Map<String, String> labels = labels(name);
 
@@ -177,7 +181,12 @@ public class ApicurioDeploymentBuilder {
                         .withMatchLabels(labels)
                     .endSelector()
                     .withNewTemplate()
-                        .withNewMetadata().withLabels(labels).endMetadata()
+                        .withNewMetadata()
+                            .withLabels(labels)
+                            .withAnnotations(configHash != null && !configHash.isBlank()
+                                    ? Map.of(CONFIG_HASH_ANNOTATION, configHash)
+                                    : Map.of())
+                        .endMetadata()
                         .withNewSpec()
                             .withInitContainers(initContainers)
                             .withContainers(containers)

@@ -8,6 +8,7 @@ import io.fabric8.kubernetes.api.model.LabelSelectorBuilder;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
+import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.Service;
 import io.fabric8.kubernetes.api.model.ServiceBuilder;
 import io.fabric8.kubernetes.api.model.policy.v1.PodDisruptionBudget;
@@ -43,9 +44,14 @@ import se.afshin.yavari.kafka.operator.crd.KafkaPodSet;
 import se.afshin.yavari.kafka.operator.crd.KafkaPodSetSpec;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
+import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
+import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 @ControllerConfiguration
@@ -61,6 +67,7 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
     @Inject HeadlessServiceBuilder headlessServiceBuilder;
     @Inject ExternalAccessServiceBuilder externalServiceBuilder;
     @Inject PodTemplateFactory podTemplateFactory;
+    @Inject SecretRevisionTracker secretRevisionTracker;
 
     @ConfigProperty(name = "kafka.cluster.id")
     String localClusterId;
@@ -102,7 +109,50 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
                 .build(),
             context);
 
-        return EventSourceInitializer.nameEventSources(clusterEventSource, proxyEventSource);
+        // Wake the reconciler when a TLS Secret one of our pools mounts is rotated.
+        // The configHash is recomputed each reconcile, so this is the trigger that turns
+        // a cert-manager rotation into a rolling restart. We watch all Secrets and filter
+        // by name in the mapper.
+        var secretEventSource = new InformerEventSource<>(
+            InformerConfiguration.from(Secret.class, context)
+                .withSecondaryToPrimaryMapper(secret -> mapSecretToPools(secret, context.getClient()))
+                .build(),
+            context);
+
+        return EventSourceInitializer.nameEventSources(clusterEventSource, proxyEventSource,
+                secretEventSource);
+    }
+
+    /** For a changed Secret, find every NodePool in the same namespace that mounts it. */
+    static Set<ResourceID> mapSecretToPools(Secret secret,
+                                            io.fabric8.kubernetes.client.KubernetesClient client) {
+        String ns = secret.getMetadata().getNamespace();
+        String secretName = secret.getMetadata().getName();
+        Set<ResourceID> matches = new HashSet<>();
+        for (KafkaNodePool pool : client.resources(KafkaNodePool.class)
+                .inNamespace(ns).list().getItems()) {
+            String clusterName = pool.getMetadata().getLabels() == null
+                    ? null
+                    : pool.getMetadata().getLabels().get(KafkaNodePool.CLUSTER_LABEL);
+            if (clusterName == null) continue;
+            KafkaCluster cluster = client.resources(KafkaCluster.class)
+                    .inNamespace(ns).withName(clusterName).get();
+            if (cluster == null) continue;
+            boolean isBroker = pool.getSpec().getRoles() != null
+                    && pool.getSpec().getRoles().contains(NodeRole.BROKER);
+            KafkaProxyMtlsConfig proxyMtls = cluster.getSpec().getProxyMtls();
+            String brokerMtlsSecretName = null;
+            if (isBroker && proxyMtls != null && proxyMtls.isEnabled()) {
+                brokerMtlsSecretName = pool.getSpec().getBrokerCertSecretRef() != null
+                        ? pool.getSpec().getBrokerCertSecretRef()
+                        : pool.getMetadata().getName() + "-broker-tls";
+            }
+            if (mountedTlsSecretNames(pool, cluster, isBroker, brokerMtlsSecretName)
+                    .contains(secretName)) {
+                matches.add(new ResourceID(pool.getMetadata().getName(), ns));
+            }
+        }
+        return matches;
     }
 
     @Override
@@ -181,9 +231,16 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         // Build and apply per-pool ConfigMap (server.properties + start script)
         ConfigMap poolCm = poolConfigMapBuilder.build(
                 pool, cluster, namespace, clusterIndex, quorumVoters, controllerAddr, proxyName);
-        String configHash = Integer.toHexString(
-                (poolCm.getData().get("server.properties.template")
-                 + poolCm.getData().get("start.sh")).hashCode());
+        // configHash drives the PodTemplate annotation and therefore any rolling restart.
+        // Inputs: the rendered server.properties + start script, plus the resourceVersions of
+        // every TLS Secret the pool's pods mount — so cert-manager rotations roll the pool.
+        List<String> mountedSecrets = mountedTlsSecretNames(pool, cluster,
+                isBroker, brokerMtlsSecretName);
+        String secretRevisions = secretRevisionTracker.revisionsOf(mountedSecrets, namespace);
+        String configHash = ConfigHasher.sha256(
+                poolCm.getData().get("server.properties.template"),
+                poolCm.getData().get("start.sh"),
+                secretRevisions);
         client.configMaps().inNamespace(namespace).resource(poolCm).serverSideApply();
 
         // Build and apply headless Service (+ optional ServiceExport for MCS)
@@ -383,6 +440,30 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
 
     private String podSetName(KafkaNodePool pool) {
         return pool.getMetadata().getName() + "-podset";
+    }
+
+    /** TLS Secret names this pool's pods mount — fed into configHash so cert-manager rotations
+     *  trigger a rolling restart. Mirrors PodTemplateFactory's volume-build logic:
+     *  the shared broker-mTLS secret (when proxyMtls is on for a broker pool), and the
+     *  per-pod {@code {podName}-tls} secrets (when controllerTls is set or any listener has TLS). */
+    static List<String> mountedTlsSecretNames(KafkaNodePool pool, KafkaCluster cluster,
+                                              boolean isBroker, String brokerMtlsSecretName) {
+        List<String> names = new ArrayList<>();
+        if (brokerMtlsSecretName != null) {
+            names.add(brokerMtlsSecretName);
+        }
+        List<KafkaListenerSpec> listeners = cluster.getSpec().getListeners();
+        boolean hasTlsListener = listeners != null
+                && listeners.stream().anyMatch(l -> l.getTls() != null);
+        boolean needsTls = cluster.getSpec().getControllerTls() != null
+                || (isBroker && hasTlsListener);
+        if (needsTls) {
+            String poolName = pool.getMetadata().getName();
+            for (int i = 0; i < pool.getSpec().getReplicas(); i++) {
+                names.add(poolName + "-" + i + "-tls");
+            }
+        }
+        return names;
     }
 
     private List<OwnerReference> poolOwnerRef(KafkaNodePool pool) {
