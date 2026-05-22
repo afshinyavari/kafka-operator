@@ -40,6 +40,15 @@ rules:
       - mirrormaker2s
       - mirrormaker2s/status
       - mirrormaker2s/finalizers
+      - kafkabackups
+      - kafkabackups/status
+      - kafkabackups/finalizers
+      - kafkarestores
+      - kafkarestores/status
+      - kafkarestores/finalizers
+      - kafkabackupvalidations
+      - kafkabackupvalidations/status
+      - kafkabackupvalidations/finalizers
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["nodes"]
@@ -69,6 +78,9 @@ metadata:
 rules:
   - apiGroups: ["apps"]
     resources: ["deployments", "deployments/status"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["pods", "persistentvolumeclaims", "configmaps", "services", "secrets", "serviceaccounts", "events"]
