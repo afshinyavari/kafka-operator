@@ -1,0 +1,44 @@
+---
+import { site } from '../site.config';
+const year = new Date().getFullYear();
+---
+
+<footer class="mt-32 border-t border-border/60 bg-bg-raised/40">
+  <div class="container-site grid grid-cols-2 gap-10 py-16 md:grid-cols-4">
+    <div class="col-span-2 md:col-span-1">
+      <div class="font-display text-xl">{site.brand}</div>
+      <p class="mt-3 max-w-xs text-sm text-fg-muted">{site.tagline}</p>
+    </div>
+    <div>
+      <div class="eyebrow mb-3">Product</div>
+      <ul class="space-y-2 text-sm">
+        <li><a class="text-fg-muted hover:text-fg" href="/why/">Why {site.brand}</a></li>
+        <li><a class="text-fg-muted hover:text-fg" href="/features/multi-cluster-kraft/">Multi-cluster KRaft</a></li>
+        <li><a class="text-fg-muted hover:text-fg" href="/features/proxy-rbac/">Proxy &amp; RBAC</a></li>
+        <li><a class="text-fg-muted hover:text-fg" href="/features/schema-governance/">Schema governance</a></li>
+      </ul>
+    </div>
+    <div>
+      <div class="eyebrow mb-3">Resources</div>
+      <ul class="space-y-2 text-sm">
+        <li><a class="text-fg-muted hover:text-fg" href="/docs/">Documentation</a></li>
+        <li><a class="text-fg-muted hover:text-fg" href="/architecture/">Architecture</a></li>
+        <li><a class="text-fg-muted hover:text-fg" href={site.githubUrl} rel="noopener" target="_blank">GitHub</a></li>
+        <li><a class="text-fg-muted hover:text-fg" href="/llms.txt">llms.txt</a></li>
+      </ul>
+    </div>
+    <div>
+      <div class="eyebrow mb-3">Company</div>
+      <ul class="space-y-2 text-sm">
+        <li><a class="text-fg-muted hover:text-fg" href={`mailto:${site.contactEmail}`}>Contact</a></li>
+        <li><span class="text-fg-muted">Apache 2.0 licensed</span></li>
+      </ul>
+    </div>
+  </div>
+  <div class="border-t border-border/60">
+    <div class="container-site flex h-14 items-center justify-between text-xs text-fg-dim">
+      <span>© {year} {site.brand}. Apache Kafka® is a trademark of the Apache Software Foundation.</span>
+      <span>Built with Astro · zero JS</span>
+    </div>
+  </div>
+</footer>

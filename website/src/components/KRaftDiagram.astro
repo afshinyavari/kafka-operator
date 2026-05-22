@@ -1,0 +1,103 @@
+---
+// Pure CSS-animated 3-cluster KRaft topology. No JS.
+---
+
+<figure class="relative" aria-label="Three Kubernetes clusters joined by a single Kafka KRaft quorum">
+  <svg
+    viewBox="0 0 460 360"
+    role="img"
+    xmlns="http://www.w3.org/2000/svg"
+    class="h-auto w-full"
+  >
+    <defs>
+      <linearGradient id="cluster-fill" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#16181f" />
+        <stop offset="100%" stop-color="#0c0d11" />
+      </linearGradient>
+      <radialGradient id="quorum-glow" cx="50%" cy="50%" r="50%">
+        <stop offset="0%" stop-color="#5b8cff" stop-opacity="0.35" />
+        <stop offset="100%" stop-color="#5b8cff" stop-opacity="0" />
+      </radialGradient>
+      <filter id="soft" x="-20%" y="-20%" width="140%" height="140%">
+        <feGaussianBlur stdDeviation="6" />
+      </filter>
+    </defs>
+
+    <!-- glow -->
+    <circle cx="230" cy="180" r="120" fill="url(#quorum-glow)" />
+
+    <!-- cluster boxes -->
+    <g>
+      <rect x="20" y="40" width="140" height="120" rx="14" fill="url(#cluster-fill)" stroke="#23252b" />
+      <text x="34" y="64" fill="#9ca0a8" font-family="JetBrains Mono, monospace" font-size="11">cluster A</text>
+      <circle cx="60" cy="100" r="12" fill="#0a0a0c" stroke="#5b8cff" stroke-width="1.5" />
+      <text x="56" y="104" fill="#5b8cff" font-family="JetBrains Mono, monospace" font-size="10">C</text>
+      <circle cx="100" cy="100" r="12" fill="#0a0a0c" stroke="#48d597" stroke-width="1.5" />
+      <text x="96" y="104" fill="#48d597" font-family="JetBrains Mono, monospace" font-size="10">B</text>
+      <circle cx="140" cy="100" r="12" fill="#0a0a0c" stroke="#48d597" stroke-width="1.5" />
+      <text x="136" y="104" fill="#48d597" font-family="JetBrains Mono, monospace" font-size="10">B</text>
+      <text x="34" y="146" fill="#6b7077" font-family="JetBrains Mono, monospace" font-size="9">k8s/kafka-a</text>
+    </g>
+
+    <g>
+      <rect x="300" y="40" width="140" height="120" rx="14" fill="url(#cluster-fill)" stroke="#23252b" />
+      <text x="314" y="64" fill="#9ca0a8" font-family="JetBrains Mono, monospace" font-size="11">cluster B</text>
+      <circle cx="340" cy="100" r="12" fill="#0a0a0c" stroke="#5b8cff" stroke-width="1.5" />
+      <text x="336" y="104" fill="#5b8cff" font-family="JetBrains Mono, monospace" font-size="10">C</text>
+      <circle cx="380" cy="100" r="12" fill="#0a0a0c" stroke="#48d597" stroke-width="1.5" />
+      <text x="376" y="104" fill="#48d597" font-family="JetBrains Mono, monospace" font-size="10">B</text>
+      <circle cx="420" cy="100" r="12" fill="#0a0a0c" stroke="#48d597" stroke-width="1.5" />
+      <text x="416" y="104" fill="#48d597" font-family="JetBrains Mono, monospace" font-size="10">B</text>
+      <text x="314" y="146" fill="#6b7077" font-family="JetBrains Mono, monospace" font-size="9">k8s/kafka-b</text>
+    </g>
+
+    <g>
+      <rect x="160" y="220" width="140" height="120" rx="14" fill="url(#cluster-fill)" stroke="#23252b" />
+      <text x="174" y="244" fill="#9ca0a8" font-family="JetBrains Mono, monospace" font-size="11">cluster C</text>
+      <circle cx="200" cy="280" r="12" fill="#0a0a0c" stroke="#5b8cff" stroke-width="1.5" />
+      <text x="196" y="284" fill="#5b8cff" font-family="JetBrains Mono, monospace" font-size="10">C</text>
+      <circle cx="240" cy="280" r="12" fill="#0a0a0c" stroke="#48d597" stroke-width="1.5" />
+      <text x="236" y="284" fill="#48d597" font-family="JetBrains Mono, monospace" font-size="10">B</text>
+      <circle cx="280" cy="280" r="12" fill="#0a0a0c" stroke="#48d597" stroke-width="1.5" />
+      <text x="276" y="284" fill="#48d597" font-family="JetBrains Mono, monospace" font-size="10">B</text>
+      <text x="174" y="326" fill="#6b7077" font-family="JetBrains Mono, monospace" font-size="9">k8s/kafka-c</text>
+    </g>
+
+    <!-- quorum lines (controller C nodes meshed) -->
+    <g stroke="#5b8cff" stroke-width="1.4" stroke-dasharray="4 6" fill="none" class="quorum-lines">
+      <line x1="60" y1="100" x2="340" y2="100" />
+      <line x1="60" y1="100" x2="200" y2="280" />
+      <line x1="340" y1="100" x2="200" y2="280" />
+    </g>
+
+    <!-- center quorum badge -->
+    <g>
+      <rect x="190" y="160" width="80" height="32" rx="16" fill="#0a0a0c" stroke="#5b8cff" />
+      <text x="230" y="180" text-anchor="middle" fill="#5b8cff" font-family="JetBrains Mono, monospace" font-size="11">1 quorum</text>
+    </g>
+
+    <!-- legend -->
+    <g font-family="JetBrains Mono, monospace" font-size="10">
+      <circle cx="30" cy="354" r="5" fill="#0a0a0c" stroke="#5b8cff" />
+      <text x="40" y="358" fill="#9ca0a8">controller</text>
+      <circle cx="120" cy="354" r="5" fill="#0a0a0c" stroke="#48d597" />
+      <text x="130" y="358" fill="#9ca0a8">broker</text>
+    </g>
+  </svg>
+  <style>
+    .quorum-lines line {
+      stroke-dashoffset: 0;
+      animation: flow 3s linear infinite;
+    }
+    @keyframes flow {
+      to {
+        stroke-dashoffset: -20;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .quorum-lines line {
+        animation: none;
+      }
+    }
+  </style>
+</figure>

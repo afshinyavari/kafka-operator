@@ -1,0 +1,144 @@
+---
+import Base from '../../layouts/Base.astro';
+import FeatureHero from '../../components/FeatureHero.astro';
+import Prose from '../../components/Prose.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Callout from '../../components/Callout.astro';
+import CtaSection from '../../components/CtaSection.astro';
+import { site } from '../../site.config';
+
+const title = 'Cruise Control';
+const description = 'LinkedIn Cruise Control bundled as a first-class sub-component. Declarative rebalance proposals with annotation-based approval. Full, add-brokers, remove-brokers, and disk-rebalance modes.';
+
+const faqSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: [
+    { '@type': 'Question', name: 'Does Cruise Control need a separate cluster?', acceptedAnswer: { '@type': 'Answer', text: 'No. It runs as a singleton on the primary Kubernetes cluster of the KafkaCluster spec. The Metrics Reporter agent ships records to a Cruise Control sample-store topic.' } },
+    { '@type': 'Question', name: 'How long does Cruise Control take to warm up?', acceptedAnswer: { '@type': 'Answer', text: 'Roughly 30 minutes of metric collection before optimization proposals stop returning NotEnoughValidWindows. On a fresh cluster, expect a "warming up" status during that window — its normal.' } },
+    { '@type': 'Question', name: 'What happens when I cancel an approved rebalance?', acceptedAnswer: { '@type': 'Answer', text: 'Delete the KafkaRebalance CR. The operator issues a stop_proposal_execution to Cruise Control; partitions already moved stay moved; in-flight moves complete. No corruption.' } },
+    { '@type': 'Question', name: 'Can I run multiple rebalances at once?', acceptedAnswer: { '@type': 'Answer', text: 'Cruise Control runs one optimization at a time. Additional KafkaRebalance CRs queue and execute serially.' } },
+  ],
+};
+
+const ccYaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaCluster
+metadata:
+  name: prod
+spec:
+  cruiseControl:
+    enabled: true
+    capacity:
+      diskMB: 200000
+      cpuCores: 4
+      networkInboundKB: 100000
+      networkOutboundKB: 100000
+    config:
+      anomaly.detection.enable: "true"
+      self.healing.enabled: "false"
+`;
+
+const rebalanceYaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaRebalance
+metadata:
+  name: scale-out-2026-05-23
+  annotations: {}                  # add approval below
+spec:
+  clusterRef: prod
+  mode: ADD_BROKERS                # FULL | ADD_BROKERS | REMOVE_BROKERS | DISK_REBALANCE
+  brokers: [4, 5, 6]               # only required for ADD/REMOVE
+  goals:
+    - RackAwareGoal
+    - ReplicaCapacityGoal
+    - DiskCapacityGoal
+    - NetworkInboundCapacityGoal
+    - NetworkOutboundCapacityGoal
+    - CpuCapacityGoal
+    - ReplicaDistributionGoal
+  concurrentPartitionMovementsPerBroker: 5
+`;
+---
+
+<Base title={title} description={description} schema={faqSchema}>
+  <FeatureHero
+    eyebrow="Cruise Control"
+    title="Rebalancing on the inside of a CR."
+    lede="LinkedIn Cruise Control bundled as a first-class sub-component. Declare a KafkaRebalance, review the proposal, approve with an annotation. The operator drives the rest."
+    meta={['LinkedIn Cruise Control 2.5', 'four rebalance modes', 'annotation-based approval', 'singleton per cluster']}
+  />
+
+  <section class="container-site py-16">
+    <Prose>
+      <h2 id="problem">Rebalancing is the most-deferred operation in Kafka.</h2>
+      <p>
+        Adding a broker is easy. Convincing partitions to actually use the new
+        broker is not — it requires running a partition reassignment plan,
+        which most operators do by hand, once a quarter, with held breath.
+      </p>
+      <p>
+        {site.brand} bundles Cruise Control — LinkedIn's planner-and-executor
+        for partition placement — as part of the operator. Cruise Control
+        watches broker capacity and load via a metrics-reporter agent
+        injected into every broker pool, then generates optimization
+        proposals on demand. The <code>KafkaRebalance</code> CR is your
+        interface to it.
+      </p>
+
+      <h2 id="enable">Enable Cruise Control.</h2>
+      <p>
+        Cruise Control is a sub-spec of <code>KafkaCluster</code>. It runs as
+        a singleton on the primary Kubernetes cluster of the multi-cluster
+        topology.
+      </p>
+    </Prose>
+
+    <div class="my-10 max-w-prose">
+      <CodeBlock code={ccYaml} lang="yaml" filename="kafka-cluster.yaml" />
+    </div>
+
+    <Prose>
+      <h2 id="rebalance">The KafkaRebalance flow.</h2>
+      <p>
+        Four states: <code>PendingProposal</code> → <code>ProposalReady</code>
+        → <code>Rebalancing</code> → <code>Ready</code>. Inspired by Strimzi's
+        rebalance CRD; one important addition.
+      </p>
+      <ol class="ml-4 list-decimal text-fg-muted">
+        <li class="mt-2"><strong class="text-fg">Apply the CR.</strong> Status moves to <code>PendingProposal</code>; the operator calls <code>/optimization_proposals</code> on Cruise Control.</li>
+        <li class="mt-2"><strong class="text-fg">Review the proposal.</strong> When ready, the status shows the proposed partition movements, expected load delta, and rack-awareness check.</li>
+        <li class="mt-2"><strong class="text-fg">Approve.</strong> Annotate the CR: <code>kubectl annotate kafkarebalance ... kafka.yavari.afshin.se/rebalance=approve</code>.</li>
+        <li class="mt-2"><strong class="text-fg">Execute.</strong> The operator submits the proposal and tracks the rebalance to completion. Partition movements are concurrency-bounded.</li>
+      </ol>
+    </Prose>
+
+    <div class="my-10 max-w-prose">
+      <CodeBlock code={rebalanceYaml} lang="yaml" filename="kafka-rebalance.yaml" />
+    </div>
+
+    <Prose>
+      <h2 id="modes">Four rebalance modes.</h2>
+      <ul>
+        <li><strong>FULL</strong> — rebalance all partitions across all brokers. Use for periodic optimisation.</li>
+        <li><strong>ADD_BROKERS</strong> — populate newly added brokers without disturbing existing ones.</li>
+        <li><strong>REMOVE_BROKERS</strong> — drain partitions off brokers you plan to decommission. The pools are not deleted until the CR is <code>Ready</code>.</li>
+        <li><strong>DISK_REBALANCE</strong> — even out disk usage across log directories on the same broker. Useful after JBOD changes.</li>
+      </ul>
+    </Prose>
+
+    <div class="mx-auto max-w-prose">
+      <Callout title="vs. Strimzi (also ships Cruise Control)">
+        <p>
+          Strimzi bundles Cruise Control too — credit where it's due. Where
+          {site.brand} differs:
+        </p>
+        <ul>
+          <li>Multi-cluster aware. Cruise Control runs as a singleton on the primary K8s cluster of the multi-cluster topology; rebalance plans respect broker locality.</li>
+          <li>Compiled from source on a Red Hat UBI base image, not the upstream Java 11 image.</li>
+          <li>Same operator, same CR style, same RBAC story as the rest of the platform.</li>
+        </ul>
+      </Callout>
+    </div>
+  </section>
+
+  <CtaSection />
+</Base>

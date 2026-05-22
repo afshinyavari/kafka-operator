@@ -1,0 +1,42 @@
+[
+  {
+    "q": "How is this different from Strimzi?",
+    "a": "Strimzi is an excellent operator for a single Kubernetes cluster. [BRAND] runs a <strong>single Kafka quorum across 3+ Kubernetes clusters</strong> via the Kubernetes Multi-Cluster Services (MCS) API — works on Submariner, Cilium Cluster Mesh, Istio multi-cluster, or any other compliant implementation. And it ships the platform pieces (Kroxylicious proxy with OIDC RBAC, Apicurio with a JWT-aware RBAC proxy, MirrorMaker2 with schema-id rewriting, Cruise Control, declarative backup/restore, and a UI) as first-class CRDs. With Strimzi you assemble those from 5–6 separate Helm charts."
+  },
+  {
+    "q": "Does it require KRaft? Can I still run ZooKeeper?",
+    "a": "KRaft only, Apache Kafka 4.x and later. ZooKeeper is removed from Kafka 4.0 — there's no ZooKeeper path to support."
+  },
+  {
+    "q": "What does the multi-cluster setup require?",
+    "a": "Three or more Kubernetes clusters joined via any MCS-compatible mesh — <a class=\"text-brand-bright underline\" href=\"https://submariner.io\">Submariner Lighthouse</a>, <a class=\"text-brand-bright underline\" href=\"https://docs.cilium.io/en/stable/network/clustermesh/\">Cilium Cluster Mesh</a>, and <a class=\"text-brand-bright underline\" href=\"https://istio.io/latest/docs/setup/install/multicluster/\">Istio multi-cluster</a> all work. Brokers stay local to a cluster; controllers form one quorum across clusters via <code class=\"font-mono text-brand-bright\">*.svc.clusterset.local</code> — the standard MCS DNS namespace."
+  },
+  {
+    "q": "Can I run it on a single cluster?",
+    "a": "Yes. Multi-cluster is opt-in. A single-cluster deployment is just one entry in <code class=\"font-mono\">spec.clusters[]</code> and needs no MCS mesh at all."
+  },
+  {
+    "q": "Is it open source?",
+    "a": "Apache 2.0, end to end. Operator, Kroxylicious filters, Apicurio RBAC proxy, MM2 schema transfer SMT, backup wrapper, Kafka UI — all in the same repo, all Apache 2.0."
+  },
+  {
+    "q": "Which Kubernetes versions are supported?",
+    "a": "Kubernetes 1.28+. Tested on Kind, GKE, EKS, and AKS."
+  },
+  {
+    "q": "How does the proxy RBAC work?",
+    "a": "Clients hit Kroxylicious instead of brokers directly. A custom filter extracts the JWT, maps <code class=\"font-mono\">realm_access.roles</code> to groups, and authorizes topic/group operations using ACLs you declare in a <code class=\"font-mono\">KafkaRbac</code> CR. The same JWT also authorizes schema-registry artifact access via the Apicurio RBAC proxy."
+  },
+  {
+    "q": "How do you handle rolling restarts safely?",
+    "a": "Every restart goes through an ISR + KRaft quorum check. The operator refuses to restart a broker while partitions are under-replicated or the controller quorum would lose majority. Cross-cluster roll ordering is declared explicitly via <code class=\"font-mono\">spec.clusterRollOrder</code>."
+  },
+  {
+    "q": "What does backup look like?",
+    "a": "A <code class=\"font-mono\">KafkaBackup</code> CR builds a CronJob that streams topic records and consumer offsets (optionally Apicurio schemas) to S3, Azure Blob, GCS, or a PVC. <code class=\"font-mono\">KafkaRestore</code> is an idempotent one-shot Job with point-in-time recovery and topic remapping."
+  },
+  {
+    "q": "Is there a hosted version?",
+    "a": "Not yet. The roadmap is open-core: operator stays Apache 2.0; a hosted control plane is the commercial layer. Talk to us if that's interesting."
+  }
+]

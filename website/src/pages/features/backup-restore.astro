@@ -1,0 +1,171 @@
+---
+import Base from '../../layouts/Base.astro';
+import FeatureHero from '../../components/FeatureHero.astro';
+import Prose from '../../components/Prose.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Callout from '../../components/Callout.astro';
+import CtaSection from '../../components/CtaSection.astro';
+import { site } from '../../site.config';
+
+const title = 'Backup & restore';
+const description = 'Declarative CronJob backups of topic records, consumer offsets, and schemas to S3, Azure Blob, GCS, or PVC. Idempotent point-in-time restore with topic remapping. Continuous validation.';
+
+const faqSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: [
+    { '@type': 'Question', name: 'What is backed up exactly?', acceptedAnswer: { '@type': 'Answer', text: 'Topic records (including headers + timestamps), consumer-group offsets, and optionally Apicurio schemas. Topic configs are reapplied on restore from the spec, not the backup.' } },
+    { '@type': 'Question', name: 'Is the backup consistent?', acceptedAnswer: { '@type': 'Answer', text: 'Per-partition consistency is guaranteed. Cross-partition consistency is best-effort — Kafka has no global snapshot. PITR uses producer timestamps to bound the recovery window.' } },
+    { '@type': 'Question', name: 'How does restore work into a different cluster?', acceptedAnswer: { '@type': 'Answer', text: 'Set the target clusterRef and an optional topicMap. Restore is a one-shot Job that runs an AdminClient + producer pipeline with idempotent semantics — re-running the same Job is a no-op.' } },
+    { '@type': 'Question', name: 'Can backups be encrypted?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. The underlying object store handles encryption-at-rest (SSE-S3, SSE-KMS, CMEK). Client-side encryption via an envelope key is on the roadmap.' } },
+  ],
+};
+
+const backupYaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaBackup
+metadata:
+  name: prod-nightly
+spec:
+  clusterRef: prod
+  schedule: "0 2 * * *"              # 02:00 UTC daily
+  destination: s3://kafka-backups/prod
+  includeSchemas: true
+  topicSelectors:
+    - name: orders
+    - name: invoices
+    - pattern: "events.*"
+  retention:
+    days: 30
+    minBackups: 7
+  resources:
+    requests:
+      cpu: "500m"
+      memory: "1Gi"
+`;
+
+const restoreYaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaRestore
+metadata:
+  name: orders-rollback
+spec:
+  source: s3://kafka-backups/prod/2026-05-22T02-00-00Z
+  targetClusterRef: prod
+  pointInTime: 2026-05-22T05:14:00Z   # records produced before this timestamp
+  topicMap:
+    orders: orders-restored             # remap on restore
+  conflictPolicy: SKIP_EXISTING         # or OVERWRITE / FAIL
+  includeOffsets: true
+  includeSchemas: true
+`;
+
+const validationYaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaBackupValidation
+metadata:
+  name: prod-validation
+spec:
+  backupRef: prod-nightly
+  schedule: "0 4 * * *"              # 04:00 UTC daily
+  checks:
+    - manifestIntegrity              # checksum + envelope
+    - partitionCompleteness          # every offset accounted for
+    - schemaResolution               # every record's schema is fetchable
+`;
+---
+
+<Base title={title} description={description} schema={faqSchema}>
+  <FeatureHero
+    eyebrow="Backup & restore"
+    title="Declarative backup. Real point-in-time restore."
+    lede="A CronJob streams your topics, offsets, and schemas to the object store of your choice. A one-shot Job restores any moment in the retention window into the same cluster — or a different one — idempotently."
+    meta={['S3 · Azure · GCS · PVC', 'point-in-time recovery', 'continuous validation', 'idempotent restore']}
+  />
+
+  <section class="container-site py-16">
+    <Prose>
+      <h2 id="problem">Kafka backup is the gap nobody fills.</h2>
+      <p>
+        Most teams treat Kafka as a streaming buffer and decline to back it
+        up. Then a bad producer ships 30 million corrupt records, or an
+        engineer drops a topic, or compliance asks for a 30-day audit trail of
+        every order, and there is nothing to recover from.
+      </p>
+      <p>
+        {site.brand} ships backup as a first-class CRD. <code>KafkaBackup</code>
+        is a CronJob that streams topic records, consumer-group offsets, and
+        (optionally) Apicurio schemas to S3, Azure Blob, GCS, or a PVC.
+        <code>KafkaRestore</code> is the inverse — an idempotent one-shot
+        restore Job with point-in-time recovery and topic remapping.
+      </p>
+
+      <h2 id="backup">Scheduled backup.</h2>
+    </Prose>
+
+    <div class="my-10 max-w-prose">
+      <CodeBlock code={backupYaml} lang="yaml" filename="kafka-backup.yaml" />
+    </div>
+
+    <Prose>
+      <p>
+        The operator generates a <code>CronJob</code> that wraps the
+        open-source <a href="https://github.com/osodevops/kafka-backup">osodevops/kafka-backup</a>
+        tool — compiled from source onto a Red Hat UBI base image. Each run
+        emits a manifest, per-partition record files, an offset snapshot, and
+        a schema export. Retention is enforced by the operator, not the
+        object store.
+      </p>
+
+      <h2 id="restore">Point-in-time restore.</h2>
+    </Prose>
+
+    <div class="my-10 max-w-prose">
+      <CodeBlock code={restoreYaml} lang="yaml" filename="kafka-restore.yaml" />
+    </div>
+
+    <Prose>
+      <p>
+        The restore Job rebuilds topic configs (idempotent), streams records
+        with original timestamps and headers, and stops at the
+        <code>pointInTime</code> mark. <code>topicMap</code> lets you restore
+        next to existing topics for staged comparison;
+        <code>conflictPolicy</code> controls behaviour when target offsets
+        already exist.
+      </p>
+      <p>
+        Re-running the same <code>KafkaRestore</code> CR is a no-op — every
+        write carries an idempotency key. Restores into a different
+        Kubernetes cluster work exactly the same way; just point
+        <code>targetClusterRef</code> at a different <code>KafkaCluster</code>.
+      </p>
+
+      <h2 id="validation">Continuous validation.</h2>
+      <p>
+        Untested backups are not backups. <code>KafkaBackupValidation</code>
+        is a parallel CronJob that fetches the latest manifest, verifies
+        checksums and partition completeness, and (optionally) resolves every
+        record's schema against the live registry.
+      </p>
+    </Prose>
+
+    <div class="my-10 max-w-prose">
+      <CodeBlock code={validationYaml} lang="yaml" filename="kafka-backup-validation.yaml" />
+    </div>
+
+    <div class="mx-auto max-w-prose">
+      <Callout title="vs. Strimzi / MSK">
+        <p>
+          Strimzi ships no first-party backup. The community answer is "use
+          MirrorMaker to a backup cluster" — which costs another Kafka.
+        </p>
+        <p>
+          AWS MSK provides snapshot-style backups, but no PITR, no topic
+          remapping, no cross-cluster restore, and no schema export.
+        </p>
+        <p>
+          {site.brand} treats backup as YAML.
+        </p>
+      </Callout>
+    </div>
+  </section>
+
+  <CtaSection />
+</Base>

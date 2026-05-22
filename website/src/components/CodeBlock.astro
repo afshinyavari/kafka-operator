@@ -1,0 +1,28 @@
+---
+import { Code } from 'astro:components';
+
+interface Props {
+  code: string;
+  lang?: string;
+  filename?: string;
+}
+
+const { code, lang = 'yaml', filename } = Astro.props;
+---
+
+<div class="overflow-hidden rounded-xl border border-border bg-[#0d0e12]">
+  {filename && (
+    <div class="flex items-center justify-between border-b border-border/70 px-4 py-2.5">
+      <div class="flex items-center gap-2">
+        <span class="h-2.5 w-2.5 rounded-full bg-[#3a3d44]"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-[#3a3d44]"></span>
+        <span class="h-2.5 w-2.5 rounded-full bg-[#3a3d44]"></span>
+        <span class="ml-2 font-mono text-xs text-fg-muted">{filename}</span>
+      </div>
+      <span class="font-mono text-[10px] uppercase tracking-wider text-fg-dim">{lang}</span>
+    </div>
+  )}
+  <div class="overflow-x-auto p-5 text-[13px] leading-relaxed">
+    <Code code={code} lang={lang as any} theme="github-dark-dimmed" wrap />
+  </div>
+</div>

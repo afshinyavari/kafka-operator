@@ -1,0 +1,165 @@
+---
+import Base from '../../layouts/Base.astro';
+import FeatureHero from '../../components/FeatureHero.astro';
+import Prose from '../../components/Prose.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Callout from '../../components/Callout.astro';
+import CtaSection from '../../components/CtaSection.astro';
+import { site } from '../../site.config';
+
+const title = 'Proxy & RBAC';
+const description = 'Built-in Kroxylicious proxy enforces OIDC / JWT-claim-based RBAC at the wire. Topic, consumer-group, and schema-registry ACLs in one CR. mTLS internal; per-user quotas.';
+
+const faqSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: [
+    { '@type': 'Question', name: 'What client auth methods are supported?', acceptedAnswer: { '@type': 'Answer', text: 'SASL/OAUTHBEARER (OIDC + JWT) and mTLS. The proxy also supports SASL/PLAIN handshake synthesis so legacy clients work with a JWT.' } },
+    { '@type': 'Question', name: 'How do groups map to roles?', acceptedAnswer: { '@type': 'Answer', text: 'A custom Kroxylicious filter extracts the JWT, reads realm_access.roles by default (configurable), and intersects against the topic / group / schema rules in the KafkaRbac CR.' } },
+    { '@type': 'Question', name: 'Can I still use plain Kafka ACLs?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. The proxy is opt-in. Without it, clients hit brokers directly and standard ACLs apply.' } },
+    { '@type': 'Question', name: 'Where does the JWT come from?', acceptedAnswer: { '@type': 'Answer', text: 'Any OIDC provider. The reference setup uses Keycloak with realm-based roles; production deployments routinely use Auth0, Azure AD, Okta.' } },
+  ],
+};
+
+const rbacYaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaRbac
+metadata:
+  name: prod-rbac
+spec:
+  groups:
+    - name: orders-team
+      kafka:
+        topics: [orders, orders-dlq]
+        consumerGroups: [orders-svc-*]
+        operations: [PRODUCE, FETCH]
+      schemaRegistry:
+        artifacts: [orders, orders-dlq]
+        actions: [READ, WRITE]
+    - name: schema-admin
+      schemaRegistry:
+        artifacts: ["*"]
+        actions: [READ, WRITE, DELETE]
+  users:
+    - name: app1                # mTLS cert CN
+      kafka:
+        topics: [orders]
+        operations: [PRODUCE]
+      quotas:
+        producerByteRate: 1048576    # 1 MiB/s
+        requestPercentage: 25
+`;
+
+const proxyYaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaCluster
+metadata:
+  name: prod
+spec:
+  proxy:
+    enabled: true
+    replicas: 2
+    clientPort: 9094
+    rbacRef: prod-rbac
+    oidc:
+      jwksEndpointUrl: https://sso.example.com/realms/prod/protocol/openid-connect/certs
+      groupsClaim: realm_access.roles
+    externalAccess:
+      mode: LOADBALANCER          # also: NODEPORT / GATEWAY / INGRESS
+      tlsSecretRef: kafka-public-tls
+`;
+---
+
+<Base title={title} description={description} schema={faqSchema}>
+  <FeatureHero
+    eyebrow="Proxy & RBAC"
+    title="Kafka RBAC that thinks in JWTs, not ACLs."
+    lede="A built-in Kroxylicious proxy intercepts every client request, verifies the JWT, and authorizes against topic, consumer-group, and schema-registry rules declared in a single CR. Same JWT — same identity — across Kafka and the registry."
+    meta={['Kroxylicious 0.21', 'SASL/OAUTHBEARER', 'mTLS internal', 'per-user quotas']}
+  />
+
+  <section class="container-site py-16">
+    <Prose>
+      <h2 id="problem">Native Kafka ACLs are not enough.</h2>
+      <p>
+        Kafka ACLs identify clients by SASL principal or mTLS CN. They don't
+        understand groups, organizational units, or OIDC claims. To run Kafka
+        for more than a handful of teams, you end up with hundreds of ACL
+        entries you maintain by hand and a stack of glue scripts to keep them
+        in sync with your IdP.
+      </p>
+      <p>
+        {site.brand} replaces that with a thin Kroxylicious proxy in front of
+        the brokers. Every client connection presents a JWT (or an mTLS cert).
+        The proxy maps claims to roles, matches roles against a declarative
+        <code>KafkaRbac</code> CR, and forwards the request to the broker — or
+        rejects it.
+      </p>
+
+      <h2 id="how-it-works">How it works.</h2>
+      <p>
+        The proxy is two custom Kroxylicious filters layered over the stock
+        request pipeline:
+      </p>
+      <ul>
+        <li><code>JwtGroupFilter</code> extracts the JWT, validates it against the JWKS endpoint, and pulls <code>realm_access.roles</code> into a per-connection group set.</li>
+        <li><code>GroupAwareAuthorizerService</code> checks every produce / fetch / topic / consumer-group operation against the rules compiled from <code>KafkaRbac</code>.</li>
+      </ul>
+      <p>
+        The same JWT also authorizes schema-registry artifact access via the
+        Apicurio RBAC proxy described in
+        <a href="/features/schema-governance/">Schema governance</a>. One token,
+        two enforcement points, one policy CR.
+      </p>
+    </Prose>
+
+    <div class="my-10 max-w-prose">
+      <CodeBlock code={rbacYaml} lang="yaml" filename="kafka-rbac.yaml" />
+    </div>
+
+    <Prose>
+      <h3>Enable the proxy on the cluster.</h3>
+      <p>
+        The proxy is a sub-spec of <code>KafkaCluster</code>. Reference the
+        <code>KafkaRbac</code> CR, point it at an OIDC issuer, pick an
+        external-access mode.
+      </p>
+    </Prose>
+
+    <div class="my-10 max-w-prose">
+      <CodeBlock code={proxyYaml} lang="yaml" filename="kafka-cluster.yaml" />
+    </div>
+
+    <div class="mx-auto max-w-prose">
+      <Callout title="vs. Strimzi + Keycloak authorizer">
+        <p>
+          Strimzi can plug a Keycloak authorizer into brokers via JAAS — but
+          you write and maintain the policy mapping yourself, you don't get a
+          proxy layer, and you have no path to apply the same identity to the
+          schema registry.
+        </p>
+        <p>
+          {site.brand} ships the proxy, the filter stack, the policy compiler,
+          and the registry integration as one operator. One CR.
+        </p>
+      </Callout>
+    </div>
+
+    <Prose>
+      <h3>Per-user quotas.</h3>
+      <p>
+        Rate-limiting lives in the same CR. Producer / consumer byte rates,
+        request-handler percentage, and controller mutation rate are applied
+        via <code>AdminClient.alterClientQuotas</code> on the primary cluster
+        when the CR reconciles.
+      </p>
+
+      <h3>mTLS by default for everything internal.</h3>
+      <p>
+        Set <code>spec.proxyMtls: true</code> and broker INTERNAL listeners
+        switch to SSL with a shared CA. The operator provisions PEM material
+        and projects it via PKCS12 init containers — no manual cert work.
+      </p>
+    </Prose>
+  </section>
+
+  <CtaSection />
+</Base>

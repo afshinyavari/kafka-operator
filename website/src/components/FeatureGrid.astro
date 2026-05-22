@@ -1,0 +1,81 @@
+---
+const features = [
+  {
+    title: 'Multi-cluster KRaft',
+    body: 'A single KRaft controller quorum spans 3+ Kubernetes clusters via any MCS-compatible mesh — Submariner, Cilium, Istio. Lose a whole cluster — Kafka stays up.',
+    href: '/features/multi-cluster-kraft/',
+    icon: 'M2 12h20M12 2v20M5 5l14 14M5 19L19 5',
+  },
+  {
+    title: 'Proxy &amp; RBAC',
+    body: 'Built-in Kroxylicious proxy enforces OIDC/JWT RBAC at the wire. Topic, group, and schema-registry ACLs in one CR.',
+    href: '/features/proxy-rbac/',
+    icon: 'M12 2L4 6v6c0 5 3.5 9 8 10 4.5-1 8-5 8-10V6l-8-4z',
+  },
+  {
+    title: 'Schema governance',
+    body: 'Apicurio Schema Registry with a JWT-aware RBAC proxy. Per-artifact READ/WRITE/DELETE. Kafka-backed durability.',
+    href: '/features/schema-governance/',
+    icon: 'M4 4h16v4H4zM4 10h16v4H4zM4 16h16v4H4z',
+  },
+  {
+    title: 'Mirror with schemas',
+    body: 'MirrorMaker2 plus a custom Connect SMT that rewrites Apicurio envelope globalIds so consumers decode mirrored payloads.',
+    href: '/features/schema-governance/#mm2',
+    icon: 'M7 4v16M17 4v16M3 8h8M13 16h8',
+  },
+  {
+    title: 'Backup &amp; restore',
+    body: 'Declarative CronJob backups to S3 / Azure / GCS / PVC. Idempotent point-in-time restore with topic remapping.',
+    href: '/features/backup-restore/',
+    icon: 'M12 4v12m0 0l-4-4m4 4l4-4M4 20h16',
+  },
+  {
+    title: 'Cruise Control',
+    body: 'LinkedIn Cruise Control as a first-class sub-component. Rebalance proposals with annotation-driven approval.',
+    href: '/features/cruise-control/',
+    icon: 'M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83',
+  },
+  {
+    title: 'Safe rolling updates',
+    body: 'ISR + quorum gates block restarts until under-replicated partitions clear. Cross-cluster roll ordering is declarative.',
+    href: '/features/multi-cluster-kraft/#rolling',
+    icon: 'M21 12a9 9 0 11-3-6.7M21 4v5h-5',
+  },
+  {
+    title: 'Observability',
+    body: 'Prometheus metrics + ServiceMonitor on every broker, proxy, Cruise Control, and MM2 — opt-in via spec.metricsConfig.',
+    href: '/features/multi-cluster-kraft/#observability',
+    icon: 'M3 3v18h18M7 14l3-3 4 4 5-5',
+  },
+];
+---
+
+<section class="container-site py-24">
+  <div class="mb-14 max-w-2xl">
+    <p class="eyebrow mb-3">Everything in the box</p>
+    <h2 class="font-display text-4xl tracking-tight md:text-5xl">A platform, not just an operator.</h2>
+    <p class="mt-4 text-lg text-fg-muted">
+      Eight pillars, eleven CRDs, one operator. Replace the 6-chart Helm
+      stack you'd otherwise assemble yourself.
+    </p>
+  </div>
+
+  <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+    {features.map((f) => (
+      <a
+        href={f.href}
+        class="group relative overflow-hidden rounded-xl border border-border bg-bg-raised p-6 transition-colors hover:border-border-strong hover:bg-bg-inset"
+      >
+        <svg class="h-6 w-6 text-brand" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d={f.icon} />
+        </svg>
+        <h3 class="mt-4 text-base font-medium text-fg" set:html={f.title} />
+        <p class="mt-2 text-sm text-fg-muted">{f.body}</p>
+        <span class="mt-4 inline-flex items-center text-xs text-brand-bright opacity-0 transition-opacity group-hover:opacity-100">
+          Learn more →
+        </span>
+      </a>
+    ))}
+  </div>
+</section>

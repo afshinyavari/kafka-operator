@@ -1,0 +1,166 @@
+---
+import Base from '../../layouts/Base.astro';
+import FeatureHero from '../../components/FeatureHero.astro';
+import Prose from '../../components/Prose.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Callout from '../../components/Callout.astro';
+import CtaSection from '../../components/CtaSection.astro';
+import { site } from '../../site.config';
+
+const title = 'Schema governance';
+const description = 'Apicurio Schema Registry with a JWT-aware RBAC proxy, Kafka-backed durability, and a Connect SMT that rewrites schema global IDs across mirrored clusters. Schemas that survive the trip.';
+
+const faqSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: [
+    { '@type': 'Question', name: 'Why Apicurio and not Confluent Schema Registry?', acceptedAnswer: { '@type': 'Answer', text: 'Apicurio is Apache 2.0, supports Avro / JSON Schema / Protobuf / OpenAPI / AsyncAPI, and has a clean storage-backend abstraction. Confluent Schema Registry is Confluent-Community-Licensed (source-available, restricted use).' } },
+    { '@type': 'Question', name: 'What is kafkasql storage?', acceptedAnswer: { '@type': 'Answer', text: 'Apicurios native option that stores artifacts in a compacted Kafka topic. Scales with the cluster, no external database. The operator auto-provisions the journal topic and broker ACLs.' } },
+    { '@type': 'Question', name: 'Do clients have to be schema-aware?', acceptedAnswer: { '@type': 'Answer', text: 'For mirroring, yes — the rewrite SMT depends on the Apicurio V3 envelope format on the wire. Existing Avro + Apicurio clients already produce it.' } },
+    { '@type': 'Question', name: 'Can I use existing Apicurio policies?', acceptedAnswer: { '@type': 'Answer', text: 'Apicurio role-based access still works directly. The RBAC proxy adds per-artifact ACLs and JWT-claim binding on top.' } },
+  ],
+};
+
+const apicurioYaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: ApicurioRegistry
+metadata:
+  name: prod-registry
+spec:
+  clusterRef: prod
+  storage:
+    type: kafkasql              # mem | postgresql | kafkasql
+  rbacProxy:
+    enabled: true
+    rbacRef: prod-rbac          # same KafkaRbac CR as the proxy
+    oidc:
+      jwksEndpointUrl: https://sso.example.com/realms/prod/protocol/openid-connect/certs
+      groupsClaim: realm_access.roles
+  externalAccess:
+    mode: INGRESS
+    host: schemas.example.com
+    tlsSecretRef: schemas-tls
+`;
+
+const mm2Yaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: MirrorMaker2
+metadata:
+  name: prod-eu-to-us
+spec:
+  source:
+    clusterRef: prod-eu
+    schemaRegistry:
+      url: https://schemas-eu.example.com
+      authSecretRef: mm2-eu-oidc        # OAuth2 client-credentials
+  target:
+    clusterRef: prod-us
+    schemaRegistry:
+      url: https://schemas-us.example.com
+      authSecretRef: mm2-us-oidc
+  schemaTransfer:
+    enabled: true                       # rewrites V3 envelope globalIds per record
+    cacheSize: 10000                    # LRU lookup cache
+  topics:
+    - orders
+    - invoices
+    - inventory-events
+`;
+---
+
+<Base title={title} description={description} schema={faqSchema}>
+  <FeatureHero
+    eyebrow="Schema governance"
+    title="Schemas that survive the trip."
+    lede="Apicurio Schema Registry with a JWT-aware RBAC proxy and Kafka-backed durability — plus a Kafka Connect SMT that rewrites schema global IDs as records mirror across clusters."
+    meta={['Apicurio 3.x', 'kafkasql / postgres / mem', 'V3 envelope-aware MM2', 'per-artifact RBAC']}
+  />
+
+  <section class="container-site py-16">
+    <Prose>
+      <h2 id="problem">Two problems Confluent left for you.</h2>
+      <p>
+        Most teams adopting a schema registry hit the same two walls. First:
+        <strong>nobody enforces who can write which schemas</strong>. Apicurio
+        and Confluent Schema Registry both expose REST APIs that any
+        authenticated principal can call. Second: <strong>mirroring breaks
+        schemas</strong>. The schema-id in the record header is local to the
+        source registry; the target registry assigns different ids; consumers
+        decode garbage.
+      </p>
+      <p>
+        {site.brand} fixes both. The same JWT-claim-based RBAC that gates
+        Kafka topics gates schema-registry artifacts. And a custom Kafka
+        Connect Single-Message-Transform translates Apicurio V3 envelope
+        global IDs as records flow through MirrorMaker2.
+      </p>
+
+      <h2 id="rbac-proxy">RBAC at the registry.</h2>
+      <p>
+        Apicurio runs behind an HTTP proxy written specifically for this
+        purpose. The proxy:
+      </p>
+      <ul>
+        <li>Validates the bearer token against the OIDC issuer's JWKS.</li>
+        <li>Pulls <code>realm_access.roles</code> (configurable claim) into a group set.</li>
+        <li>Matches the request path against per-artifact ACLs in the <code>KafkaRbac</code> CR.</li>
+        <li>Hot-reloads policy from a watched ConfigMap — no restart for ACL changes.</li>
+      </ul>
+      <p>
+        Artifact-level <code>READ</code> / <code>WRITE</code> / <code>DELETE</code>
+        actions, glob patterns, and the same wildcard semantics as the Kafka
+        side.
+      </p>
+    </Prose>
+
+    <div class="my-10 max-w-prose">
+      <CodeBlock code={apicurioYaml} lang="yaml" filename="apicurio.yaml" />
+    </div>
+
+    <Prose>
+      <h2 id="storage">Storage modes.</h2>
+      <p>
+        <code>kafkasql</code> backs artifacts with a compacted Kafka topic
+        — durability comes from the cluster you're already running, scales
+        with broker capacity, no external database to operate. The operator
+        provisions the journal topic and broker ACLs automatically.
+        <code>postgresql</code> and <code>mem</code> are also supported.
+      </p>
+
+      <h2 id="mm2">MirrorMaker2 that actually mirrors schemas.</h2>
+      <p>
+        The Apicurio V3 record envelope encodes <em>global IDs</em> — registry-
+        local integers — directly in the message payload. Mirror a record
+        from registry A to registry B and the global ID points to the wrong
+        schema (or none). Consumers fail to deserialize.
+      </p>
+      <p>
+        <code>ApicurioSchemaTransferSmt</code> intercepts every record on the
+        Connect worker, parses the envelope, fetches the source schema (with
+        recursive reference resolution), looks up or creates an equivalent
+        schema in the target registry, and rewrites the global ID in place.
+        An LRU cache keeps the hot path off the network.
+      </p>
+    </Prose>
+
+    <div class="my-10 max-w-prose">
+      <CodeBlock code={mm2Yaml} lang="yaml" filename="mm2.yaml" />
+    </div>
+
+    <div class="mx-auto max-w-prose">
+      <Callout title="vs. Confluent Replicator / Strimzi MM2">
+        <p>
+          Confluent Replicator does schema migration via Confluent Schema
+          Registry's exporter — and only for Avro. Strimzi MM2 does no schema
+          rewriting at all; you coordinate IDs manually or rely on schema
+          context features that aren't widely supported.
+        </p>
+        <p>
+          {site.brand}'s SMT works for Avro, JSON Schema, and Protobuf via
+          Apicurio, with reference resolution included. It's open source and
+          lives in the same operator repo.
+        </p>
+      </Callout>
+    </div>
+  </section>
+
+  <CtaSection />
+</Base>

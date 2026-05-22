@@ -1,0 +1,77 @@
+---
+import { site } from '../site.config';
+import CodeBlock from './CodeBlock.astro';
+import KRaftDiagram from './KRaftDiagram.astro';
+
+const heroYaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaCluster
+metadata:
+  name: prod
+spec:
+  kafkaVersion: "4.0"
+  clusters:
+    - id: A   # spans 3 Kubernetes clusters
+    - id: B   # one KRaft quorum
+    - id: C   # zero downtime rolling
+  proxy:
+    enabled: true        # Kroxylicious + OIDC RBAC
+  schemaRegistry:
+    enabled: true        # Apicurio + RBAC proxy
+  backup:
+    schedule: "0 */6 * * *"
+    destination: s3://kafka-backups/prod
+`;
+---
+
+<section class="relative overflow-hidden border-b border-border/40">
+  <!-- ambient background -->
+  <div aria-hidden="true" class="pointer-events-none absolute inset-0 -z-10">
+    <div class="absolute -top-40 left-1/2 h-[600px] w-[1100px] -translate-x-1/2 rounded-full bg-brand/[0.08] blur-[120px]"></div>
+    <div class="absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(91,140,255,0.06),transparent_60%)]"></div>
+  </div>
+
+  <div class="container-site grid grid-cols-1 items-center gap-12 py-20 md:py-28 lg:grid-cols-2 lg:gap-16">
+    <div>
+      <div class="mb-5 inline-flex items-center gap-2 rounded-full border border-border bg-bg-raised/60 px-3 py-1 text-xs text-fg-muted">
+        <span class="h-1.5 w-1.5 rounded-full bg-signal-ok"></span>
+        Apache 2.0 · Apache Kafka 4.x · KRaft only
+      </div>
+
+      <h1 class="font-display text-5xl leading-[1.05] tracking-tight md:text-6xl lg:text-7xl">
+        <span class="block gradient-text">One Kafka.</span>
+        <span class="block">Many clusters.</span>
+        <span class="block text-brand-bright">Zero glue code.</span>
+      </h1>
+
+      <p class="mt-6 max-w-xl text-lg text-fg-muted">
+        {site.brand} runs Apache Kafka 4.x across 3+ Kubernetes clusters with one
+        KRaft quorum — and ships the full platform: OIDC RBAC, schema governance,
+        cross-cluster mirroring, backup, rebalancing, and a UI. All declarative.
+      </p>
+
+      <div class="mt-8 flex flex-wrap items-center gap-3">
+        <a href="#get-started" class="btn-primary">Get started in 90 seconds</a>
+        <a href="/why/" class="btn-ghost">Why not Strimzi?</a>
+      </div>
+
+      <div class="mt-10 grid grid-cols-2 gap-x-8 gap-y-3 text-sm text-fg-muted md:grid-cols-3">
+        <div class="flex items-center gap-2"><span class="text-brand">▸</span> 11 CRDs, one operator</div>
+        <div class="flex items-center gap-2"><span class="text-brand">▸</span> mTLS + OIDC by default</div>
+        <div class="flex items-center gap-2"><span class="text-brand">▸</span> Multi-cluster KRaft</div>
+        <div class="flex items-center gap-2"><span class="text-brand">▸</span> Apicurio schema RBAC</div>
+        <div class="flex items-center gap-2"><span class="text-brand">▸</span> Backup &amp; restore</div>
+        <div class="flex items-center gap-2"><span class="text-brand">▸</span> Cruise Control built-in</div>
+      </div>
+    </div>
+
+    <div class="relative">
+      <div class="absolute -inset-4 rounded-2xl bg-gradient-to-tr from-brand/20 via-transparent to-brand/10 blur-2xl"></div>
+      <div class="relative grid gap-4">
+        <CodeBlock code={heroYaml} lang="yaml" filename="kafka-cluster.yaml" />
+        <div class="rounded-xl border border-border bg-bg-raised/60 p-5">
+          <KRaftDiagram />
+        </div>
+      </div>
+    </div>
+  </div>
+</section>

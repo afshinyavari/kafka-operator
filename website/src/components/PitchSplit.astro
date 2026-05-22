@@ -1,0 +1,65 @@
+---
+import { site } from '../site.config';
+
+const rows = [
+  { label: 'Multi-cluster KRaft quorum', them: false, us: true },
+  { label: 'Wire-level OIDC / JWT RBAC', them: false, us: true },
+  { label: 'Schema registry with RBAC', them: false, us: true },
+  { label: 'MM2 + schema-id rewrite', them: false, us: true },
+  { label: 'Declarative backup &amp; restore', them: false, us: true },
+  { label: 'Cruise Control rebalancing', them: 'addon', us: true },
+  { label: 'Kafka UI included', them: false, us: true },
+  { label: 'Safe rolling under ISR/quorum gates', them: true, us: true },
+];
+---
+
+<section class="container-site py-24">
+  <div class="mx-auto mb-14 max-w-3xl text-center">
+    <p class="eyebrow mb-3">The pitch</p>
+    <h2 class="font-display text-4xl leading-tight tracking-tight md:text-5xl">
+      Strimzi gives you a Kafka operator.<br />
+      <span class="text-brand-bright">{site.brand} gives you the platform.</span>
+    </h2>
+    <p class="mt-5 text-lg text-fg-muted">
+      Same Kubernetes-native model. Same Apache 2.0 license. Everything else, you
+      get out of the box instead of assembling from six Helm charts.
+    </p>
+  </div>
+
+  <div class="mx-auto grid max-w-4xl grid-cols-1 overflow-hidden rounded-2xl border border-border md:grid-cols-2">
+    <div class="border-b border-border bg-bg-inset/40 p-8 md:border-b-0 md:border-r">
+      <div class="mb-5 flex items-baseline justify-between">
+        <h3 class="text-lg text-fg-muted">Strimzi alone</h3>
+        <span class="font-mono text-xs uppercase tracking-wider text-fg-dim">DIY assembly</span>
+      </div>
+      <ul class="space-y-3">
+        {rows.map((r) => (
+          <li class="flex items-center gap-3 text-sm">
+            {r.them === true ? (
+              <span class="text-signal-ok">●</span>
+            ) : r.them === 'addon' ? (
+              <span class="text-signal-warn">◐</span>
+            ) : (
+              <span class="text-fg-dim">○</span>
+            )}
+            <span class={r.them ? 'text-fg' : 'text-fg-muted line-through decoration-fg-dim/40'} set:html={r.label} />
+          </li>
+        ))}
+      </ul>
+    </div>
+    <div class="bg-gradient-to-br from-brand/[0.06] to-transparent p-8">
+      <div class="mb-5 flex items-baseline justify-between">
+        <h3 class="text-lg text-brand-bright">{site.brand}</h3>
+        <span class="font-mono text-xs uppercase tracking-wider text-brand/70">one operator</span>
+      </div>
+      <ul class="space-y-3">
+        {rows.map((r) => (
+          <li class="flex items-center gap-3 text-sm">
+            <span class="text-signal-ok">●</span>
+            <span class="text-fg" set:html={r.label} />
+          </li>
+        ))}
+      </ul>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,82 @@
+---
+import Base from '../../layouts/Base.astro';
+import docsIndex from '../../data/docs-index.json';
+import { site } from '../../site.config';
+
+const title = 'Documentation';
+const description = 'Complete documentation for the multi-cluster Kafka operator: architecture, API reference, operations, security, and disaster recovery.';
+
+// Stable, hand-tuned order — most useful entrypoints first.
+const order = [
+  'architecture',
+  'api-reference',
+  'operations',
+  'security',
+  'kafka-client-oauth',
+  'upgrade',
+  'disaster-recovery',
+];
+
+const ordered = order
+  .map((slug) => docsIndex.find((d) => d.slug === slug))
+  .filter(Boolean) as Array<{ slug: string; title: string; description: string }>;
+
+const schema = {
+  '@context': 'https://schema.org',
+  '@type': 'CollectionPage',
+  name: `${site.brand} documentation`,
+  description,
+  url: `${site.url}/docs/`,
+  hasPart: ordered.map((d) => ({
+    '@type': 'TechArticle',
+    name: d.title,
+    description: d.description,
+    url: `${site.url}/docs/${d.slug}/`,
+  })),
+};
+---
+
+<Base title={title} description={description} schema={schema}>
+  <section class="container-site py-20">
+    <div class="mx-auto max-w-3xl text-center">
+      <p class="eyebrow mb-3">Documentation</p>
+      <h1 class="font-display text-5xl leading-tight tracking-tight md:text-6xl">
+        Everything, in one place.
+      </h1>
+      <p class="mt-6 text-lg text-fg-muted">
+        Architecture, API reference, operations, security. The same Markdown
+        that ships in the repo, rendered for the web.
+      </p>
+    </div>
+  </section>
+
+  <section class="container-site pb-24">
+    <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+      {ordered.map((d, i) => (
+        <a
+          href={`/docs/${d.slug}/`}
+          class="group flex flex-col rounded-xl border border-border bg-bg-raised p-6 transition-colors hover:border-border-strong hover:bg-bg-inset"
+        >
+          <div class="flex items-center justify-between">
+            <span class="font-mono text-[10px] uppercase tracking-[0.18em] text-fg-dim">
+              {String(i + 1).padStart(2, '0')}
+            </span>
+            <span class="text-fg-dim transition-transform group-hover:translate-x-0.5">→</span>
+          </div>
+          <h2 class="mt-4 text-xl font-medium text-fg">{d.title}</h2>
+          <p class="mt-2 text-sm text-fg-muted">{d.description}</p>
+        </a>
+      ))}
+    </div>
+
+    <div class="mt-12 rounded-2xl border border-border bg-bg-raised/50 p-6 md:p-8">
+      <p class="eyebrow mb-2 text-brand">For AI assistants</p>
+      <p class="text-fg-muted">
+        The full documentation is also available as a single file at
+        <a class="text-brand-bright hover:underline" href="/llms-full.txt">/llms-full.txt</a>
+        and a structured product summary at
+        <a class="text-brand-bright hover:underline" href="/llms.txt">/llms.txt</a>.
+      </p>
+    </div>
+  </section>
+</Base>

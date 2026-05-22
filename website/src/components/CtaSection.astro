@@ -1,0 +1,40 @@
+---
+import { site } from '../site.config';
+import CodeBlock from './CodeBlock.astro';
+
+const quickstart = `# 1. Clone the operator
+git clone ${site.githubUrl}
+cd kafka-operator
+
+# 2. Spin up 3 Kind clusters + MCS mesh + operator + CRs
+make mcs-setup
+
+# 3. Verify the multi-cluster KRaft quorum
+make quorum
+`;
+---
+
+<section id="get-started" class="container-site py-24">
+  <div class="overflow-hidden rounded-3xl border border-border bg-gradient-to-br from-bg-raised via-bg to-bg-raised p-10 md:p-14">
+    <div class="grid grid-cols-1 items-center gap-10 lg:grid-cols-5">
+      <div class="lg:col-span-2">
+        <p class="eyebrow mb-3">Get started</p>
+        <h2 class="font-display text-4xl leading-tight tracking-tight md:text-5xl">
+          Three clusters. Ninety seconds.
+        </h2>
+        <p class="mt-4 text-fg-muted">
+          One <code class="font-mono text-sm text-brand-bright">make mcs-setup</code> spins up
+          three Kind clusters with an MCS mesh, deploys the operator, and applies the
+          sample CRs. The full e2e — RBAC, schemas, MM2, backup — is one more command.
+        </p>
+        <div class="mt-6 flex flex-wrap gap-3">
+          <a href={site.githubUrl} class="btn-primary" rel="noopener" target="_blank">View on GitHub</a>
+          <a href={`mailto:${site.contactEmail}`} class="btn-ghost">Talk to us</a>
+        </div>
+      </div>
+      <div class="lg:col-span-3">
+        <CodeBlock code={quickstart} lang="bash" filename="quickstart.sh" />
+      </div>
+    </div>
+  </div>
+</section>

@@ -1,0 +1,201 @@
+---
+import Base from '../layouts/Base.astro';
+import ComparisonTable from '../components/ComparisonTable.astro';
+import CodeBlock from '../components/CodeBlock.astro';
+import CtaSection from '../components/CtaSection.astro';
+import { site } from '../site.config';
+
+const title = `Why ${site.brand}`;
+const description = `How ${site.brand} compares to Strimzi, AWS MSK, and Confluent Cloud — feature-by-feature, with the honest gaps.`;
+
+const breadcrumbs = {
+  '@context': 'https://schema.org',
+  '@type': 'BreadcrumbList',
+  itemListElement: [
+    { '@type': 'ListItem', position: 1, name: 'Home', item: `${site.url}/` },
+    { '@type': 'ListItem', position: 2, name: 'Why', item: `${site.url}/why/` },
+  ],
+};
+---
+
+<Base title={title} description={description} schema={breadcrumbs}>
+  <section class="container-site py-20 md:py-28">
+    <div class="mx-auto max-w-3xl text-center">
+      <p class="eyebrow mb-4">Why {site.brand}</p>
+      <h1 class="font-display text-5xl leading-tight tracking-tight md:text-6xl">
+        The honest comparison.
+      </h1>
+      <p class="mt-6 text-lg text-fg-muted">
+        Strimzi, AWS MSK, and Confluent Cloud are excellent products. They're
+        also designed around different assumptions. Here's where {site.brand}
+        is genuinely different, and where the alternatives are the right call.
+      </p>
+    </div>
+  </section>
+
+  <section class="container-site pb-16">
+    <ComparisonTable />
+  </section>
+
+  <!-- Pillar 1 -->
+  <section class="container-site grid grid-cols-1 gap-12 py-20 lg:grid-cols-2">
+    <div>
+      <p class="eyebrow mb-3">01 · Multi-cluster KRaft</p>
+      <h2 class="font-display text-4xl tracking-tight">One quorum across many K8s clusters.</h2>
+      <p class="mt-5 text-fg-muted">
+        Strimzi, MSK, and Confluent each run a Kafka cluster inside one
+        Kubernetes cluster (or one cloud region). {site.brand} runs <strong>one
+        Kafka cluster across three or more Kubernetes clusters</strong> via
+        any MCS-compatible mesh (Submariner Lighthouse, Cilium Cluster Mesh,
+        Istio multi-cluster). Controllers form a single KRaft quorum;
+        brokers stay local for low-latency client access.
+      </p>
+      <p class="mt-4 text-fg-muted">
+        That means losing an entire Kubernetes cluster — region, zone, or
+        provider — doesn't lose your Kafka quorum. There's no DR cutover
+        because there's no DR.
+      </p>
+      <ul class="mt-6 space-y-2 text-sm text-fg-muted">
+        <li>· Controllers mesh via <code class="font-mono text-fg">svc.clusterset.local</code></li>
+        <li>· Declarative cross-cluster roll ordering</li>
+        <li>· ServiceExport for proxy / UI / registry</li>
+      </ul>
+    </div>
+    <div>
+      <CodeBlock filename="kafka-cluster.yaml" lang="yaml" code={`spec:
+  clusters:
+    - id: A
+      controllerAdvertisedAddress: controllers-a-headless.kafka.svc.clusterset.local:9093
+    - id: B
+      controllerAdvertisedAddress: controllers-b-headless.kafka.svc.clusterset.local:9093
+    - id: C
+      controllerAdvertisedAddress: controllers-c-headless.kafka.svc.clusterset.local:9093
+  clusterRollOrder: ["A", "B", "C"]
+`} />
+    </div>
+  </section>
+
+  <!-- Pillar 2 -->
+  <section class="container-site grid grid-cols-1 gap-12 py-20 lg:grid-cols-2">
+    <div class="lg:order-2">
+      <p class="eyebrow mb-3">02 · Wire-level RBAC</p>
+      <h2 class="font-display text-4xl tracking-tight">OIDC, JWT groups, topic + schema ACLs.</h2>
+      <p class="mt-5 text-fg-muted">
+        {site.brand} ships <a class="text-brand-bright underline" href="https://kroxylicious.io">Kroxylicious</a> as a first-class CRD with
+        custom filters that validate JWTs and enforce <code class="font-mono text-fg">KafkaRbac</code> rules.
+        Topic and schema-registry ACLs live in the same CR; the same JWT covers
+        both client and registry access.
+      </p>
+      <p class="mt-4 text-fg-muted">
+        Strimzi can be wired to Keycloak via the authorizer, but you write and
+        maintain the policy stack yourself. {site.brand} ships the policy
+        engine as part of the operator.
+      </p>
+    </div>
+    <div class="lg:order-1">
+      <CodeBlock filename="kafka-rbac.yaml" lang="yaml" code={`spec:
+  groups:
+    - name: orders-team
+      kafka:
+        topics: [orders, orders-dlq]
+        operations: [PRODUCE, FETCH]
+      schemaRegistry:
+        artifacts: [orders]
+        actions: [READ, WRITE]
+    - name: schema-admin
+      schemaRegistry:
+        artifacts: ["*"]
+        actions: [READ, WRITE, DELETE]
+`} />
+    </div>
+  </section>
+
+  <!-- Pillar 3 -->
+  <section class="container-site grid grid-cols-1 gap-12 py-20 lg:grid-cols-2">
+    <div>
+      <p class="eyebrow mb-3">03 · Schemas that survive mirroring</p>
+      <h2 class="font-display text-4xl tracking-tight">MirrorMaker2 that actually mirrors schemas.</h2>
+      <p class="mt-5 text-fg-muted">
+        Mirroring topics across clusters is solved. Mirroring <strong>Apicurio
+        V3 envelope global IDs</strong> so consumers can decode the payloads is
+        not — until now. {site.brand} ships a Kafka Connect SMT
+        (<code class="font-mono text-fg">ApicurioSchemaTransferSmt</code>) that
+        rewrites global IDs per record and recursively resolves schema references.
+      </p>
+      <p class="mt-4 text-fg-muted">
+        Both Strimzi MM2 and Confluent Replicator require manual schema-ID coordination.
+        {site.brand} doesn't.
+      </p>
+    </div>
+    <div>
+      <CodeBlock filename="mm2.yaml" lang="yaml" code={`spec:
+  source:
+    clusterRef: prod-eu
+    schemaRegistry:
+      url: http://apicurio-eu.kafka.svc.cluster.local:8080
+  target:
+    clusterRef: prod-us
+    schemaRegistry:
+      url: http://apicurio-us.kafka.svc.cluster.local:8080
+  schemaTransfer:
+    enabled: true   # rewrites global IDs per record
+`} />
+    </div>
+  </section>
+
+  <!-- Pillar 4 -->
+  <section class="container-site grid grid-cols-1 gap-12 py-20 lg:grid-cols-2">
+    <div class="lg:order-2">
+      <p class="eyebrow mb-3">04 · Backup that ships with the platform</p>
+      <h2 class="font-display text-4xl tracking-tight">Declarative backup &amp; PITR restore.</h2>
+      <p class="mt-5 text-fg-muted">
+        A <code class="font-mono text-fg">KafkaBackup</code> CR builds a CronJob that
+        streams records and offsets to S3 / Azure / GCS / PVC. <code class="font-mono text-fg">KafkaRestore</code> is
+        idempotent with topic remapping and point-in-time recovery. Schemas can
+        be exported alongside.
+      </p>
+      <p class="mt-4 text-fg-muted">
+        Strimzi has no first-party backup. MSK has snapshots but no PITR. {site.brand}
+        gives you both, in YAML.
+      </p>
+    </div>
+    <div class="lg:order-1">
+      <CodeBlock filename="kafka-backup.yaml" lang="yaml" code={`spec:
+  clusterRef: prod
+  schedule: "0 */6 * * *"
+  destination: s3://kafka-backups/prod
+  includeSchemas: true
+  retention:
+    days: 30
+`} />
+    </div>
+  </section>
+
+  <!-- When NOT to choose -->
+  <section class="container-site py-20">
+    <div class="mx-auto max-w-3xl rounded-2xl border border-border bg-bg-raised/60 p-10">
+      <p class="eyebrow mb-3">When you should pick something else</p>
+      <h2 class="font-display text-3xl tracking-tight">We're not always the answer.</h2>
+      <ul class="mt-6 space-y-4 text-fg-muted">
+        <li>
+          <strong class="text-fg">If you just need single-cluster Kafka, choose Strimzi.</strong>
+          It's mature, well-staffed, and the right shape for that problem.
+        </li>
+        <li>
+          <strong class="text-fg">If you're all-in on AWS and want zero ops, choose MSK Serverless.</strong>
+          You give up Kubernetes-native control; you get an SLA.
+        </li>
+        <li>
+          <strong class="text-fg">If you want a hosted control plane today, choose Confluent Cloud.</strong>
+          Our hosted product isn't shipped yet — talk to us about early access.
+        </li>
+        <li>
+          <strong class="text-fg">If you need a single broker in a dev cluster, use <code class="font-mono">kafka-native</code>.</strong>
+          An operator is overkill.
+        </li>
+      </ul>
+    </div>
+  </section>
+
+  <CtaSection />
+</Base>

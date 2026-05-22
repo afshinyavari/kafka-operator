@@ -1,0 +1,35 @@
+---
+import faqData from '../data/faq.json';
+
+interface Props {
+  items?: Array<{ q: string; a: string }>;
+}
+
+const { items = faqData } = Astro.props;
+---
+
+<section class="container-site py-24">
+  <div class="grid grid-cols-1 gap-12 lg:grid-cols-3">
+    <div>
+      <p class="eyebrow mb-3">FAQ</p>
+      <h2 class="font-display text-4xl tracking-tight md:text-5xl">Common questions.</h2>
+      <p class="mt-4 text-fg-muted">
+        If you don't see your question, email us — we read every message.
+      </p>
+    </div>
+    <dl class="lg:col-span-2 divide-y divide-border border-t border-border">
+      {items.map((item) => (
+        <details class="group py-5">
+          <summary class="flex cursor-pointer list-none items-start justify-between gap-6">
+            <dt class="text-lg text-fg">{item.q}</dt>
+            <svg class="mt-1.5 h-4 w-4 flex-shrink-0 text-fg-muted transition-transform group-open:rotate-45" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </summary>
+          <dd class="mt-3 max-w-prose text-fg-muted" set:html={item.a} />
+        </details>
+      ))}
+    </dl>
+  </div>
+</section>

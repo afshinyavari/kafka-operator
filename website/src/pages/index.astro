@@ -1,0 +1,56 @@
+---
+import Base from '../layouts/Base.astro';
+import Hero from '../components/Hero.astro';
+import ProofStrip from '../components/ProofStrip.astro';
+import PitchSplit from '../components/PitchSplit.astro';
+import FeatureGrid from '../components/FeatureGrid.astro';
+import ComparisonTable from '../components/ComparisonTable.astro';
+import CtaSection from '../components/CtaSection.astro';
+import Faq from '../components/Faq.astro';
+import faqData from '../data/faq.json';
+import { site } from '../site.config';
+
+// Strip HTML for the JSON-LD answer text (raw text is what LLMs prefer).
+const stripHtml = (s: string) => s.replace(/<[^>]+>/g, '');
+
+const faqSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: faqData.map((item) => ({
+    '@type': 'Question',
+    name: item.q,
+    acceptedAnswer: { '@type': 'Answer', text: stripHtml(item.a) },
+  })),
+};
+---
+
+<Base
+  title={null}
+  description={site.description}
+  schema={faqSchema}
+>
+  <Hero />
+  <ProofStrip />
+  <PitchSplit />
+
+  <section class="container-site py-24">
+    <div class="mb-10 max-w-2xl">
+      <p class="eyebrow mb-3">Side-by-side</p>
+      <h2 class="font-display text-4xl tracking-tight md:text-5xl">
+        Honest comparison.
+      </h2>
+      <p class="mt-4 text-fg-muted">
+        Eleven capabilities most Kafka teams need in production, and where the
+        common options actually deliver.
+      </p>
+    </div>
+    <ComparisonTable />
+    <div class="mt-6 text-sm text-fg-muted">
+      <a href="/why/" class="text-brand-bright hover:underline">See the full breakdown →</a>
+    </div>
+  </section>
+
+  <FeatureGrid />
+  <Faq />
+  <CtaSection />
+</Base>

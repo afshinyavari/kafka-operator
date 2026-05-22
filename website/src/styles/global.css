@@ -1,0 +1,56 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  html {
+    background: #0a0a0c;
+    color: #e7e7ea;
+    font-feature-settings: 'ss01', 'cv02', 'cv11';
+    -webkit-font-smoothing: antialiased;
+    text-rendering: optimizeLegibility;
+  }
+  body {
+    @apply font-sans;
+  }
+  ::selection {
+    background: #3a6bdf;
+    color: #fff;
+  }
+  h1, h2, h3, h4 {
+    text-wrap: balance;
+  }
+  p {
+    text-wrap: pretty;
+  }
+}
+
+@layer components {
+  .container-site {
+    @apply mx-auto w-full max-w-site px-6 md:px-8;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-md px-4 py-2.5 text-sm font-medium transition-colors;
+  }
+  .btn-primary {
+    @apply btn bg-brand text-white hover:bg-brand-bright;
+  }
+  .btn-ghost {
+    @apply btn border border-border text-fg hover:bg-bg-raised hover:border-border-strong;
+  }
+  .eyebrow {
+    @apply text-xs font-medium uppercase tracking-[0.18em] text-fg-muted;
+  }
+  .card {
+    @apply rounded-xl border border-border bg-bg-raised p-6;
+  }
+  .gradient-text {
+    background: linear-gradient(135deg, #e7e7ea 0%, #9ca0a8 60%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}

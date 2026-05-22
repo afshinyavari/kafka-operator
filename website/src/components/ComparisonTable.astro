@@ -1,0 +1,75 @@
+---
+import { site } from '../site.config';
+
+interface Row {
+  capability: string;
+  brand: 'yes' | 'no' | string;
+  strimzi: 'yes' | 'no' | string;
+  msk: 'yes' | 'no' | string;
+  confluent: 'yes' | 'no' | string;
+}
+
+interface Props {
+  rows?: Row[];
+  compact?: boolean;
+}
+
+const defaultRows: Row[] = [
+  { capability: 'Multi-cluster KRaft quorum', brand: 'yes', strimzi: 'no', msk: 'no', confluent: 'no' },
+  { capability: 'Built-in Kroxylicious proxy', brand: 'yes', strimzi: 'no', msk: 'no', confluent: 'partial' },
+  { capability: 'OIDC / JWT topic RBAC', brand: 'yes', strimzi: 'partial', msk: 'no', confluent: 'yes' },
+  { capability: 'Schema registry RBAC proxy', brand: 'yes', strimzi: 'no', msk: 'no', confluent: 'yes' },
+  { capability: 'MM2 with schema-id rewrite', brand: 'yes', strimzi: 'no', msk: 'no', confluent: 'partial' },
+  { capability: 'Declarative backup / restore', brand: 'yes', strimzi: 'no', msk: 'partial', confluent: 'yes' },
+  { capability: 'Cruise Control orchestration', brand: 'yes', strimzi: 'yes', msk: 'no', confluent: 'partial' },
+  { capability: 'Web UI included', brand: 'yes', strimzi: 'no', msk: 'partial', confluent: 'yes' },
+  { capability: 'KRaft only (no ZooKeeper)', brand: 'yes', strimzi: 'yes', msk: 'yes', confluent: 'yes' },
+  { capability: 'Apache 2.0 / fully open source', brand: 'yes', strimzi: 'yes', msk: 'no', confluent: 'no' },
+  { capability: 'Runs on your own Kubernetes', brand: 'yes', strimzi: 'yes', msk: 'no', confluent: 'partial' },
+];
+
+const { rows = defaultRows, compact = false } = Astro.props;
+
+function cell(value: string) {
+  if (value === 'yes') return { mark: '●', cls: 'text-signal-ok', label: 'Yes' };
+  if (value === 'no') return { mark: '○', cls: 'text-fg-dim', label: 'No' };
+  if (value === 'partial') return { mark: '◐', cls: 'text-signal-warn', label: 'Partial' };
+  return { mark: value, cls: 'text-fg-muted', label: value };
+}
+---
+
+<div class="overflow-x-auto rounded-xl border border-border bg-bg-raised">
+  <table class="w-full text-left text-sm">
+    <thead class="bg-bg-inset text-xs uppercase tracking-wider text-fg-muted">
+      <tr>
+        <th class="px-5 py-4 font-medium">Capability</th>
+        <th class="px-5 py-4 font-medium text-brand-bright">{site.brand}</th>
+        <th class="px-5 py-4 font-medium">Strimzi</th>
+        <th class="px-5 py-4 font-medium">AWS MSK</th>
+        <th class="px-5 py-4 font-medium">Confluent</th>
+      </tr>
+    </thead>
+    <tbody>
+      {rows.map((r) => {
+        const b = cell(r.brand);
+        const s = cell(r.strimzi);
+        const m = cell(r.msk);
+        const c = cell(r.confluent);
+        return (
+          <tr class="border-t border-border/70">
+            <td class={`px-5 ${compact ? 'py-2.5' : 'py-3.5'} text-fg`}>{r.capability}</td>
+            <td class={`px-5 ${compact ? 'py-2.5' : 'py-3.5'} ${b.cls}`}><span aria-label={b.label}>{b.mark}</span></td>
+            <td class={`px-5 ${compact ? 'py-2.5' : 'py-3.5'} ${s.cls}`}><span aria-label={s.label}>{s.mark}</span></td>
+            <td class={`px-5 ${compact ? 'py-2.5' : 'py-3.5'} ${m.cls}`}><span aria-label={m.label}>{m.mark}</span></td>
+            <td class={`px-5 ${compact ? 'py-2.5' : 'py-3.5'} ${c.cls}`}><span aria-label={c.label}>{c.mark}</span></td>
+          </tr>
+        );
+      })}
+    </tbody>
+  </table>
+  <div class="flex items-center gap-5 border-t border-border/70 px-5 py-3 text-xs text-fg-dim">
+    <span><span class="text-signal-ok">●</span> built in</span>
+    <span><span class="text-signal-warn">◐</span> partial / add-on</span>
+    <span><span class="text-fg-dim">○</span> not available</span>
+  </div>
+</div>

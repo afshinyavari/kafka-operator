@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" width="1200" height="630">
+  <defs>
+    <radialGradient id="g" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#1a2447"/>
+      <stop offset="60%" stop-color="#0a0a0c"/>
+      <stop offset="100%" stop-color="#0a0a0c"/>
+    </radialGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#g)"/>
+  <g transform="translate(80,110)" font-family="Inter, system-ui, sans-serif" fill="#e7e7ea">
+    <text font-size="36" fill="#5b8cff" font-weight="500">[BRAND]</text>
+    <text y="110" font-size="92" font-weight="700" letter-spacing="-2">One Kafka.</text>
+    <text y="220" font-size="92" font-weight="700" letter-spacing="-2">Many clusters.</text>
+    <text y="330" font-size="92" font-weight="700" fill="#7da4ff" letter-spacing="-2">Zero glue code.</text>
+    <text y="430" font-size="28" fill="#9ca0a8">The multi-cluster Kafka platform for Kubernetes.</text>
+  </g>
+  <g transform="translate(820, 330)" stroke="#5b8cff" stroke-width="2" fill="none">
+    <circle cx="0" cy="-90" r="36"/>
+    <circle cx="-78" cy="45" r="36"/>
+    <circle cx="78" cy="45" r="36"/>
+    <line x1="0" y1="-90" x2="-78" y2="45" stroke-dasharray="6 6"/>
+    <line x1="0" y1="-90" x2="78" y2="45" stroke-dasharray="6 6"/>
+    <line x1="-78" y1="45" x2="78" y2="45" stroke-dasharray="6 6"/>
+  </g>
+</svg>

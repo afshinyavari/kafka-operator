@@ -1,0 +1,29 @@
+---
+import { site, nav } from '../site.config';
+---
+
+<header class="sticky top-0 z-40 border-b border-border/60 bg-bg/80 backdrop-blur-lg">
+  <div class="container-site flex h-16 items-center justify-between">
+    <a href="/" class="flex items-center gap-2 text-fg hover:text-fg" aria-label={`${site.brand} home`}>
+      <svg width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true">
+        <circle cx="11" cy="4" r="2.5" stroke="currentColor" stroke-width="1.5" />
+        <circle cx="4" cy="16" r="2.5" stroke="currentColor" stroke-width="1.5" />
+        <circle cx="18" cy="16" r="2.5" stroke="currentColor" stroke-width="1.5" />
+        <path d="M11 6.5L4.5 14M11 6.5L17.5 14M5.5 16H16.5" stroke="currentColor" stroke-width="1.2" stroke-linecap="round" />
+      </svg>
+      <span class="font-display text-xl">{site.brand}</span>
+    </a>
+    <nav class="hidden items-center gap-1 md:flex" aria-label="Primary">
+      {nav.map((item) => (
+        <a
+          href={item.href}
+          class="rounded-md px-3 py-1.5 text-sm text-fg-muted transition-colors hover:bg-bg-raised hover:text-fg"
+          {...(item.external ? { rel: 'noopener', target: '_blank' } : {})}
+        >
+          {item.label}
+        </a>
+      ))}
+    </nav>
+    <a href="#get-started" class="btn-primary text-sm">Get started</a>
+  </div>
+</header>

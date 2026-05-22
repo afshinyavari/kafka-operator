@@ -1,0 +1,51 @@
+---
+interface Props {
+  tone?: 'compare' | 'note' | 'warn';
+  title?: string;
+}
+
+const { tone = 'compare', title } = Astro.props;
+
+const styles = {
+  compare: {
+    wrap: 'border-brand/30 bg-brand/[0.04]',
+    tag: 'text-brand-bright',
+    label: 'Compare',
+  },
+  note: {
+    wrap: 'border-border bg-bg-raised',
+    tag: 'text-fg-muted',
+    label: 'Note',
+  },
+  warn: {
+    wrap: 'border-signal-warn/30 bg-signal-warn/[0.04]',
+    tag: 'text-signal-warn',
+    label: 'Heads up',
+  },
+};
+const s = styles[tone];
+---
+
+<aside class={`my-10 rounded-2xl border ${s.wrap} p-6 md:p-8`}>
+  <div class="mb-2 flex items-center gap-2">
+    <span class={`font-mono text-[10px] uppercase tracking-[0.18em] ${s.tag}`}>{s.label}</span>
+    {title && <span class="text-sm font-medium text-fg">{title}</span>}
+  </div>
+  <div class="prose-feature text-fg-muted">
+    <slot />
+  </div>
+</aside>
+
+<style is:global>
+  .prose-feature p { margin-top: 0.5rem; }
+  .prose-feature p:first-child { margin-top: 0; }
+  .prose-feature strong { color: #e7e7ea; font-weight: 500; }
+  .prose-feature code {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.85em;
+    background: #16161a;
+    color: #7da4ff;
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+  }
+</style>

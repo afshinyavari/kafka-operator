@@ -1,0 +1,58 @@
+---
+// Slot wrapper that gives long-form feature copy a consistent typographic rhythm.
+---
+<div class="prose-block">
+  <slot />
+</div>
+
+<style is:global>
+  .prose-block { color: #c8ccd3; font-size: 1rem; line-height: 1.7; max-width: 68ch; }
+  .prose-block h2 {
+    color: #e7e7ea;
+    font-family: "Instrument Serif", Georgia, serif;
+    font-size: 2.25rem;
+    line-height: 1.15;
+    letter-spacing: -0.01em;
+    margin-top: 3.5rem;
+    margin-bottom: 1.25rem;
+    scroll-margin-top: 5rem;
+  }
+  .prose-block h3 {
+    color: #e7e7ea;
+    font-weight: 500;
+    font-size: 1.25rem;
+    margin-top: 2.25rem;
+    margin-bottom: 0.75rem;
+    scroll-margin-top: 5rem;
+  }
+  .prose-block p { margin-top: 1rem; }
+  .prose-block p:first-child { margin-top: 0; }
+  .prose-block strong { color: #e7e7ea; font-weight: 500; }
+  .prose-block a { color: #7da4ff; text-decoration: underline; text-underline-offset: 3px; }
+  .prose-block a:hover { color: #a5beff; }
+  .prose-block ul { margin-top: 1rem; padding-left: 1.25rem; list-style: none; }
+  .prose-block ul li {
+    position: relative;
+    padding-left: 1rem;
+    margin-top: 0.5rem;
+  }
+  .prose-block ul li::before {
+    content: "›";
+    position: absolute;
+    left: 0;
+    color: #5b8cff;
+  }
+  .prose-block code {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.85em;
+    background: #16161a;
+    color: #7da4ff;
+    padding: 0.1em 0.4em;
+    border-radius: 4px;
+  }
+  .prose-block hr {
+    border: none;
+    border-top: 1px solid #23252b;
+    margin: 3rem 0;
+  }
+</style>

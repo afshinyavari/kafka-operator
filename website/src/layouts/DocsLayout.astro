@@ -1,0 +1,166 @@
+---
+import Base from './Base.astro';
+import { site } from '../site.config';
+
+interface Props {
+  frontmatter: {
+    title: string;
+    description?: string;
+    slug: string;
+  };
+  headings: Array<{ depth: number; slug: string; text: string }>;
+}
+
+const { frontmatter, headings } = Astro.props as Props;
+
+const toc = headings.filter((h) => h.depth >= 2 && h.depth <= 3);
+
+const schema = {
+  '@context': 'https://schema.org',
+  '@type': 'TechArticle',
+  headline: frontmatter.title,
+  description: frontmatter.description ?? site.description,
+  url: new URL(`/docs/${frontmatter.slug}/`, site.url).toString(),
+};
+---
+
+<Base
+  title={frontmatter.title}
+  description={frontmatter.description ?? site.description}
+  schema={schema}
+>
+  <article class="container-site grid grid-cols-1 gap-12 py-16 lg:grid-cols-[1fr_220px]">
+    <div>
+      <a href="/docs/" class="eyebrow inline-flex items-center gap-2 text-fg-muted hover:text-fg">
+        <span aria-hidden="true">←</span> Docs
+      </a>
+      <h1 class="mt-6 font-display text-5xl tracking-tight md:text-6xl">{frontmatter.title}</h1>
+      {frontmatter.description && (
+        <p class="mt-5 text-lg text-fg-muted">{frontmatter.description}</p>
+      )}
+      <hr class="my-10 border-border" />
+      <div class="markdown-body">
+        <slot />
+      </div>
+    </div>
+
+    {toc.length > 0 && (
+      <aside class="hidden lg:block">
+        <div class="sticky top-24">
+          <div class="eyebrow mb-4">On this page</div>
+          <ul class="space-y-2 text-sm">
+            {toc.map((h) => (
+              <li class={h.depth === 3 ? 'ml-3' : ''}>
+                <a href={`#${h.slug}`} class="text-fg-muted hover:text-fg">{h.text}</a>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </aside>
+    )}
+  </article>
+
+  <style is:global>
+    .markdown-body {
+      color: #c8ccd3;
+      font-size: 0.975rem;
+      line-height: 1.7;
+      max-width: 70ch;
+    }
+    .markdown-body h2 {
+      color: #e7e7ea;
+      font-family: "Instrument Serif", Georgia, serif;
+      font-size: 2rem;
+      line-height: 1.15;
+      letter-spacing: -0.01em;
+      margin-top: 3rem;
+      margin-bottom: 1rem;
+      scroll-margin-top: 5rem;
+    }
+    .markdown-body h3 {
+      color: #e7e7ea;
+      font-weight: 500;
+      font-size: 1.2rem;
+      margin-top: 2rem;
+      margin-bottom: 0.75rem;
+      scroll-margin-top: 5rem;
+    }
+    .markdown-body h4 {
+      color: #e7e7ea;
+      font-weight: 500;
+      font-size: 1.05rem;
+      margin-top: 1.75rem;
+      margin-bottom: 0.5rem;
+    }
+    .markdown-body p { margin-top: 1rem; }
+    .markdown-body strong { color: #e7e7ea; font-weight: 500; }
+    .markdown-body a { color: #7da4ff; text-decoration: underline; text-underline-offset: 3px; }
+    .markdown-body a:hover { color: #a5beff; }
+    .markdown-body ul, .markdown-body ol {
+      margin-top: 1rem;
+      padding-left: 1.5rem;
+    }
+    .markdown-body ul { list-style: disc; }
+    .markdown-body ol { list-style: decimal; }
+    .markdown-body li { margin-top: 0.4rem; }
+    .markdown-body li::marker { color: #5b8cff; }
+    .markdown-body code {
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 0.85em;
+      background: #16161a;
+      color: #7da4ff;
+      padding: 0.1em 0.4em;
+      border-radius: 4px;
+    }
+    .markdown-body pre {
+      margin-top: 1.25rem;
+      margin-bottom: 1.25rem;
+      padding: 1.25rem;
+      background: #0d0e12 !important;
+      border: 1px solid #23252b;
+      border-radius: 0.75rem;
+      overflow-x: auto;
+      font-size: 0.825rem;
+      line-height: 1.6;
+    }
+    .markdown-body pre code {
+      background: transparent;
+      color: inherit;
+      padding: 0;
+      font-size: inherit;
+    }
+    .markdown-body blockquote {
+      border-left: 3px solid #5b8cff;
+      background: rgba(91, 140, 255, 0.04);
+      padding: 0.75rem 1.25rem;
+      margin: 1.5rem 0;
+      color: #c8ccd3;
+      border-radius: 0 0.5rem 0.5rem 0;
+    }
+    .markdown-body table {
+      width: 100%;
+      margin: 1.5rem 0;
+      border-collapse: collapse;
+      font-size: 0.9rem;
+    }
+    .markdown-body th, .markdown-body td {
+      border: 1px solid #23252b;
+      padding: 0.5rem 0.75rem;
+      text-align: left;
+    }
+    .markdown-body th {
+      background: #16161a;
+      font-weight: 500;
+      color: #e7e7ea;
+    }
+    .markdown-body hr {
+      border: none;
+      border-top: 1px solid #23252b;
+      margin: 2rem 0;
+    }
+    .markdown-body img {
+      max-width: 100%;
+      border-radius: 0.5rem;
+    }
+  </style>
+</Base>

@@ -1,0 +1,220 @@
+---
+import Base from '../layouts/Base.astro';
+import FeatureHero from '../components/FeatureHero.astro';
+import Prose from '../components/Prose.astro';
+import CodeBlock from '../components/CodeBlock.astro';
+import Callout from '../components/Callout.astro';
+import KRaftDiagram from '../components/KRaftDiagram.astro';
+import CtaSection from '../components/CtaSection.astro';
+import { site } from '../site.config';
+
+const title = 'Architecture';
+const description = `How ${site.brand} is built: one operator binary per Kubernetes cluster, a single KRaft Kafka quorum on top, and eleven CRDs that compose the platform.`;
+
+const breadcrumbs = {
+  '@context': 'https://schema.org',
+  '@type': 'BreadcrumbList',
+  itemListElement: [
+    { '@type': 'ListItem', position: 1, name: 'Home', item: `${site.url}/` },
+    { '@type': 'ListItem', position: 2, name: 'Architecture', item: `${site.url}/architecture/` },
+  ],
+};
+
+const startupYaml = `# What gets deployed when you apply a KafkaCluster + node pools
+NAMESPACE: kafka
+
+DaemonSet/StatefulSet (per Kubernetes cluster):
+  ├─ kafka-operator             # this operator, one Pod
+  ├─ controllers-a-{0..N}       # KRaft controllers (3+ across clusters)
+  ├─ brokers-a-{0..N}           # broker pool (local to cluster A)
+  ├─ kafka-proxy-{0..1}         # Kroxylicious (optional)
+  ├─ apicurio-{0..1}            # schema registry (optional)
+  ├─ apicurio-rbac-proxy-{0..1} # JWT-aware HTTP proxy (optional)
+  ├─ kafka-ui-{0..1}            # web console (optional)
+  ├─ cruise-control-0           # singleton on primary cluster (optional)
+  └─ mm2-{0..1}                 # MirrorMaker2 dedicated mode (optional)
+
+Per-cluster: PDBs, ServiceMonitors, NetworkPolicies, ConfigMaps, Secrets.
+`;
+
+const crds = [
+  { name: 'KafkaCluster', purpose: 'Cluster-wide config; lists every Kubernetes cluster the quorum spans.' },
+  { name: 'KafkaNodePool', purpose: 'Controller or broker pool, pinned to one Kubernetes cluster.' },
+  { name: 'KafkaTopic', purpose: 'Declarative topic management via primary-cluster AdminClient.' },
+  { name: 'KafkaRbac', purpose: 'Topic + consumer-group + schema-registry ACLs in one CR.' },
+  { name: 'ApicurioRegistry', purpose: 'Apicurio Schema Registry with optional JWT-aware RBAC HTTP proxy.' },
+  { name: 'MirrorMaker2', purpose: 'Dedicated MM2 with the Apicurio schema-transfer SMT.' },
+  { name: 'KafkaBackup', purpose: 'CronJob backup of records, offsets, and schemas to object storage.' },
+  { name: 'KafkaRestore', purpose: 'Idempotent one-shot restore with PITR and topic remapping.' },
+  { name: 'KafkaBackupValidation', purpose: 'Scheduled validation of backup manifests, partitions, and schemas.' },
+  { name: 'KafkaUI', purpose: 'Quarkus + htmx web console; OIDC SSO; JWT propagation to the proxy.' },
+  { name: 'KafkaRebalance', purpose: 'Strimzi-style Cruise Control trigger; annotation-based approval.' },
+];
+---
+
+<Base title={title} description={description} schema={breadcrumbs}>
+  <FeatureHero
+    eyebrow="Architecture"
+    title="One operator. Eleven CRDs. One Kafka."
+    lede="Each Kubernetes cluster runs a single instance of the operator. Together they reconcile one Kafka cluster — a KRaft quorum on top of broker pools pinned to each Kubernetes cluster — and the platform pieces (proxy, registry, mirror, backup, rebalancer, UI) that ride alongside."
+    meta={['Java 21 · Quarkus', 'fabric8 + JOSDK', '11 CRDs', 'KRaft only']}
+  />
+
+  <section class="container-site py-16">
+    <div class="grid grid-cols-1 gap-12 lg:grid-cols-2">
+      <div>
+        <Prose>
+          <h2 id="topology">Topology at a glance.</h2>
+          <p>
+            Three (or more) Kubernetes clusters joined via any
+            <a href="https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api">MCS-compatible mesh</a> — Submariner Lighthouse,
+            Cilium Cluster Mesh, Istio multi-cluster, or anything else that
+            publishes <code>ServiceImport</code> and <code>*.svc.clusterset.local</code>
+            DNS. Each cluster runs one operator Pod and one or more node
+            pools. Controllers form one KRaft quorum across clusters via
+            clusterset DNS. Brokers stay local.
+          </p>
+          <p>
+            The proxy, schema registry, UI, and Cruise Control are
+            single-cluster components by default — they can opt into MCS via
+            <code>spec.mcs.enabled + spec.targetClusters</code> for active /
+            active across clusters with a ServiceExport on each side.
+          </p>
+        </Prose>
+      </div>
+      <div>
+        <div class="rounded-2xl border border-border bg-bg-raised p-6">
+          <KRaftDiagram />
+          <p class="mt-4 text-sm text-fg-muted">
+            Controllers (blue) form one quorum; brokers (green) stay local.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="container-site py-12">
+    <Prose>
+      <h2 id="operator">The operator.</h2>
+      <p>
+        The operator is a Quarkus app built on the
+        <a href="https://javaoperatorsdk.io/">Java Operator SDK</a>, the
+        <a href="https://github.com/fabric8io/kubernetes-client">fabric8
+        Kubernetes client</a>, and Apache Kafka's own AdminClient. It runs as a
+        single Pod per Kubernetes cluster — no leader election needed because
+        each operator instance only touches resources labelled for its own
+        Kubernetes cluster ID.
+      </p>
+      <p>
+        Each CRD has a reconciler that emits dependent resources
+        (Deployments, StatefulSets, Services, ConfigMaps, Secrets) and
+        manages status sub-resources. Business logic — KRaft config
+        generation, ISR checking, rolling orchestration, schema policy
+        compilation, mTLS material projection — lives in builder and
+        controller classes called from the reconcilers, not in the
+        reconcilers themselves.
+      </p>
+    </Prose>
+  </section>
+
+  <section class="container-site pb-16">
+    <div class="max-w-prose">
+      <CodeBlock code={startupYaml} lang="text" filename="rendered.txt" />
+    </div>
+  </section>
+
+  <section class="container-site py-16">
+    <Prose>
+      <h2 id="crds">Eleven CRDs.</h2>
+      <p>
+        Everything you configure is a CRD under the
+        <code>kafka.yavari.afshin.se/v1alpha1</code> API group. No imperative
+        scripts, no Helm values stacks.
+      </p>
+    </Prose>
+
+    <div class="mt-8 overflow-hidden rounded-xl border border-border bg-bg-raised">
+      <table class="w-full text-left text-sm">
+        <thead class="bg-bg-inset text-xs uppercase tracking-wider text-fg-muted">
+          <tr>
+            <th class="px-5 py-3 font-medium">CRD</th>
+            <th class="px-5 py-3 font-medium">Purpose</th>
+          </tr>
+        </thead>
+        <tbody>
+          {crds.map((c) => (
+            <tr class="border-t border-border/70">
+              <td class="px-5 py-3 font-mono text-brand-bright">{c.name}</td>
+              <td class="px-5 py-3 text-fg-muted">{c.purpose}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="container-site py-16">
+    <Prose>
+      <h2 id="data-vs-control">Data plane vs. control plane.</h2>
+      <p>
+        The operator is the control plane. It watches CRDs, builds resources,
+        and reconciles state — but it is <strong>not</strong> on the data
+        path. Kafka clients talk to the proxy or directly to brokers; the
+        proxy talks to brokers; AdminClient calls (topic creation, ACL
+        updates, quotas) hit the primary cluster's brokers directly.
+      </p>
+      <p>
+        That means an operator outage is not a Kafka outage. The data plane
+        keeps running with the last reconciled config until the operator
+        comes back.
+      </p>
+
+      <h2 id="multi-cluster">Multi-cluster reconciler model.</h2>
+      <p>
+        Each operator instance has a stable <code>cluster-id</code> set at
+        startup and filters every CR it reconciles by a matching
+        <code>kafka.yavari.afshin.se/k8s-cluster</code> label. The
+        <code>KafkaCluster</code> CR itself is applied identically to all
+        Kubernetes clusters; each operator only acts on its own slice.
+      </p>
+      <p>
+        Cross-operator coordination (rolling order, quorum gates) goes
+        through the operator's HTTP endpoint exposed as a
+        <code>ServiceExport</code> — <code>spec.clusters[].operatorAddress</code>
+        names the clusterset DNS name of each peer.
+      </p>
+    </Prose>
+
+    <div class="mx-auto max-w-prose">
+      <Callout title="Why no central control plane?">
+        <p>
+          Because Kubernetes already is the central control plane. Adding a
+          second one — a multi-cluster operator host — means another HA
+          dependency, another failure mode, another piece of infra to back up.
+        </p>
+        <p>
+          {site.brand} treats each Kubernetes cluster as autonomous. The
+          operators coordinate via Kafka and via clusterset DNS; nothing else.
+        </p>
+      </Callout>
+    </div>
+  </section>
+
+  <section class="container-site py-16">
+    <Prose>
+      <h2 id="further-reading">Go deeper.</h2>
+      <p>
+        The full architecture doc covers reconciler hierarchy, rolling-update
+        flow, mTLS material flow, the schema-transfer SMT's reference
+        resolver, and more.
+      </p>
+    </Prose>
+    <div class="mt-6 flex flex-wrap gap-3">
+      <a href="/docs/architecture/" class="btn-primary">Full architecture doc →</a>
+      <a href="/docs/api-reference/" class="btn-ghost">API reference</a>
+      <a href="/docs/operations/" class="btn-ghost">Operations guide</a>
+    </div>
+  </section>
+
+  <CtaSection />
+</Base>

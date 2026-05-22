@@ -1,0 +1,214 @@
+---
+import Base from '../../layouts/Base.astro';
+import FeatureHero from '../../components/FeatureHero.astro';
+import Prose from '../../components/Prose.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Callout from '../../components/Callout.astro';
+import KRaftDiagram from '../../components/KRaftDiagram.astro';
+import CtaSection from '../../components/CtaSection.astro';
+import { site } from '../../site.config';
+
+const title = 'Multi-cluster KRaft';
+const description = 'Run one Apache Kafka quorum across three or more Kubernetes clusters. No DR cutover, no quorum loss when a cluster dies, no extra control plane.';
+
+const faqSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: [
+    { '@type': 'Question', name: 'Can the same approach span clouds?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. Any MCS-compatible mesh federates any conforming Kubernetes API. Submariner, Cilium Cluster Mesh, and Istio multi-cluster all work. The reference setup uses Kind clusters with Submariner; production deployments routinely mix GKE / EKS / AKS / on-prem with Cilium Cluster Mesh.' } },
+    { '@type': 'Question', name: 'What is the minimum number of clusters?', acceptedAnswer: { '@type': 'Answer', text: 'Three. KRaft requires an odd-numbered controller quorum. Two-cluster topologies cannot tolerate a single-cluster failure without losing majority.' } },
+    { '@type': 'Question', name: 'Do clients reach brokers in remote clusters?', acceptedAnswer: { '@type': 'Answer', text: 'Brokers are local to each cluster. Clients connect to the nearest broker pool via Kroxylicious or an external listener; partition leadership migrates if a cluster goes down.' } },
+  ],
+};
+
+const clusterYaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaCluster
+metadata:
+  name: prod
+spec:
+  kafkaVersion: "4.0"
+  clusters:
+    - id: A
+      controllerAdvertisedAddress: controllers-a-headless.kafka.svc.clusterset.local:9093
+    - id: B
+      controllerAdvertisedAddress: controllers-b-headless.kafka.svc.clusterset.local:9093
+    - id: C
+      controllerAdvertisedAddress: controllers-c-headless.kafka.svc.clusterset.local:9093
+  clusterRollOrder: ["A", "B", "C"]   # rolling restart order
+  proxyMtls: true                      # internal listeners use mTLS
+`;
+
+const poolYaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaNodePool
+metadata:
+  name: controllers-a
+  labels:
+    kafka.yavari.afshin.se/cluster: prod
+    kafka.yavari.afshin.se/k8s-cluster: A
+spec:
+  roles: [CONTROLLER]
+  replicas: 1
+  storage:
+    size: 10Gi
+---
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaNodePool
+metadata:
+  name: brokers-a
+  labels:
+    kafka.yavari.afshin.se/cluster: prod
+    kafka.yavari.afshin.se/k8s-cluster: A
+spec:
+  roles: [BROKER]
+  replicas: 3
+  storage:
+    size: 200Gi
+`;
+
+const metricsYaml = `spec:
+  metricsConfig:
+    enabled: true
+    # Auto-creates ServiceMonitors on every broker, the Kroxylicious
+    # proxy (9190), Cruise Control + MM2 (9101 JMX). Silently no-ops on
+    # clusters without the Prometheus Operator CRD.
+`;
+---
+
+<Base title={title} description={description} schema={faqSchema}>
+  <FeatureHero
+    eyebrow="Multi-cluster KRaft"
+    title="One Kafka quorum. Many Kubernetes clusters."
+    lede="Stretch a single Apache Kafka cluster across three or more Kubernetes clusters with a shared KRaft controller quorum. Lose a region, lose a cloud — Kafka keeps serving."
+    meta={['3+ K8s clusters', 'one KRaft quorum', 'MCS-compatible mesh', 'KRaft-only (Kafka 4.x)']}
+  />
+
+  <section class="container-site py-16">
+    <div class="grid grid-cols-1 gap-12 lg:grid-cols-12">
+      <div class="lg:col-span-7">
+        <Prose>
+          <h2 id="problem">The DR cutover that isn't.</h2>
+          <p>
+            Most Kafka-on-Kubernetes deployments run inside a single cluster.
+            When that cluster fails, you fail over to a second Kafka cluster
+            using MirrorMaker — and consumers replay, offsets diverge, and
+            schemas drift. The cutover is exactly when things break.
+          </p>
+          <p>
+            {site.brand} takes a different approach: <strong>one Kafka cluster
+            spans three or more Kubernetes clusters</strong>. Controllers form
+            a single KRaft quorum that's geographically distributed; brokers
+            stay local to each cluster for low-latency client access. Losing a
+            whole Kubernetes cluster means the quorum drops one vote — not the
+            entire cluster.
+          </p>
+
+          <h2 id="how-it-works">How it works.</h2>
+          <p>
+            Three Kubernetes clusters are joined via any
+            <a href="https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api">MCS-compatible mesh</a> —
+            <a href="https://submariner.io">Submariner Lighthouse</a>,
+            <a href="https://docs.cilium.io/en/stable/network/clustermesh/">Cilium Cluster Mesh</a>,
+            <a href="https://istio.io/latest/docs/setup/install/multicluster/">Istio multi-cluster</a>,
+            or any other implementation. Cross-cluster services resolve
+            under <code>*.svc.clusterset.local</code> — a sibling of the
+            standard <code>svc.cluster.local</code> namespace, defined by
+            the Kubernetes MCS API. {site.brand} configures each controller's
+            <code>controller.quorum.voters</code> with the clusterset
+            hostnames of the other clusters' controllers.
+          </p>
+          <p>
+            The result: KRaft sees a flat list of three (or more) controllers.
+            Leader election works the same as it would on a single cluster.
+            Brokers connect to the controller quorum the same way. The
+            operator is mesh-agnostic — it doesn't care which implementation
+            publishes the clusterset DNS, as long as one does.
+          </p>
+        </Prose>
+      </div>
+      <div class="lg:col-span-5">
+        <div class="sticky top-24 rounded-2xl border border-border bg-bg-raised p-6">
+          <KRaftDiagram />
+          <p class="mt-4 text-sm text-fg-muted">
+            Three Kubernetes clusters. Three controllers (blue). Six brokers
+            (green) — two per cluster. One KRaft quorum, one Kafka cluster.
+          </p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="container-site pb-8">
+    <Prose>
+      <h3>The minimum CR.</h3>
+      <p>
+        Three entries in <code>clusters[]</code>, one per Kubernetes cluster.
+        That's all the multi-cluster API surface.
+      </p>
+    </Prose>
+    <div class="mt-6 max-w-prose">
+      <CodeBlock code={clusterYaml} lang="yaml" filename="kafka-cluster.yaml" />
+    </div>
+  </section>
+
+  <section class="container-site py-12">
+    <Prose>
+      <h3>Brokers stay local.</h3>
+      <p>
+        Each broker pool is pinned to one Kubernetes cluster via the
+        <code>k8s-cluster</code> label. The operator running on cluster <code>A</code>
+        only reconciles pools labeled <code>A</code>. No pod ever runs in the
+        wrong place.
+      </p>
+    </Prose>
+    <div class="mt-6 max-w-prose">
+      <CodeBlock code={poolYaml} lang="yaml" filename="node-pools.yaml" />
+    </div>
+  </section>
+
+  <section class="container-site py-16">
+    <Prose>
+      <h2 id="rolling">Safe rolling updates.</h2>
+      <p>
+        Every restart goes through two gates: an <strong>ISR check</strong>
+        (no under-replicated partitions on the target broker) and a
+        <strong>KRaft quorum check</strong> (the controller quorum can lose
+        one vote and still hold majority). The operator refuses to restart a
+        pod while either gate is red.
+      </p>
+      <p>
+        Cross-cluster roll ordering is explicit. <code>spec.clusterRollOrder</code>
+        defines the sequence; the operator on cluster <code>B</code> waits for
+        the operator on cluster <code>A</code> to finish before touching its
+        own controller.
+      </p>
+
+      <h3 id="observability">Observability.</h3>
+      <p>
+        Opt in once on the cluster spec and every component — brokers, the
+        Kroxylicious proxy, Cruise Control, MirrorMaker2 — exposes Prometheus
+        metrics and gets a <code>ServiceMonitor</code> applied.
+      </p>
+    </Prose>
+    <div class="mt-6 max-w-prose">
+      <CodeBlock code={metricsYaml} lang="yaml" filename="metrics-opt-in.yaml" />
+    </div>
+
+    <div class="mx-auto max-w-prose">
+      <Callout title="vs. Strimzi / MSK / Confluent">
+        <p>
+          Strimzi runs <strong>one Kafka cluster per Kubernetes cluster</strong>.
+          Multi-region HA is solved with MirrorMaker — a second Kafka cluster
+          you cut over to. AWS MSK and Confluent Cloud run inside a single
+          cloud region.
+        </p>
+        <p>
+          {site.brand} runs <strong>one Kafka cluster across multiple
+          Kubernetes clusters</strong>. There's no second cluster to cut over
+          to; there's no cutover.
+        </p>
+      </Callout>
+    </div>
+  </section>
+
+  <CtaSection />
+</Base>

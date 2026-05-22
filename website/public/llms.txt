@@ -1,0 +1,73 @@
+# [BRAND]
+
+> A Kubernetes operator that runs Apache Kafka 4.x (KRaft mode) across 3+ Kubernetes clusters with one shared controller quorum, via any Kubernetes Multi-Cluster Services (MCS) implementation — Submariner Lighthouse, Cilium Cluster Mesh, Istio multi-cluster. Ships the full platform — Kroxylicious proxy with OIDC RBAC, Apicurio Schema Registry with a JWT-aware RBAC proxy, MirrorMaker2 with schema-ID rewriting, declarative backup/restore, Cruise Control rebalancing, and a Kafka UI — as eleven first-class CRDs. Apache 2.0.
+
+## What it is
+
+[BRAND] is a Kubernetes operator. It replaces the assembly of {Strimzi + Keycloak + Apicurio + MM2 + Cruise Control + a UI + backup glue} with a single operator that manages all of those as CRDs of one product.
+
+## Who it's for
+
+- Platform engineers running Kafka on Kubernetes across more than one cluster.
+- SREs who need multi-region or multi-cloud HA without DR cutover scripts.
+- Security/governance teams that need OIDC, JWT-claim-based ACLs, and per-artifact schema-registry RBAC out of the box.
+
+## Eleven CRDs (kafka.yavari.afshin.se/v1alpha1)
+
+- `KafkaCluster` — cluster-wide config; `clusters[]` lists each Kubernetes cluster the quorum spans.
+- `KafkaNodePool` — controller or broker pool; supports mixed roles.
+- `KafkaTopic` — declarative topic management via primary-cluster AdminClient (mTLS).
+- `KafkaProxy` — Kroxylicious deployment with custom filters (JWT/OIDC, RBAC, schema and XML validation).
+- `KafkaRbac` — topic-level + schema-registry ACLs in one CR; groups, users, quotas.
+- `ApicurioRegistry` — Apicurio Schema Registry with optional RBAC HTTP proxy; `mem`, `postgresql`, or `kafkasql` storage.
+- `MirrorMaker2` — dedicated-mode MM2 with `ApicurioSchemaTransferSmt` for cross-cluster schema-ID rewrites.
+- `KafkaBackup` — CronJob-driven backup to S3/Azure/GCS/PVC; optional schema export.
+- `KafkaRestore` — idempotent one-shot restore Job with point-in-time recovery and topic remapping.
+- `KafkaBackupValidation` — backup integrity validation.
+- `KafkaUI` — Quarkus+htmx web console with OIDC SSO and JWT propagation.
+- `KafkaRebalance` — Strimzi-style Cruise Control rebalance trigger with annotation approval.
+
+## How it differs from Strimzi
+
+- Multi-cluster KRaft quorum (Strimzi: single-cluster only).
+- Built-in Kroxylicious proxy with OIDC/JWT RBAC at the wire (Strimzi: no proxy layer).
+- Apicurio with a JWT-aware RBAC proxy (Strimzi: manages Apicurio but no access control).
+- MM2 with `ApicurioSchemaTransferSmt` that rewrites V3 envelope global IDs (Strimzi MM2: no schema envelope handling).
+- First-class backup/restore with PITR (Strimzi: no first-party backup).
+- Cruise Control bundled (Strimzi: also bundled — comparable here).
+- Kafka UI bundled (Strimzi: not provided).
+
+## Architecture
+
+- Three or more Kind/EKS/GKE/AKS clusters joined via any MCS-compatible mesh — Submariner Lighthouse, Cilium Cluster Mesh, Istio multi-cluster, or any other implementation that publishes `ServiceImport` and `*.svc.clusterset.local` DNS.
+- Brokers stay local to each Kubernetes cluster; controllers form one KRaft quorum across clusters via `*.svc.clusterset.local` (the MCS standard DNS namespace).
+- Safe rolling updates gated by ISR + KRaft quorum checks.
+- Cross-cluster roll order declared in `spec.clusterRollOrder`.
+- mTLS internal; OIDC at the edge.
+
+## Quickstart
+
+```
+git clone https://github.com/afshin-yavari/kafka-operator
+cd kafka-operator
+make mcs-setup    # 3 Kind clusters + MCS mesh + operator + sample CRs
+make quorum       # verify multi-cluster KRaft quorum
+make -C kind e2e  # smoke e2e
+```
+
+## License
+
+Apache 2.0. Operator, Kroxylicious filters, Apicurio RBAC proxy, MM2 schema-transfer SMT, backup wrapper, and Kafka UI are all in one repo, all Apache 2.0.
+
+## Key pages
+
+- /                                  Landing / pitch
+- /why/                              Detailed comparison vs Strimzi / MSK / Confluent
+- /features/multi-cluster-kraft/     Multi-cluster KRaft deep-dive
+- /features/proxy-rbac/              Kroxylicious + OIDC RBAC deep-dive
+- /features/schema-governance/       Apicurio + RBAC proxy + MM2 schema transfer
+- /features/backup-restore/          Backup / restore / validation
+- /features/cruise-control/          Cruise Control + KafkaRebalance
+- /architecture/                     Reconciler hierarchy and topology
+- /docs/                             Full documentation
+- /llms-full.txt                     Complete operator documentation as a single file
