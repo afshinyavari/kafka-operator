@@ -57,9 +57,12 @@ public class SchemaCache {
         if (e != null && e.fresh()) return Optional.ofNullable(e.value);
 
         try {
-            JsonNode meta = getJson(apicurioUrl + "/apis/registry/v2/ids/globalIds/" + gid + "/meta", bearer);
+            // Apicurio v2 has no metadata-by-globalId endpoint. Schema CONTENT comes
+            // from /ids/globalIds/{id}; the artifact TYPE (AVRO/JSON/PROTOBUF) is read
+            // from a search by globalId. The previous `.../{id}/meta` path was a v3-ism
+            // that always 404'd here — so every by-id lookup looked like "schema missing".
             String content = getRaw(apicurioUrl + "/apis/registry/v2/ids/globalIds/" + gid, bearer);
-            SchemaMeta sm = new SchemaMeta(meta.path("type").asText(""), content, gid);
+            SchemaMeta sm = new SchemaMeta(typeByGlobalId(gid, apicurioUrl, bearer), content, gid);
             byGlobalId.put(gid, new Entry<>(sm, Instant.now().plus(POSITIVE_TTL)));
             return Optional.of(sm);
         } catch (NotFound nf) {
@@ -69,6 +72,18 @@ public class SchemaCache {
             LOG.debugf(ex, "byGlobalId(%d) lookup failed", gid);
             return Optional.empty();
         }
+    }
+
+    /** Resolves the artifact type for a globalId via the v2 search API; "" if unknown. */
+    private String typeByGlobalId(long gid, String apicurioUrl, String bearer) {
+        try {
+            JsonNode hits = getJson(apicurioUrl
+                    + "/apis/registry/v2/search/artifacts?globalId=" + gid, bearer).path("artifacts");
+            if (hits.isArray() && !hits.isEmpty()) return hits.get(0).path("type").asText("");
+        } catch (Exception ex) {
+            LOG.debugf(ex, "type lookup for globalId %d failed", gid);
+        }
+        return "";
     }
 
     public Optional<SchemaMeta> byArtifact(String artifactId, String apicurioUrl, String bearer) {
