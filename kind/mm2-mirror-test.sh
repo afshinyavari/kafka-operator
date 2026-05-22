@@ -7,8 +7,9 @@
 #   target — the operator-managed `my-kafka` cluster + its RBAC-proxied Apicurio.
 #
 # Verifies, end to end:
-#   1. records produced to the source topic are mirrored to `source.mm2-orders` on the
-#      target (DefaultReplicationPolicy renames topics with the source-cluster alias).
+#   1. JSON records produced to the source topic are mirrored verbatim to
+#      `source.mm2-orders` on the target (DefaultReplicationPolicy renames topics with
+#      the source-cluster alias).
 #   2. the schema-sync SMT mirrors the Apicurio schema into the managed registry —
 #      authenticating to its apicurio-rbac-proxy with OAuth2 client-credentials — and
 #      rewrites each record's envelope globalId to the target registry's id.
@@ -69,6 +70,10 @@ kubectl --context "${CTX}" create namespace "${SRC_NS}" --dry-run=client -o yaml
   | kubectl --context "${CTX}" apply -f - >/dev/null
 kubectl --context "${CTX}" apply -f manifests/mm2-src-kafka.yaml >/dev/null
 kubectl --context "${CTX}" apply -f manifests/mm2-src-apicurio.yaml >/dev/null
+# src-kafka is long-lived across MM2_TEST_KEEP re-runs. A plain `apply` of an
+# unchanged StatefulSet won't restart it onto the mm2:dev image just rebuilt in
+# step 0 — leaving a stale in-pod Mm2MirrorProbe. Force a roll so the probe is current.
+kubectl --context "${CTX}" -n "${SRC_NS}" rollout restart statefulset/src-kafka >/dev/null 2>&1 || true
 kubectl --context "${CTX}" -n "${SRC_NS}" rollout status statefulset/src-kafka --timeout=180s >/dev/null
 ok "source Kafka ready"
 kubectl --context "${CTX}" -n "${SRC_NS}" rollout status deployment/src-apicurio --timeout=300s >/dev/null
@@ -98,9 +103,9 @@ ok "source schema registered (globalId=${SRC_GID})"
 kubectl --context "${CTX}" -n "${SRC_NS}" exec src-kafka-0 -- \
   /opt/kafka/bin/kafka-run-class.sh "${PROBE}" produce \
   --bootstrap localhost:9092 --topic "${SRC_TOPIC}" \
-  --global-id "${SRC_GID}" --count "${RECORDS}" --prefix "run-${RUN_ID}-" >/dev/null \
+  --global-id "${SRC_GID}" --count "${RECORDS}" --prefix "run-${RUN_ID}-" --json >/dev/null \
   || fail "producing source records failed"
-ok "produced ${RECORDS} Apicurio-enveloped records to the source"
+ok "produced ${RECORDS} JSON records (Apicurio-enveloped) to the source"
 
 # ── 5. OAuth Secret for the SMT + the MirrorMaker2 CR ───────────────────────────────
 kubectl --context "${CTX}" -n "${NS}" create secret generic mm2-schema-registry-oauth \
@@ -148,7 +153,7 @@ for i in $(seq 1 12); do
     --ssl --keystore /etc/mm2/pkcs12/target/keystore.p12 \
     --truststore /etc/mm2/pkcs12/target/truststore.p12 \
     --store-password changeit 2>/dev/null || true)
-  MATCHED=$(echo "${CONSUME_OUT}" | grep -c "payload=run-${RUN_ID}-" || true)
+  MATCHED=$(echo "${CONSUME_OUT}" | grep -c "run-${RUN_ID}-" || true)
   [[ "${MATCHED}" -ge "${RECORDS}" ]] && break
   sleep 6
 done
@@ -159,11 +164,18 @@ fi
 ok "${MATCHED} records mirrored to ${TGT_TOPIC}"
 
 # Every mirrored record must still carry an Apicurio envelope, with a rewritten globalId.
-TGT_GID=$(echo "${CONSUME_OUT}" | grep "payload=run-${RUN_ID}-" | head -1 \
-            | sed -n 's/.*gid=\(-\{0,1\}[0-9]\+\).*/\1/p')
+MIRRORED_LINE=$(echo "${CONSUME_OUT}" | grep "run-${RUN_ID}-" | head -1)
+TGT_GID=$(echo "${MIRRORED_LINE}" | sed -n 's/.*gid=\(-\{0,1\}[0-9]\+\).*/\1/p')
 [[ -n "${TGT_GID}" && "${TGT_GID}" != "-1" ]] \
   || fail "mirrored records carry no valid Apicurio envelope (gid=${TGT_GID})"
 ok "mirrored records carry a rewritten envelope (target globalId=${TGT_GID})"
+
+# The SMT rewrites only the envelope, never the payload — the mirrored value must
+# survive as the original, valid JSON message conforming to the {id, amount} schema.
+TGT_PAYLOAD=$(echo "${MIRRORED_LINE}" | sed -n 's/.*payload=//p')
+echo "${TGT_PAYLOAD}" | python3 -c 'import sys,json; o=json.load(sys.stdin); assert isinstance(o.get("id"),str) and isinstance(o.get("amount"),int), o' \
+  || fail "mirrored payload is not valid {id, amount} JSON: ${TGT_PAYLOAD}"
+ok "mirrored payload is intact JSON conforming to the source schema (${TGT_PAYLOAD})"
 
 # ── 8. The rewritten globalId must resolve to our schema on the MANAGED registry ─────
 BROKER_POD=$(kubectl --context "${CTX}" -n "${NS}" get pods \

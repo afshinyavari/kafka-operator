@@ -30,7 +30,7 @@ import java.util.Properties;
  * so the test runs it in-cluster via {@code kafka-run-class.sh}, e.g.:
  * <pre>
  *   kafka-run-class.sh se.afshin.yavari.kafka.smt.Mm2MirrorProbe \
- *       produce --bootstrap localhost:9092 --topic mm2-orders --global-id 1 --count 5
+ *       produce --bootstrap localhost:9092 --topic mm2-orders --global-id 1 --count 5 [--json]
  *   kafka-run-class.sh se.afshin.yavari.kafka.smt.Mm2MirrorProbe \
  *       consume --bootstrap kafka-proxy:9094 --topic source.mm2-orders --group probe \
  *       --timeout-ms 60000 --ssl --keystore ks.p12 --truststore ts.p12 --store-password changeit
@@ -62,6 +62,9 @@ public final class Mm2MirrorProbe {
         long globalId = Long.parseLong(req(a, "global-id"));
         int count = Integer.parseInt(a.getOrDefault("count", "5"));
         String prefix = a.getOrDefault("prefix", "mm2-probe-");
+        // --json emits each value as a JSON object conforming to a simple {id, amount}
+        // schema instead of a plain-text marker — for end-to-end JSON-message tests.
+        boolean json = Boolean.parseBoolean(a.getOrDefault("json", "false"));
 
         Properties p = new Properties();
         p.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrap);
@@ -72,7 +75,10 @@ public final class Mm2MirrorProbe {
 
         try (KafkaProducer<byte[], byte[]> producer = new KafkaProducer<>(p)) {
             for (int i = 0; i < count; i++) {
-                byte[] value = envelope(globalId, prefix + i);
+                String payload = json
+                        ? "{\"id\":\"" + prefix + i + "\",\"amount\":" + (100 + i) + "}"
+                        : prefix + i;
+                byte[] value = envelope(globalId, payload);
                 producer.send(new ProducerRecord<>(topic, null, value));
             }
             producer.flush();
