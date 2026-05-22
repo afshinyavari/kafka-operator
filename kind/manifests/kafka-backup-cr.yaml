@@ -1,0 +1,34 @@
+# Smoke KafkaBackup CR for `make e2e` (kafka-backup-test). PVC storage keeps the
+# test self-contained — no object-storage credentials needed. The operator builds
+# a CronJob from this; the smoke test asserts the wiring without triggering a run.
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kafka-backup-smoke-pvc
+  namespace: kafka
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaBackup
+metadata:
+  name: kafka-backup-smoke
+  namespace: kafka
+spec:
+  image: kafka-backup:dev
+  clusterRef:
+    name: my-kafka
+  placement:
+    clusterId: A
+  schedule: "0 3 * * *"
+  includeSchemas: false
+  compression: ZSTD
+  topics:
+    include: ["smoke-events"]
+  storage:
+    pvc:
+      claimName: kafka-backup-smoke-pvc

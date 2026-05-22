@@ -1,0 +1,14 @@
+# Smoke KafkaBackupValidation CR for `make e2e` (kafka-backup-test). Validates the
+# backup written by kafka-backup-smoke. The operator builds a one-shot Job from this.
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaBackupValidation
+metadata:
+  name: kafka-backup-validation-smoke
+  namespace: kafka
+spec:
+  image: kafka-backup:dev
+  placement:
+    clusterId: A
+  deep: false
+  source:
+    kafkaBackupRef: kafka-backup-smoke

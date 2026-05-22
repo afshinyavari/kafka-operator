@@ -1,0 +1,23 @@
+# Sample KafkaRestore. spec.confirm MUST be true — restore is destructive. This
+# example restores into renamed topics (topicMapping) so records land in non-live
+# topics; targetPolicy=REQUIRE_EMPTY blocks the restore if the targets hold data.
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaRestore
+metadata:
+  name: kafka-restore-sample
+  namespace: kafka
+spec:
+  image: kafka-backup:dev
+  targetClusterRef:
+    name: my-kafka
+  placement:
+    clusterId: A
+  confirm: true
+  source:
+    kafkaBackupRef: kafka-backup-smoke
+  topics:
+    include: ["smoke-events"]
+  topicMapping:
+    smoke-events: smoke-events-restored
+  targetPolicy: REQUIRE_EMPTY
+  restoreSchemas: false

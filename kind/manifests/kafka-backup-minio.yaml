@@ -1,0 +1,72 @@
+# In-cluster MinIO for backup/restore testing in kind — S3-compatible object
+# storage with no cloud account needed. S3 endpoint:
+#   http://minio.kafka.svc.cluster.local:9000   (bucket: kafka-backups)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: kafka
+  labels:
+    app: minio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: quay.io/minio/minio:latest
+          args: ["server", "/data", "--console-address", ":9001"]
+          env:
+            - name: MINIO_ROOT_USER
+              value: minioadmin
+            - name: MINIO_ROOT_PASSWORD
+              value: minioadmin
+          ports:
+            - containerPort: 9000
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: kafka
+spec:
+  selector:
+    app: minio
+  ports:
+    - name: s3
+      port: 9000
+      targetPort: 9000
+---
+# Creates the `kafka-backups` bucket once MinIO accepts connections.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-create-bucket
+  namespace: kafka
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: quay.io/minio/mc:latest
+          command: ["/bin/sh", "-c"]
+          args:
+            - >-
+              mc alias set m http://minio.kafka.svc.cluster.local:9000
+              minioadmin minioadmin &&
+              mc mb --ignore-existing m/kafka-backups
