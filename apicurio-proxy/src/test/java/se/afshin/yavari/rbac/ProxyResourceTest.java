@@ -57,6 +57,94 @@ class ProxyResourceTest {
         assertThat(ProxyResource.resolveAction("PUT",    "/anything")).isEqualTo(WRITE);
     }
 
+    // ── parseIdLookup ─────────────────────────────────────────────────────────
+
+    @Test
+    void parseIdLookupGlobalId() {
+        ProxyResource.IdLookup l = ProxyResource.parseIdLookup("/apis/registry/v2/ids/globalIds/7");
+        assertThat(l).isNotNull();
+        assertThat(l.queryParam()).isEqualTo("globalId");
+        assertThat(l.id()).isEqualTo("7");
+    }
+
+    @Test
+    void parseIdLookupContentId() {
+        ProxyResource.IdLookup l = ProxyResource.parseIdLookup("/apis/registry/v2/ids/contentIds/42");
+        assertThat(l).isNotNull();
+        assertThat(l.queryParam()).isEqualTo("contentId");
+        assertThat(l.id()).isEqualTo("42");
+    }
+
+    @Test
+    void parseIdLookupGlobalIdWithReferencesSubpath() {
+        ProxyResource.IdLookup l =
+            ProxyResource.parseIdLookup("/apis/registry/v2/ids/globalIds/7/references");
+        assertThat(l).isNotNull();
+        assertThat(l.queryParam()).isEqualTo("globalId");
+        assertThat(l.id()).isEqualTo("7");
+    }
+
+    @Test
+    void parseIdLookupReturnsNullForNonByIdPaths() {
+        assertThat(ProxyResource.parseIdLookup(
+            "/apis/registry/v2/groups/default/artifacts/orders")).isNull();
+        assertThat(ProxyResource.parseIdLookup("/schemas/orders")).isNull();
+        // content-hash lookups have no single search param — not resolvable here
+        assertThat(ProxyResource.parseIdLookup(
+            "/apis/registry/v2/ids/contentHashes/abc123")).isNull();
+    }
+
+    // ── parseSearchByIdQuery ──────────────────────────────────────────────────
+
+    @Test
+    void parseSearchByIdQueryGlobalId() {
+        ProxyResource.IdLookup l = ProxyResource.parseSearchByIdQuery(
+            "/apis/registry/v2/search/artifacts", "globalId=11");
+        assertThat(l).isNotNull();
+        assertThat(l.queryParam()).isEqualTo("globalId");
+        assertThat(l.id()).isEqualTo("11");
+    }
+
+    @Test
+    void parseSearchByIdQueryContentId() {
+        ProxyResource.IdLookup l = ProxyResource.parseSearchByIdQuery(
+            "/apis/registry/v2/search/artifacts", "limit=1&contentId=5");
+        assertThat(l).isNotNull();
+        assertThat(l.queryParam()).isEqualTo("contentId");
+        assertThat(l.id()).isEqualTo("5");
+    }
+
+    @Test
+    void parseSearchByIdQueryReturnsNullForGeneralSearch() {
+        assertThat(ProxyResource.parseSearchByIdQuery(
+            "/apis/registry/v2/search/artifacts", "name=orders")).isNull();
+        assertThat(ProxyResource.parseSearchByIdQuery(
+            "/apis/registry/v2/search/artifacts", null)).isNull();
+        // not a search path
+        assertThat(ProxyResource.parseSearchByIdQuery(
+            "/apis/registry/v2/groups/default/artifacts/orders", "globalId=1")).isNull();
+    }
+
+    // ── firstArtifactId ───────────────────────────────────────────────────────
+
+    @Test
+    void firstArtifactIdFromSearchResponse() {
+        String json = "{\"artifacts\":[{\"id\":\"mm2-orders-value\",\"name\":\"order\","
+            + "\"type\":\"JSON\"}],\"count\":1}";
+        assertThat(ProxyResource.firstArtifactId(json)).isEqualTo("mm2-orders-value");
+    }
+
+    @Test
+    void firstArtifactIdReturnsNullWhenNoArtifacts() {
+        assertThat(ProxyResource.firstArtifactId("{\"artifacts\":[],\"count\":0}")).isNull();
+    }
+
+    @Test
+    void firstArtifactIdReturnsNullForMalformedBody() {
+        assertThat(ProxyResource.firstArtifactId("not-json")).isNull();
+        assertThat(ProxyResource.firstArtifactId("")).isNull();
+    }
+
     // ── RBAC enforcement via HTTP ─────────────────────────────────────────────
 
     @Test
@@ -135,6 +223,31 @@ class ProxyResourceTest {
     void schemaAdminCanDeleteXmlSchema() {
         int status = given()
             .delete("/schemas/orders")
+            .then().extract().statusCode();
+        assertThat(status).isNotEqualTo(403);
+    }
+
+    // ── by-id lookups (/ids/globalIds/{id}) ──────────────────────────────────
+
+    @Test
+    @TestSecurity(user = "alice", roles = {"orders-team"})
+    void byIdLookupDeniedWhenArtifactUnresolvedAndRoleLacksWildcard() {
+        // The test profile points the registry at a dead port, so resolveArtifact()
+        // cannot resolve globalId 7 and falls back to "*". orders-team has no "*"
+        // schema grant -> 403. (With a live registry it resolves to the real artifact.)
+        given()
+            .get("/apis/registry/v2/ids/globalIds/7")
+            .then()
+            .statusCode(403);
+    }
+
+    @Test
+    @TestSecurity(user = "schemadmin", roles = {"schema-admin"})
+    void byIdLookupAllowedForWildcardRole() {
+        // schema-admin holds artifacts: ["*"], so the by-id lookup passes policy
+        // (non-403; 502 because the upstream registry is not running in tests).
+        int status = given()
+            .get("/apis/registry/v2/ids/globalIds/7")
             .then().extract().statusCode();
         assertThat(status).isNotEqualTo(403);
     }

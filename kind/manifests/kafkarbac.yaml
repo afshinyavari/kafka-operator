@@ -12,6 +12,9 @@ spec:
           - orders-dlq
           - orders-xml     # XML validation filter test topic
           - orders-json    # Apicurio schema-registry filter test topic
+          - source.mm2-orders      # MM2-mirrored from the kafka-src cluster
+          - source.mm2-customers   # MM2-mirrored from the kafka-src cluster
+          - source.mm2-payments    # MM2-mirrored from the kafka-src cluster
         operations:
           - PRODUCE
           - FETCH
@@ -19,6 +22,9 @@ spec:
         artifacts:
           - orders
           - orders-json-value   # subject convention for orders-json's value schema
+          - mm2-orders-value      # MM2-mirrored schema (source.mm2-orders)
+          - mm2-customers-value   # MM2-mirrored schema (source.mm2-customers)
+          - mm2-payments-value    # MM2-mirrored schema (source.mm2-payments)
         actions:
           - READ
           - WRITE

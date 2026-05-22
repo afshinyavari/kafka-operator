@@ -366,6 +366,22 @@ kubectl --context kind-kafka-a -n kafka \
   get cm kafka-rbac-apicurio-policy -o jsonpath='{.data.policy\.yaml}'
 ```
 
+### Authorizing schema-by-id lookups
+
+A generic Apicurio consumer — including the Kafka UI — fetches a schema **by id**: the
+content from `GET /apis/registry/v2/ids/globalIds/{id}` (or `/ids/contentIds/{id}`) and
+the artifact type from `GET /apis/registry/v2/search/artifacts?globalId={id}`. Neither
+form names an artifact, so the rbac-proxy resolves the owning artifact via the registry's
+search API and authorizes against that real name. A role granted `mm2-orders-value` can
+therefore decode messages on a topic carrying that schema **without** a wildcard
+(`artifacts: ["*"]`) grant. A *general* search (e.g. `?name=`) stays a registry-wide
+operation and still requires `"*"`.
+
+A consequence: a group browsing an Apicurio-encoded topic in the Kafka UI needs both the
+topic in `kafka.topics` **and** the value schema's artifact in `schemaRegistry.artifacts`
+— otherwise the UI shows raw binary (the schema lookup returns 403). Content-hash lookups
+(`/ids/contentHashes/{hash}`) are not resolvable this way and still require a `"*"` grant.
+
 ### Accessing the schema registry from an application
 
 ```bash
