@@ -48,6 +48,10 @@ class Mm2ConfigBuilderTest {
         assertThat(props).contains("target.ssl.endpoint.identification.algorithm=");
         assertThat(props).contains("source->target.enabled=true");
         assertThat(props).contains("source->target.replication.factor=3");
+        // Heartbeats are emitted GLOBALLY (not prefixed) so MM2 does not spin up a
+        // herder for the reverse target->source pair. Default emitHeartbeats=true.
+        assertThat(props).contains("emit.heartbeats.enabled=true");
+        assertThat(props).doesNotContain("source->target.emit.heartbeats.enabled");
         assertThat(props).contains("offset.storage.topic=mm2-offsets.my-mm2");
         assertThat(props).contains("config.storage.topic=mm2-configs.my-mm2");
         assertThat(props).contains("status.storage.topic=mm2-status.my-mm2");
@@ -159,6 +163,21 @@ class Mm2ConfigBuilderTest {
         assertThat(props).contains("offset.storage.topic=mm2-offsets.custom-flow");
         assertThat(props).contains("config.storage.topic=mm2-configs.custom-flow");
         assertThat(props).contains("status.storage.topic=mm2-status.custom-flow");
+    }
+
+    @Test
+    void emitHeartbeatsFalseDisablesGloballyToSuppressReverseHerder() {
+        MirrorMaker2Spec spec = new MirrorMaker2Spec();
+        Mm2FlowConfig flow = new Mm2FlowConfig();
+        flow.setEmitHeartbeats(false);
+        spec.setFlow(flow);
+        ResolvedEndpoint ep = new ResolvedEndpoint("b:9092", null, null, null, null, false);
+
+        String props = builder.build(cr(spec), ep, ep);
+
+        // Global false → MM2's clusterPairs() yields only source->target (no reverse herder).
+        assertThat(props).contains("emit.heartbeats.enabled=false");
+        assertThat(props).doesNotContain("source->target.emit.heartbeats.enabled");
     }
 
     @Test

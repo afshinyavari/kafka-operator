@@ -65,7 +65,15 @@ public class Mm2ConfigBuilder {
         p.put("source->target.replication.factor", String.valueOf(flow.getReplicationFactor()));
         p.put("source->target.sync.topic.configs.enabled", String.valueOf(flow.isSyncTopicConfigs()));
         p.put("source->target.sync.topic.acls.enabled", String.valueOf(flow.isSyncTopicAcls()));
-        p.put("source->target.emit.heartbeats.enabled", String.valueOf(flow.isEmitHeartbeats()));
+        // Heartbeats are set GLOBALLY, not per-flow: MM2's MirrorMaker driver creates a
+        // herder for *every* cluster pair whose heartbeats are enabled, and the global
+        // default is true. A prefixed `source->target.emit.heartbeats.enabled=false`
+        // alone leaves the reverse `target->source` herder running — it would try to
+        // create its RF-N internal topics on the source cluster, and a single-node
+        // source that can't satisfy RF>1 makes that throw an uncaught TimeoutException
+        // that kills the whole worker. The global key keeps clusterPairs() to the one
+        // real flow. (Reverse-flow replication is out of scope for the v1 single flow.)
+        p.put("emit.heartbeats.enabled", String.valueOf(flow.isEmitHeartbeats()));
         p.put("source->target.tasks.max", String.valueOf(flow.getTasksMax()));
 
         // Internal topics — pin per-flow names so two MM2 CRs can coexist on the same target.
