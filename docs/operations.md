@@ -47,6 +47,7 @@ Each sub-target stays runnable on its own.
 | `rolling-restart-test` | Annotation-kicked rolling restart of `brokers-a` NodePool: quorum stays healthy + no message loss (1 msg/sec for 60s) |
 | `broker-kill-test` | Delete `brokers-a-0`; producer/consumer through cluster-B's proxy keep working (RF=3+min.isr=2); broker rejoins ISR after |
 | `ui-test` | kafka-ui smoke: login via Keycloak, list clusters, browse a topic |
+| `kafka-backup-test` | `KafkaBackup` builds a CronJob + ConfigMap and reports `SCHEDULED`; a `KafkaRestore` without `spec.confirm` is rejected; `KafkaBackupValidation` builds a Job; CRs cascade-delete |
 
 The KafkaProxy is exposed via MetalLB-backed LoadBalancer on every cluster
 (IP pools `172.19.255.{200-210,220-230,240-250}` — reachable from the Docker
@@ -678,6 +679,64 @@ then set `target.schemaRegistryAuthSecretRef: mm2-schema-registry-oauth` on the 
 ### Decommissioning
 
 Delete the CR. Owner-refs cascade the Deployment, ConfigMap, and the three internal KafkaTopic CRs. ServiceExport (MCS mode) is cleaned up by `cleanup()`.
+
+---
+
+## Backup and Restore
+
+Cold backups are managed by three CRDs — `KafkaBackup` (scheduled), `KafkaRestore`
+(one-shot), `KafkaBackupValidation` (one-shot) — wrapping the osodevops kafka-backup
+tool. See [api-reference.md#kafkabackup](api-reference.md#kafkabackup).
+
+### Building the image
+
+The kafka-backup image is compiled from source onto a UBI base; the e2e builds and
+loads it automatically. To build it by hand:
+
+```bash
+make -C kind reload-kafka-backup-image   # build + load into all kind clusters
+```
+
+The Rust compile is a one-time cost — Docker layer cache reuses it until
+`KAFKA_BACKUP_VERSION` (in `kafka-backup-image/Dockerfile`) changes.
+
+### Scheduling a backup
+
+Apply a `KafkaBackup` CR (sample: `kind/manifests/kafka-backup-cr.yaml`). For cloud
+storage, first create the credentials Secret
+(`kind/manifests/kafka-backup-storage-secret.yaml`). In a multi-cluster deployment
+`spec.placement.clusterId` is **required** — it pins the CronJob to one cluster so
+the backup does not run N times.
+
+```bash
+kubectl -n kafka apply -f kind/manifests/kafka-backup-cr.yaml
+kubectl -n kafka get kafkabackup    # PHASE should reach SCHEDULED
+kubectl -n kafka get cronjob        # the operator-built CronJob
+```
+
+Pause without deleting: set `spec.suspend: true` (PHASE → `SUSPENDED`). Trigger an
+ad-hoc run with `kubectl -n kafka create job --from=cronjob/<name> <name>-manual`;
+`status.lastSuccessfulBackupTime` / `lastJobResult` reflect the most recent run.
+
+For in-cluster S3-compatible storage in kind, `kind/manifests/kafka-backup-minio.yaml`
+deploys MinIO plus a bucket-init Job — point `spec.storage.s3.endpoint` at
+`http://minio.kafka.svc.cluster.local:9000` with `pathStyleAccess: true`.
+
+### Restoring
+
+Apply a `KafkaRestore` CR (sample: `kind/manifests/kafka-restore-cr.yaml`).
+`spec.confirm: true` is mandatory — restore is destructive. The reconciler runs a
+pre-flight topic check (`spec.targetPolicy`) and builds the restore Job exactly
+once. Restore into renamed topics with `spec.topicMapping` to inspect before swap;
+`spec.timeWindow` gives point-in-time recovery; `spec.dryRun: true` reports what
+would be restored without writing. To re-run, delete and re-create the CR — a CR
+with a terminal phase is never re-run.
+
+> Consumer-offset restore (`spec.restoreOffsets`) is unsafe against live consumer
+> groups — scale consumers to 0 first.
+
+Validate a stored backup without a full restore with a `KafkaBackupValidation` CR;
+`status.phase` reaches `VALID` or `INVALID`.
 
 ---
 

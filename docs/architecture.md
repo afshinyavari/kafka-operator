@@ -60,6 +60,9 @@ Users create `KafkaRbac`, `KafkaProxy`, `ApicurioRegistry`, and `KafkaTopic`. Th
 | `KafkaProxyReconciler` | `KafkaProxy` | `{name}-config` ConfigMap (Kroxylicious YAML), Deployment, Service | `KafkaProxy`, `KafkaNodePool`, `KafkaRbac`, `ApicurioRegistry` changes |
 | `ApicurioRegistryReconciler` | `ApicurioRegistry` | `{name}-registry` Deployment + Service, `{name}-rbac-proxy` Deployment + Service | `ApicurioRegistry`, `KafkaRbac` changes |
 | `KafkaTopicReconciler` | `KafkaTopic` | Kafka topics via `AdminClient` (createTopics, incrementalAlterConfigs, createPartitions, deleteTopics) | `KafkaTopic` changes; periodic resync every 5 min for external-drift detection |
+| `KafkaBackupReconciler` | `KafkaBackup` | `{name}` ConfigMap (rendered config) + `CronJob` running the kafka-backup tool | `KafkaBackup` changes; 60s resync for run-result status |
+| `KafkaRestoreReconciler` | `KafkaRestore` | `{name}` ConfigMap + one-shot restore `Job` (created once; idempotent) | `KafkaRestore` changes |
+| `KafkaBackupValidationReconciler` | `KafkaBackupValidation` | one-shot validation `Job` | `KafkaBackupValidation` changes |
 
 All reconcilers use JOSDK's `UpdateControl.patchStatus().rescheduleAfter(15s)` when work is still in progress, creating a self-healing loop.
 
@@ -763,4 +766,35 @@ MCS gives single-K8s-cluster fault tolerance for the same flow.
 - `kind/mm2-mirror-test.sh` — extended e2e: real data + schema mirror
   (external source → managed target) exercising the SMT's OAuth write path
 - See [api-reference.md#mirrormaker2](api-reference.md#mirrormaker2) for the
+  full CRD reference.
+
+## Backup / Restore (KafkaBackup, KafkaRestore, KafkaBackupValidation)
+
+The operator does not implement a backup engine — it wraps the open-source
+osodevops/kafka-backup tool, exactly as MirrorMaker2 wraps Kafka Connect.
+
+- `KafkaBackupReconciler` renders an osodevops YAML config (`BackupConfigBuilder`),
+  wraps it in a ConfigMap, and applies a `CronJob` (`BackupWorkloadBuilder`).
+  Kubernetes owns the schedule cadence.
+- `KafkaRestoreReconciler` / `KafkaBackupValidationReconciler` build one-shot
+  `Job`s. Both are idempotent — a terminal `status.phase` blocks Job re-creation,
+  so a reconcile triggered by anything else never re-runs a finished restore.
+- `BackupEndpointResolver` resolves the managed cluster to a **direct broker
+  headless** bootstrap (not the proxy) — bulk full-topic reads stay off the
+  shared Kroxylicious proxy. mTLS PEM material is reused from `proxyMtls`.
+- `BackupPlacementGate` enforces `spec.placement.clusterId` so the same CR
+  applied to N MCS clusters runs the workload exactly once.
+- When `includeSchemas` is set, `SchemaBackupStep` adds an Apicurio export
+  sidecar (backup) / import init container (restore) to the pod, using the
+  scripts bundled in the kafka-backup image.
+
+### Where this lives
+
+- `src/main/java/se/afshin/yavari/kafka/operator/backup/` — reconcilers + builders
+- `src/main/java/se/afshin/yavari/kafka/operator/crd/KafkaBackup*.java`,
+  `KafkaRestore*.java`, `KafkaBackupValidation*.java` — CRD classes
+- `kafka-backup-image/` — osodevops kafka-backup compiled from source on a UBI
+  base, plus the Apicurio export/import scripts
+- `kind/kafka-backup-test.sh` — smoke e2e (CRD + reconciler wiring)
+- See [api-reference.md#kafkabackup](api-reference.md#kafkabackup) for the
   full CRD reference.

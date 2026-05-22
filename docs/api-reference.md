@@ -14,6 +14,9 @@ All CRDs are in group `kafka.yavari.afshin.se`, version `v1alpha1`.
 | [ApicurioRegistry](#apicurioregistry) | `apr` | Apicurio Registry deployment with an optional JWT-aware RBAC proxy. | KafkaRbac |
 | [KafkaUI](#kafkaui) | `kui` | Web UI Deployment + Service + RBAC (Role/RoleBinding/SA) for browsing Kafka clusters through Keycloak SSO. | KafkaCluster (read-only at runtime, no CRD-level ref) |
 | [KafkaTopic](#kafkatopic) | `kt` | Declarative Kafka topic — partitions, replication factor, dynamic config. Reconciled by the operator instance running on the primary K8s cluster (`spec.clusters[0].id` on the referenced `KafkaCluster`); peer instances mark the CR `SKIPPED`. | KafkaCluster |
+| [KafkaBackup](#kafkabackup) | `kbk` | Scheduled backup of topic data (and Apicurio schemas) to object storage. The operator builds a `CronJob` running the osodevops kafka-backup tool. | KafkaCluster |
+| [KafkaRestore](#kafkarestore) | `krs` | One-shot, idempotent restore of a KafkaBackup into a managed cluster. | KafkaBackup, KafkaCluster |
+| [KafkaBackupValidation](#kafkabackupvalidation) | `kbv` | One-shot integrity check of a stored backup. | KafkaBackup |
 
 ---
 
@@ -1189,3 +1192,139 @@ Shared sub-spec used by `KafkaUI.spec.externalAccess` and `ApicurioRegistry.spec
 | `INGRESS` | ClusterIP | `networking.k8s.io/v1` Ingress |
 
 Switching `type` is non-destructive: the reconciler creates the new edge resource on the next pass and deletes any stale Ingress/HTTPRoute.
+
+---
+
+## KafkaBackup
+
+Scheduled, recurring backup of a managed `KafkaCluster`'s topic data — and, optionally, its
+Apicurio schemas — to object storage. The operator does not implement a backup engine: it
+renders a config for the open-source [osodevops/kafka-backup](https://github.com/osodevops/kafka-backup)
+tool (MIT-licensed, compiled from source onto a UBI base in `kafka-backup-image/`) and builds
+a Kubernetes **`CronJob`**. Kubernetes owns the schedule cadence; the operator re-renders the
+CronJob on spec change and reflects run results into status.
+
+Backup workloads connect **direct to the broker headless service** on the internal listener —
+not through the Kroxylicious proxy — so bulk full-topic reads stay off the shared proxy. When
+the cluster has `proxyMtls`, the broker mTLS PEM Secret is mounted and the tool connects over
+TLS. Backups are written under `backup_id = metadata.name`.
+
+> Topic **records and consumer-group offsets** are backed up. Topic **ACLs and dynamic
+> configs are not** — rebuild those from your `KafkaTopic` / `KafkaRbac` CRs in git. See
+> [disaster-recovery.md](disaster-recovery.md).
+
+### spec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `image` | string | no | `kafka-backup:dev` | kafka-backup tool image. |
+| `imagePullPolicy` | string | no | `IfNotPresent` | Standard k8s pull policy. |
+| `clusterRef` | KafkaClusterRef | **yes** | — | Managed `KafkaCluster` to back up (same namespace). |
+| `placement.clusterId` | string | conditionally | — | Cluster the CronJob runs on. **Required** when the operator runs multi-cluster (MCS) — otherwise every operator instance would build a CronJob and the backup would run N times. Non-matching instances mark the CR `SKIPPED`. |
+| `topics` | [BackupTopicSelector](#backuptopicselector) | no | all topics | Topic include/exclude patterns. |
+| `storage` | [BackupStorageSpec](#backupstoragespec) | **yes** | — | Object-storage backend (exactly one of s3/azure/gcs/pvc). |
+| `compression` | enum | no | `ZSTD` | `NONE` / `ZSTD` / `LZ4`. |
+| `compressionLevel` | integer | no | tool default | Codec level. |
+| `schedule` | string | **yes** | — | Cron schedule for the CronJob. |
+| `concurrencyPolicy` | string | no | `Forbid` | CronJob concurrency: `Allow` / `Forbid` / `Replace`. |
+| `suspend` | bool | no | `false` | Pause the schedule without deleting the CR. |
+| `startingDeadlineSeconds` | integer | no | `300` | Missed-schedule catch-up bound. |
+| `successfulJobsHistoryLimit` / `failedJobsHistoryLimit` | integer | no | `3` / `3` | Job history retained. |
+| `includeSchemas` | bool | no | _auto_ | Export Apicurio schemas with each backup. Auto = true when the cluster has an Apicurio sub-spec. Supported for `pvc` and `s3` storage only. |
+| `schemaRegistryAuthSecretRef` | string | no | — | OAuth2 client-credentials Secret (`token-url`, `client-id`, `client-secret`) for the schema export when Apicurio is behind an authenticating proxy. |
+| `activeDeadlineSeconds` | integer | no | `3600` | Per-run hard timeout. |
+| `resources` | KafkaUIResourceRequirements | no | small | CPU/memory requests + limits. |
+| `additionalConfig` | map[string]string | no | `{}` | Extra keys merged verbatim into the rendered `backup:` config section. |
+
+### BackupStorageSpec
+
+Discriminated union — exactly one of `s3` / `azure` / `gcs` / `pvc` (CEL-validated). Cloud
+credentials come from a referenced Secret and are mounted as env vars — never inlined.
+
+| Sub-field | Keys | Credentials Secret keys |
+|-----------|------|--------------------------|
+| `s3` | `bucket`*, `prefix`, `region`, `endpoint` (MinIO), `pathStyleAccess`, `credentialsSecretRef`* | `accessKeyId`, `secretAccessKey` |
+| `azure` | `container`*, `prefix`, `credentialsSecretRef`* | `accountName`, `accountKey` |
+| `gcs` | `bucket`*, `prefix`, `credentialsSecretRef`* | `key.json` |
+| `pvc` | `claimName`*, `subPath` | — (filesystem) |
+
+### BackupTopicSelector
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `include` | string[] | `["*"]` | Topic name patterns to back up. |
+| `exclude` | string[] | `["__consumer_offsets", "_schemas"]` | Patterns to skip. |
+
+### status
+
+| Field | Description |
+|-------|-------------|
+| `phase` | `RECONCILING` / `SCHEDULED` / `SUSPENDED` / `SKIPPED` / `FAILED`. |
+| `cronJobName`, `schedule`, `resolvedBootstrap` | The created CronJob, its schedule, the resolved broker bootstrap. |
+| `lastScheduleTime`, `lastSuccessfulBackupTime` | From the CronJob status. |
+| `lastJobName`, `lastJobResult` | Most recent child Job and its result (`SUCCEEDED` / `FAILED` / `RUNNING` / `UNKNOWN`). |
+| `activeBackupCount` | Currently-running backup Jobs. |
+
+---
+
+## KafkaRestore
+
+One-shot restore of a `KafkaBackup` into a managed `KafkaCluster`. The operator builds a
+Kubernetes **`Job`** exactly once. The reconciler is **idempotent**: once `status.phase` is
+terminal it never re-creates the Job — re-running a restore requires deleting and re-creating
+the CR.
+
+Restore is destructive, so `spec.confirm` must be `true` or the reconciler refuses. Before the
+Job is created, the reconciler runs an AdminClient pre-flight check of the literal target
+topics against `spec.targetPolicy`. When `restoreSchemas` is set, Apicurio schemas are imported
+(as an init container) before records land.
+
+### spec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `image` / `imagePullPolicy` | string | no | `kafka-backup:dev` / `IfNotPresent` | kafka-backup tool image. |
+| `targetClusterRef` | KafkaClusterRef | **yes** | — | Managed cluster to restore into. |
+| `placement.clusterId` | string | conditionally | — | Cluster the restore Job runs on (required multi-cluster). |
+| `source` | RestoreSourceSpec | **yes** | — | Exactly one of `kafkaBackupRef` (a KafkaBackup CR name) or inline `storage`. |
+| `backupId` | string | no | _kafkaBackupRef name_ | Specific backup id. Required when `source.storage` is inline. |
+| `topics` | BackupTopicSelector | no | all | Topics to restore. |
+| `topicMapping` | map[string]string | no | `{}` | Source→target topic renaming (restore into non-live topics). |
+| `timeWindow` | RestoreTimeWindow | no | — | Point-in-time-recovery: `startMillis` / `endMillis` (epoch ms). |
+| `restoreOffsets` | bool | no | `false` | Restore committed consumer-group offsets. Dangerous against live groups. |
+| `consumerGroups` | string[] | no | `[]` | Groups whose offsets to restore (with `restoreOffsets`). |
+| `targetPolicy` | enum | no | `REQUIRE_EMPTY` | Pre-flight guard: `REQUIRE_ABSENT` / `REQUIRE_EMPTY` / `ALLOW_NON_EMPTY`. Checks literal topic names only. |
+| `confirm` | bool | **yes (true)** | `false` | Must be `true` — acknowledges the restore is destructive. |
+| `restoreSchemas` | bool | no | _auto_ | Import Apicurio schemas before records. |
+| `createTopics` | bool | no | `true` | Create absent target topics. |
+| `dryRun` | bool | no | `false` | Report what would be restored without writing. |
+| `activeDeadlineSeconds` | integer | no | `7200` | Hard timeout. |
+
+### status
+
+`phase` walks `PENDING` → `RUNNING` → `SUCCEEDED` / `FAILED` (or `SKIPPED`). `jobName`,
+`resolvedBootstrap`, `startTime`, `completionTime` track the Job.
+
+---
+
+## KafkaBackupValidation
+
+One-shot integrity check of a stored backup. The operator builds a `Job` that runs
+`kafka-backup validate`; the terminal phase reflects whether the backup is restorable.
+Idempotent like KafkaRestore.
+
+### spec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `image` / `imagePullPolicy` | string | no | `kafka-backup:dev` / `IfNotPresent` | kafka-backup tool image. |
+| `placement.clusterId` | string | conditionally | — | Cluster the validation Job runs on (required multi-cluster). |
+| `source` | RestoreSourceSpec | **yes** | — | Exactly one of `kafkaBackupRef` or inline `storage`. |
+| `backupId` | string | no | _kafkaBackupRef name_ | Specific backup id. |
+| `reportFormat` | enum | no | `JSON` | `JSON` / `PDF`. |
+| `deep` | bool | no | `true` | Deep validation reads all data and verifies checksums; quick checks segment metadata only. |
+| `activeDeadlineSeconds` | integer | no | `3600` | Hard timeout. |
+
+### status
+
+`phase` walks `PENDING` → `RUNNING` → `VALID` / `INVALID` / `FAILED` (or `SKIPPED`).

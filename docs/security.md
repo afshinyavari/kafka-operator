@@ -140,6 +140,17 @@ which in turn requires per-user K8s `Role`s provisioned externally. The
 operational cost outweighed the value, so `KafkaRbac` stays GitOps-only and
 the UI exposes it read-only.
 
+## Backup data path
+
+`KafkaBackup` / `KafkaRestore` / `KafkaBackupValidation` workloads connect **direct
+to the broker internal listener**, bypassing the Kroxylicious proxy — the same
+out-of-band path the operator's own AdminClient uses. This keeps bulk full-topic
+reads off the shared proxy, but it also means backup/restore traffic is **not**
+subject to the proxy's RBAC, audit, or schema-validation filters. The internal
+listener is cluster-internal and mTLS-protected when `proxyMtls` is set; constrain
+it further with NetworkPolicies. Object-storage credentials are supplied as
+Secret-backed env vars and are never written into the rendered config or logs.
+
 ## Threats considered but not (yet) defended
 
 - **Compromised operator pod**: today the operator has full Kafka admin via

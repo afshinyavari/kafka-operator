@@ -24,6 +24,7 @@ A Kubernetes operator for running Apache Kafka 4.x in KRaft mode across multiple
 - **Apicurio schema registry** — `ApicurioRegistry` CRD deploys Apicurio Registry with an optional HTTP RBAC proxy that enforces per-artifact READ/WRITE/DELETE access via JWT roles. Supports `mem`, `postgresql`, and `kafkasql` (durable Kafka-backed) storage with auto-provisioned journal topic and broker ACLs
 - **OIDC/Keycloak integration** — JWT claims extracted from `realm_access.roles` become authorization groups; same JWT used for both Kafka proxy RBAC and schema registry proxy RBAC
 - **MirrorMaker2 with Apicurio schema mirroring** — `MirrorMaker2` CRD deploys MM2 in dedicated mode. Each end (source/target) is independently a managed `KafkaCluster` ref or an external endpoint. When both ends carry Apicurio, an opt-in custom Connect SMT (`ApicurioSchemaTransferSmt`) rewrites the V3 envelope's globalId per record so consumers can decode mirrored payloads; it authenticates to a managed cluster's RBAC-proxied registry via OAuth2 client-credentials (`schemaRegistryAuthSecretRef`). `make -C kind mm2-mirror-test` is a full data + schema mirror e2e. See [api-reference.md#mirrormaker2](docs/api-reference.md#mirrormaker2).
+- **Backup & restore** — `KafkaBackup` (scheduled), `KafkaRestore` (one-shot) and `KafkaBackupValidation` CRDs wrap the open-source [osodevops/kafka-backup](https://github.com/osodevops/kafka-backup) tool — compiled from source onto a UBI base. `KafkaBackup` builds a `CronJob` that copies topic records + consumer offsets (and, with `includeSchemas`, Apicurio schemas) to S3 / Azure / GCS / PVC; `KafkaRestore` builds an idempotent one-shot restore `Job` with point-in-time recovery and topic remapping. See [api-reference.md#kafkabackup](docs/api-reference.md#kafkabackup).
 
 ## Prerequisites
 
@@ -219,6 +220,7 @@ kafka-operator/
 │       ├── ApicurioSchemaTransferSmt.java  # Envelope rewrite + reference DFS + LRU cache
 │       └── ApicurioClient.java             # Minimal Apicurio v3 REST client
 ├── mm2-image/        # MirrorMaker2 worker image (kafka-ubi base + schema-sync-smt JAR)
+├── kafka-backup-image/  # osodevops kafka-backup compiled from source on UBI + schema scripts
 ├── kind/
 │   ├── mcs-setup.sh  # Full cluster bootstrap script
 │   ├── Makefile      # All development targets

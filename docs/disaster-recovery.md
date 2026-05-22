@@ -8,20 +8,40 @@ as user-runnable steps — the operator does not automate DR.
 | Loss event | Affected data | Recovery owner |
 |---|---|---|
 | One MCS K8s cluster fails | Local broker + controller + proxy + Apicurio replica | KRaft quorum / Submariner Lighthouse — automatic if RF≥3 + min.insync.replicas=2 |
-| All K8s clusters fail simultaneously | Broker on-disk topic data, Apicurio kafkasql journal, KRaft metadata | User-supplied backups (see below) |
+| All K8s clusters fail simultaneously | Broker on-disk topic data, Apicurio kafkasql journal, KRaft metadata | [`KafkaBackup`](api-reference.md#kafkabackup) → object storage; restore with [`KafkaRestore`](api-reference.md#kafkarestore) |
 | KafkaRbac CR deleted | RBAC ConfigMaps cascade via owner-ref | Restore CR from git (GitOps source of truth) |
 | KafkaCluster CR deleted | Proxy + Apicurio Deployments cascade; broker PVCs remain bound | Restore CR from git; broker PVCs re-attach by name |
 | Keycloak realm corruption | OIDC tokens no longer verify | User-supplied IDP backup (see BYO IDP below) |
-| Apicurio schema journal lost | Per-topic schemas | Re-publish from source (Apicurio export Job is on the backlog) |
+| Apicurio schema journal lost | Per-topic schemas | `KafkaBackup` with `includeSchemas` exports them alongside topic data; `KafkaRestore` re-imports |
 
 ## Topic data
 
 The operator's broker pools default to RF=3 and min.insync.replicas=2 across
 three MCS-joined K8s clusters. A single-cluster loss is transparent to
-producers/consumers. Beyond that, the operator does not back up topic data
-itself.
+producers/consumers.
 
-For cross-region replication, the operator ships a [`MirrorMaker2`](api-reference.md#mirrormaker2)
+### Scheduled cold backup — KafkaBackup / KafkaRestore
+
+For point-in-time cold backups beyond replication, apply a
+[`KafkaBackup`](api-reference.md#kafkabackup) CR. The operator builds a `CronJob`
+that runs the osodevops kafka-backup tool, copying topic **records and
+consumer-group offsets** — and, with `includeSchemas`, the Apicurio schemas — to
+S3 / Azure / GCS / a PVC. `spec.placement.clusterId` pins the job to one MCS
+cluster so the backup runs once, not N times.
+
+**What is _not_ covered:** topic ACLs and dynamic topic configs. Rebuild those
+from your `KafkaTopic` / `KafkaRbac` CRs in git — they are the GitOps source of
+truth. Keep those CRs versioned.
+
+To restore after total loss: deploy a fresh `KafkaCluster`, then apply a
+[`KafkaRestore`](api-reference.md#kafkarestore) CR (`spec.confirm: true`)
+referencing the `KafkaBackup`. `restoreSchemas` imports schemas before records so
+restored payloads stay decodable; `timeWindow` gives point-in-time recovery;
+`topicMapping` restores into renamed (non-live) topics for inspection first.
+Validate a stored backup without a full restore with
+[`KafkaBackupValidation`](api-reference.md#kafkabackupvalidation).
+
+For cross-region *live* replication, the operator also ships a [`MirrorMaker2`](api-reference.md#mirrormaker2)
 CRD that drives a dedicated-mode MM2 worker Deployment. Each end (source and
 target) is independently either a managed `KafkaCluster` reference (the operator
 resolves to the proxy bootstrap and reuses the admin client cert) or an external
@@ -54,7 +74,8 @@ Schemas live in a Kafka topic (the `kafkasql-journal`, partition count
   recreate the topic at the next reconcile (with `deletionPolicy=RETAIN` the
   journal data is lost). Re-publish all schemas from source.
 
-Export procedure (manual, until the export Job ships):
+The `KafkaBackup` `includeSchemas` flag automates this export/import. The steps
+below remain a quick ad-hoc fallback:
 
 ```bash
 # Dump all artifacts from the Apicurio API
