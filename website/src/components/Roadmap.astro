@@ -1,0 +1,38 @@
+---
+import roadmap from '../data/roadmap.json';
+---
+
+<section class="container-site py-24">
+  <div class="mb-12 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+    <div class="max-w-2xl">
+      <p class="eyebrow mb-3 text-brand">On the roadmap</p>
+      <h2 class="font-display text-4xl tracking-tight md:text-5xl">What's coming next.</h2>
+      <p class="mt-4 text-lg text-fg-muted">
+        Four headline features in active design. Honest dates aren't here yet —
+        if any of these are blockers for adoption, tell us and we'll prioritize.
+      </p>
+    </div>
+    <a href="/roadmap/" class="btn-ghost shrink-0 self-start">See full roadmap →</a>
+  </div>
+
+  <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+    {roadmap.map((item) => (
+      <a
+        href={`/roadmap/#${item.slug}`}
+        class="group relative overflow-hidden rounded-xl border border-border bg-bg-raised p-6 transition-colors hover:border-brand/40 hover:bg-bg-inset"
+      >
+        <div class="flex items-center justify-between">
+          <span class="font-mono text-[10px] uppercase tracking-[0.18em] text-brand-bright">{item.eyebrow}</span>
+          <span class="rounded-full border border-border-strong bg-bg-inset px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-fg-muted">
+            Coming soon
+          </span>
+        </div>
+        <h3 class="mt-4 text-xl font-medium text-fg">{item.title}</h3>
+        <p class="mt-2 text-sm text-fg-muted">{item.tagline}</p>
+        <span class="mt-5 inline-flex items-center text-xs text-brand-bright opacity-0 transition-opacity group-hover:opacity-100">
+          Read more →
+        </span>
+      </a>
+    ))}
+  </div>
+</section>

@@ -55,6 +55,15 @@ make quorum       # verify multi-cluster KRaft quorum
 make -C kind e2e  # smoke e2e
 ```
 
+## On the roadmap
+
+Four headline features in active design (no shipped dates yet — design partners shape priority):
+
+- **Live migration from any Kafka cluster** — adopt brokers and controllers one at a time from a self-managed cluster, Strimzi, AWS MSK, or Confluent Cloud, with no downtime. Uses the Kafka 3.9+ AddVoter/RemoveVoter APIs.
+- **Tiered storage with Apache Iceberg** — offload cold log segments to S3/Azure/GCS via Aiven's tiered storage plugin; the cold tier is queryable as an Iceberg table by DuckDB, Trino, Spark.
+- **Unified audit logging** — cross-cutting audit stream emitted by the Kroxylicious proxy and the Apicurio RBAC proxy. Captures principal (full JWT claim trail), operation, resource, decision, latency. Sinks to a Kafka topic, Loki, or OpenSearch.
+- **Visual designer** — modern React + Electron app for designing Kafka Streams topologies on a canvas, browsing topics with type-aware decoding, and authoring schemas. Standalone desktop + embeddable SPA. Pairs with the existing read-mostly KafkaUI.
+
 ## License
 
 Apache 2.0. Operator, Kroxylicious filters, Apicurio RBAC proxy, MM2 schema-transfer SMT, backup wrapper, and Kafka UI are all in one repo, all Apache 2.0.
@@ -69,5 +78,6 @@ Apache 2.0. Operator, Kroxylicious filters, Apicurio RBAC proxy, MM2 schema-tran
 - /features/backup-restore/          Backup / restore / validation
 - /features/cruise-control/          Cruise Control + KafkaRebalance
 - /architecture/                     Reconciler hierarchy and topology
+- /roadmap/                          Upcoming features (tiered storage + Iceberg, audit log, visual designer, live migration)
 - /docs/                             Full documentation
 - /llms-full.txt                     Complete operator documentation as a single file

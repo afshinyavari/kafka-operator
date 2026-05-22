@@ -1,0 +1,38 @@
+[
+  {
+    "slug": "live-migration",
+    "eyebrow": "Adoption",
+    "title": "Live migration from any Kafka",
+    "tagline": "Move onto the operator with zero downtime — from anywhere.",
+    "summary": "Adopt brokers and controllers one at a time from a self-managed cluster, Strimzi, AWS MSK, or Confluent Cloud. The operator joins the existing quorum, mirrors topics in flight, then drains the source.",
+    "detail": "Most teams never migrate Kafka clusters because the cutover is too risky. The operator's <code>spec.adoptExistingCluster</code> mode is designed to remove that risk: start the operator's brokers as additional voters against the source quorum (Kafka 3.9+ AddVoter/RemoveVoter API), let replication catch up, then remove the source brokers one-by-one. Clients keep talking to the same bootstrap throughout. No big-bang DNS flip, no MirrorMaker offset drift, no second cluster to maintain.",
+    "keywords": ["kafka migration", "strimzi to operator", "msk migration", "confluent migration", "kafka adoption", "live migration kafka", "addvoter removevoter"]
+  },
+  {
+    "slug": "tiered-storage-iceberg",
+    "eyebrow": "Storage",
+    "title": "Tiered storage with Iceberg",
+    "tagline": "Infinite retention, queryable as a data lake table.",
+    "summary": "Offload cold log segments to S3 / Azure / GCS via Aiven's tiered storage plugin, with the cold tier readable as an Apache Iceberg table. Query historical Kafka with DuckDB, Trino, or Spark — no ETL pipeline.",
+    "detail": "Brokers stay lean: hot data stays on the local volume, cold data lives in object storage. The same segments are also exposed as an Apache Iceberg table, so your data lake reads Kafka directly. Retention becomes effectively infinite at object-store prices, and the canonical archive is in a format every modern analytics engine already speaks. Configured under <code>KafkaCluster.spec.storage.tiered</code>; object-store credentials via Secret reference.",
+    "keywords": ["kafka tiered storage", "kafka iceberg", "aiven tiered storage", "kafka data lake", "kafka s3 tier", "kafka infinite retention"]
+  },
+  {
+    "slug": "audit-logging",
+    "eyebrow": "Compliance",
+    "title": "Unified audit logging",
+    "tagline": "Every Kafka and schema operation, one stream, full JWT trail.",
+    "summary": "Cross-cutting audit log emitted by the Kroxylicious proxy and the Apicurio RBAC proxy. Captures principal, operation, resource, decision, and latency for every Kafka and schema-registry call.",
+    "detail": "Audit lives where the policy enforcement lives: the two proxies that already see every request. One unified event stream records who did what, when, against which resource, with the JWT claim trail intact — produce, fetch, topic create, ACL change, consumer-group commit, schema write, schema delete, registry rule change. Sink options: a dedicated Kafka topic (default), Loki, OpenSearch, or any structured-log destination. Spec under <code>KafkaCluster.spec.audit</code>.",
+    "keywords": ["kafka audit log", "kafka compliance", "kroxylicious audit", "apicurio audit", "kafka soc2", "kafka access log"]
+  },
+  {
+    "slug": "visual-designer",
+    "eyebrow": "Tooling",
+    "title": "Visual designer",
+    "tagline": "Design Kafka Streams topologies on a canvas. Browse messages with type-aware decoding.",
+    "summary": "A modern React + Electron app for visualising and authoring Kafka Streams topologies, browsing topics, and managing schemas. Standalone desktop, or embedded next to the operator's CR-driven UI.",
+    "detail": "A separate tool, designed to feel modern: a drag-on-canvas topology editor (generates Streams DSL), a type-aware message browser that decodes via the schema registry, and visual schema authoring with reference resolution. Java backend for live cluster introspection; React + TypeScript + Vite frontend; packaged as both an Electron desktop app and an embeddable SPA. Pairs with the operator's existing read-mostly KafkaUI rather than replacing it.",
+    "keywords": ["kafka streams designer", "kafka streams visualizer", "kafka topology editor", "modern kafka ui", "kafka schema designer", "kafka editor"]
+  }
+]

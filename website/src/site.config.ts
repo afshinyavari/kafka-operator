@@ -27,6 +27,13 @@ export const site = {
     'cruise control',
     'kafka rbac',
     'strimzi alternative',
+    'kafka tiered storage',
+    'kafka iceberg',
+    'aiven tiered storage',
+    'kafka audit log',
+    'kafka migration',
+    'kafka streams designer',
+    'modern kafka ui',
   ],
 };
 
@@ -34,6 +41,7 @@ export const nav = [
   { href: '/why/', label: 'Why' },
   { href: '/features/multi-cluster-kraft/', label: 'Features' },
   { href: '/architecture/', label: 'Architecture' },
+  { href: '/roadmap/', label: 'Roadmap' },
   { href: '/docs/', label: 'Docs' },
   { href: site.githubUrl, label: 'GitHub', external: true },
 ];
