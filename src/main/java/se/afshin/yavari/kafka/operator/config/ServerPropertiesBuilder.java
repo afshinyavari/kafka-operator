@@ -188,6 +188,46 @@ public class ServerPropertiesBuilder {
             props.putIfAbsent("transaction.state.log.replication.factor",          String.valueOf(rf));
             props.putIfAbsent("transaction.state.log.min.isr",                     "2");
             props.putIfAbsent("default.replication.factor",                        String.valueOf(rf));
+
+            // Cruise Control Metrics Reporter — runs inside the broker JVM and publishes
+            // broker/partition metrics to __CruiseControlMetrics. Enabling spec.cruiseControl
+            // rewrites server.properties → the existing KAFKA_CONFIG_HASH mechanism rolls
+            // every broker once. The reporter JAR is bundled in the Kafka image.
+            if (clusterSpec.getCruiseControl() != null) {
+                String existingReporters = props.get("metric.reporters");
+                String ccReporter =
+                    "com.linkedin.kafka.cruisecontrol.metricsreporter.CruiseControlMetricsReporter";
+                props.put("metric.reporters",
+                    (existingReporters == null || existingReporters.isBlank())
+                        ? ccReporter : existingReporters + "," + ccReporter);
+                // The reporter's own producer connects to the local broker's INTERNAL
+                // listener — localhost avoids a cross-pod hop (same as Strimzi).
+                props.put("cruise.control.metrics.reporter.bootstrap.servers", "localhost:9092");
+                if (internalMtls) {
+                    // INTERNAL is SSL — the reporter's producer reuses the broker's own
+                    // INTERNAL keystore materialised by start.sh at /tmp/tls/INTERNAL.
+                    props.put("cruise.control.metrics.reporter.security.protocol", "SSL");
+                    props.put("cruise.control.metrics.reporter.ssl.keystore.type", "PKCS12");
+                    props.put("cruise.control.metrics.reporter.ssl.keystore.location",
+                        "/tmp/tls/INTERNAL/keystore.p12");
+                    props.put("cruise.control.metrics.reporter.ssl.keystore.password", "changeit");
+                    props.put("cruise.control.metrics.reporter.ssl.key.password", "changeit");
+                    props.put("cruise.control.metrics.reporter.ssl.truststore.type", "PKCS12");
+                    props.put("cruise.control.metrics.reporter.ssl.truststore.location",
+                        "/tmp/tls/INTERNAL/truststore.p12");
+                    props.put("cruise.control.metrics.reporter.ssl.truststore.password", "changeit");
+                    props.put("cruise.control.metrics.reporter.ssl.endpoint.identification.algorithm", "");
+                }
+                var ccm = clusterSpec.getCruiseControl().getMetricsReporter();
+                int metricsRf = (ccm != null && ccm.getMetricsTopicReplicas() != null)
+                        ? ccm.getMetricsTopicReplicas() : rf;
+                props.putIfAbsent("cruise.control.metrics.topic.replication.factor",
+                        String.valueOf(metricsRf));
+                if (ccm != null && ccm.getMetricsTopicPartitions() != null) {
+                    props.putIfAbsent("cruise.control.metrics.topic.num.partitions",
+                            String.valueOf(ccm.getMetricsTopicPartitions()));
+                }
+            }
         }
 
         // Controller TLS SSL properties — applied to all roles (brokers also connect to controllers)
@@ -200,7 +240,18 @@ public class ServerPropertiesBuilder {
             // ACL writes flow broker → active controller, and the controller validates and
             // persists them; both processes must therefore know about the StandardAuthorizer
             // and treat the operator's principal (kafka-proxy) as super-user.
-            props.put("super.users", "User:CN=" + proxyCn + ";User:CN=" + poolName);
+            StringBuilder superUsers = new StringBuilder()
+                    .append("User:CN=").append(proxyCn)
+                    .append(";User:CN=").append(poolName);
+            // Cruise Control's AdminClient connects with its own cert — make it a super-user
+            // so it can administer the cluster (least-privilege ACLs are a follow-up).
+            if (clusterSpec.getCruiseControl() != null) {
+                String ccPrincipal = clusterSpec.getCruiseControl().getPrincipal();
+                if (ccPrincipal != null && !ccPrincipal.isBlank()) {
+                    superUsers.append(";User:CN=").append(ccPrincipal);
+                }
+            }
+            props.put("super.users", superUsers.toString());
             // All existing clients (operator AdminClient, Kroxylicious upstream) connect as
             // kafka-proxy → super-user → unaffected. Non-super-user principals (e.g. Apicurio
             // kafkasql registry) require explicit ACLs created via KafkaAclManager.

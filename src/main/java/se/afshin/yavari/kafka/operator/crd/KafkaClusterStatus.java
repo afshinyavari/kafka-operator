@@ -39,6 +39,9 @@ public class KafkaClusterStatus {
     /** Apicurio Registry sub-status (Wave 4c merger). Null when spec.apicurio is unset. */
     private ApicurioRegistryStatus apicurio;
 
+    /** Cruise Control sub-status. Null when spec.cruiseControl is unset. */
+    private CruiseControlStatus cruiseControl;
+
     public Phase getPhase() { return phase; }
     public void setPhase(Phase phase) { this.phase = phase; }
 
@@ -68,6 +71,9 @@ public class KafkaClusterStatus {
 
     public ApicurioRegistryStatus getApicurio() { return apicurio; }
     public void setApicurio(ApicurioRegistryStatus apicurio) { this.apicurio = apicurio; }
+
+    public CruiseControlStatus getCruiseControl() { return cruiseControl; }
+    public void setCruiseControl(CruiseControlStatus cruiseControl) { this.cruiseControl = cruiseControl; }
 
     public List<Condition> getConditions() { return conditions; }
     public void setConditions(List<Condition> conditions) { this.conditions = conditions; }

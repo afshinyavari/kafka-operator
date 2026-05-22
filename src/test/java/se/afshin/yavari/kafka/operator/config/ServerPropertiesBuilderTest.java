@@ -166,6 +166,78 @@ class ServerPropertiesBuilderTest {
     }
 
     @Test
+    void cruiseControlMetricsReporterAddedWhenEnabled() {
+        KafkaCluster cr = sampleCr();
+        cr.getSpec().setCruiseControl(new KafkaClusterCruiseControlSpec());
+        KafkaNodePoolSpec poolSpec = new KafkaNodePoolSpec();
+        poolSpec.setRoles(List.of(NodeRole.BROKER));
+        poolSpec.setReplicas(3);
+
+        Map<String, String> props = builder.buildProperties(
+                cr, poolSpec, 0, 0, "10000@ctrl-a:9093", null, "broker-a-0:9092", null, null);
+
+        assertThat(props.get("metric.reporters"))
+                .isEqualTo("com.linkedin.kafka.cruisecontrol.metricsreporter.CruiseControlMetricsReporter");
+        assertThat(props.get("cruise.control.metrics.reporter.bootstrap.servers"))
+                .isEqualTo("localhost:9092");
+        assertThat(props.get("cruise.control.metrics.topic.replication.factor")).isEqualTo("3");
+        assertThat(props).doesNotContainKey("cruise.control.metrics.reporter.security.protocol");
+    }
+
+    @Test
+    void cruiseControlReporterAbsentWhenDisabled() {
+        KafkaCluster cr = sampleCr();
+        KafkaNodePoolSpec poolSpec = new KafkaNodePoolSpec();
+        poolSpec.setRoles(List.of(NodeRole.BROKER));
+        poolSpec.setReplicas(3);
+
+        Map<String, String> props = builder.buildProperties(
+                cr, poolSpec, 0, 0, "10000@ctrl-a:9093", null, "broker-a-0:9092", null, null);
+
+        assertThat(props).doesNotContainKey("metric.reporters");
+        assertThat(props).doesNotContainKey("cruise.control.metrics.reporter.bootstrap.servers");
+    }
+
+    @Test
+    void cruiseControlReporterUsesSslWhenInternalMtls() {
+        KafkaCluster cr = sampleCr();
+        cr.getSpec().setCruiseControl(new KafkaClusterCruiseControlSpec());
+        cr.getSpec().setProxyMtls(new KafkaProxyMtlsConfig());
+        KafkaNodePoolSpec poolSpec = new KafkaNodePoolSpec();
+        poolSpec.setRoles(List.of(NodeRole.BROKER));
+        poolSpec.setReplicas(3);
+
+        Map<String, String> props = builder.buildProperties(
+                cr, poolSpec, 0, 0, "10000@ctrl-a:9093", null, "broker-a-0:9092",
+                "kafka-proxy", "brokers-a");
+
+        assertThat(props.get("cruise.control.metrics.reporter.security.protocol")).isEqualTo("SSL");
+        assertThat(props.get("cruise.control.metrics.reporter.ssl.keystore.location"))
+                .isEqualTo("/tmp/tls/INTERNAL/keystore.p12");
+        assertThat(props.get("cruise.control.metrics.reporter.ssl.endpoint.identification.algorithm"))
+                .isEmpty();
+    }
+
+    @Test
+    void cruiseControlPrincipalAppendedToSuperUsersWhenSet() {
+        KafkaCluster cr = sampleCr();
+        KafkaClusterCruiseControlSpec cc = new KafkaClusterCruiseControlSpec();
+        cc.setPrincipal("cruise-control");
+        cr.getSpec().setCruiseControl(cc);
+        cr.getSpec().setProxyMtls(new KafkaProxyMtlsConfig());
+        KafkaNodePoolSpec poolSpec = new KafkaNodePoolSpec();
+        poolSpec.setRoles(List.of(NodeRole.BROKER));
+        poolSpec.setReplicas(3);
+
+        Map<String, String> props = builder.buildProperties(
+                cr, poolSpec, 0, 0, "10000@ctrl-a:9093", null, "broker-a-0:9092",
+                "kafka-proxy", "brokers-a");
+
+        assertThat(props.get("super.users"))
+                .isEqualTo("User:CN=kafka-proxy;User:CN=brokers-a;User:CN=cruise-control");
+    }
+
+    @Test
     void toPropertiesStringFormat() {
         Map<String, String> props = Map.of("process.roles", "broker", "node.id", "5");
         String output = builder.toPropertiesString(props);

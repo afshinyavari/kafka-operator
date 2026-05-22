@@ -63,8 +63,11 @@ Users create `KafkaRbac`, `KafkaProxy`, `ApicurioRegistry`, and `KafkaTopic`. Th
 | `KafkaBackupReconciler` | `KafkaBackup` | `{name}` ConfigMap (rendered config) + `CronJob` running the kafka-backup tool | `KafkaBackup` changes; 60s resync for run-result status |
 | `KafkaRestoreReconciler` | `KafkaRestore` | `{name}` ConfigMap + one-shot restore `Job` (created once; idempotent) | `KafkaRestore` changes |
 | `KafkaBackupValidationReconciler` | `KafkaBackupValidation` | one-shot validation `Job` | `KafkaBackupValidation` changes |
+| `KafkaRebalanceReconciler` | `KafkaRebalance` | Drives Cruise Control via its REST API (proposal → approve → execute) | `KafkaRebalance` changes; poll while a Cruise Control task runs |
 
 All reconcilers use JOSDK's `UpdateControl.patchStatus().rescheduleAfter(15s)` when work is still in progress, creating a self-healing loop.
+
+Cruise Control itself is not a top-level reconciler — it is an optional sub-component of `KafkaCluster`. When `spec.cruiseControl` is set, `KafkaClusterReconciler` delegates to `CruiseControlOrchestrator` (mirroring the proxy/Apicurio orchestrators), which deploys one Cruise Control Deployment + Service on the primary cluster only.
 
 ---
 
@@ -325,6 +328,29 @@ The leadership check sits behind `TopicReconcileLeader`; a future `KafkaConsumer
 **Cleanup.** `Cleaner` honours `spec.deletionPolicy`: `DELETE` runs `deleteTopics` (swallows `UnknownTopicOrPartitionException`); `RETAIN` just releases the finalizer. If Kafka is unreachable during a `DELETE` cleanup, the finalizer is held and the operation is retried — we won't let the CR finalize while leaving the topic up.
 
 **AdminClient transport:** When `KafkaCluster.spec.proxyMtls.enabled=false`, the AdminClient connects plaintext. When `proxyMtls.enabled=true`, the operator reads a cert-manager-style PEM Secret (default name `kafka-operator-client-tls`, overridable via `spec.proxyMtls.adminClientCertSecretRef`) and passes `tls.crt`/`tls.key`/`ca.crt` directly to the Kafka client via PEM source mode (no PKCS12 conversion). The cert's CN must be in broker `super.users` — by convention reuse the existing `proxyPrincipal` so brokers don't need a config change. `IsrChecker` still uses the plaintext path (its "treat unreachable as safe" behaviour means rolling updates aren't blocked by mTLS); migrating it to the same loader is straightforward future work.
+
+---
+
+## Cruise Control & KafkaRebalance
+
+Cruise Control automates partition rebalancing. It has two halves:
+
+**Deployment (`KafkaCluster.spec.cruiseControl`).** An optional sub-component, like the proxy and Apicurio. `KafkaClusterReconciler` delegates to `CruiseControlOrchestrator`, which:
+
+- Deploys Cruise Control as a **singleton** — one Deployment + ClusterIP Service on the primary cluster (`spec.clusters[0]`) only; other clusters report `SKIPPED`. Cruise Control reaches brokers in every MCS cluster via their advertised `INTERNAL` listeners.
+- Renders `cruisecontrol.properties` (`CruiseControlConfigBuilder`) and `capacity.json` (`CruiseControlCapacityBuilder`) into a ConfigMap. Cruise Control runs in KRaft mode (`kafka.broker.failure.detection.enable=true`, no ZooKeeper).
+- Adds the **Cruise Control Metrics Reporter** to every broker. `ServerPropertiesBuilder` appends `metric.reporters` (and, under mTLS, the reporter's SSL config) when `spec.cruiseControl` is set — a one-time broker roll via the standard config-hash mechanism. The reporter JAR is compiled from source into the Kafka image; the Cruise Control server image (`cruise-control-image/`) is likewise compiled from source onto a UBI base.
+- Under broker mTLS, Cruise Control's AdminClient reuses the operator's admin client cert (PEM → PKCS12 via the shared `PemToPkcs12InitContainer`).
+
+**Rebalancing (`KafkaRebalance` CRD).** `KafkaRebalanceReconciler` is thin; all transitions live in `RebalanceStateMachine`, which drives Cruise Control over its REST API via the mockable `CruiseControlClient` seam (`HttpCruiseControlClient` is the production impl). State machine:
+
+```
+NEW → PENDING_PROPOSAL → PROPOSAL_READY ──(annotate approve)──> REBALANCING → READY
+                              │                                      │
+                              └──(refresh → NEW) (stop → STOPPED)─────┘
+```
+
+Cruise Control's REST API is asynchronous — a long request returns a `User-Task-ID`; the operator persists it (`status.sessionId` / `status.executionTaskId`) and re-issues the identical request to fetch the cached result. Approval is annotation-driven (`kafka.yavari.afshin.se/rebalance=approve|refresh|stop`); the operator consumes and clears the annotation. Like `KafkaTopic`, the reconciler only acts from the primary cluster.
 
 ---
 

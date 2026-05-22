@@ -302,6 +302,7 @@ for cluster in "${CLUSTERS[@]}"; do
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkabackups.kafka.yavari.afshin.se-v1.yml" --server-side
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkarestores.kafka.yavari.afshin.se-v1.yml" --server-side
     kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkabackupvalidations.kafka.yavari.afshin.se-v1.yml" --server-side
+    kubectl --context "${ctx}" apply -f "${CRD_DIR}/kafkarebalances.kafka.yavari.afshin.se-v1.yml" --server-side
   ) &>/dev/null &
   PIDS+=($!)
 done

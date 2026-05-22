@@ -60,6 +60,11 @@ public class KafkaClusterSpec {
     /** Apicurio Registry sub-spec. Optional: null = no schema registry deployed. */
     private KafkaClusterApicurioSpec apicurio;
 
+    /** Cruise Control sub-spec. Optional: null = no Cruise Control deployed.
+     *  Enabling it injects the Cruise Control Metrics Reporter into every broker,
+     *  which rolls the brokers once. */
+    private KafkaClusterCruiseControlSpec cruiseControl;
+
     public String getKafkaImage() { return kafkaImage; }
     public void setKafkaImage(String kafkaImage) { this.kafkaImage = kafkaImage; }
 
@@ -95,4 +100,7 @@ public class KafkaClusterSpec {
 
     public KafkaClusterApicurioSpec getApicurio() { return apicurio; }
     public void setApicurio(KafkaClusterApicurioSpec apicurio) { this.apicurio = apicurio; }
+
+    public KafkaClusterCruiseControlSpec getCruiseControl() { return cruiseControl; }
+    public void setCruiseControl(KafkaClusterCruiseControlSpec cruiseControl) { this.cruiseControl = cruiseControl; }
 }

@@ -49,6 +49,9 @@ rules:
       - kafkabackupvalidations
       - kafkabackupvalidations/status
       - kafkabackupvalidations/finalizers
+      - kafkarebalances
+      - kafkarebalances/status
+      - kafkarebalances/finalizers
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["nodes"]

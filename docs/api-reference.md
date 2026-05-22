@@ -17,6 +17,7 @@ All CRDs are in group `kafka.yavari.afshin.se`, version `v1alpha1`.
 | [KafkaBackup](#kafkabackup) | `kbk` | Scheduled backup of topic data (and Apicurio schemas) to object storage. The operator builds a `CronJob` running the osodevops kafka-backup tool. | KafkaCluster |
 | [KafkaRestore](#kafkarestore) | `krs` | One-shot, idempotent restore of a KafkaBackup into a managed cluster. | KafkaBackup, KafkaCluster |
 | [KafkaBackupValidation](#kafkabackupvalidation) | `kbv` | One-shot integrity check of a stored backup. | KafkaBackup |
+| [KafkaRebalance](#kafkarebalance) | `krb` | Declarative Cruise Control rebalance — generates an optimization proposal, approved via annotation, then executed and tracked to completion. | KafkaCluster |
 
 ---
 
@@ -38,6 +39,7 @@ Cluster-scoped configuration and KRaft quorum definition. One `KafkaCluster` CR 
 | `listeners` | []KafkaListenerSpec | no | `[]` | Additional client-facing listeners beyond the always-present `INTERNAL:9092`. When non-empty, `INTERNAL` binds to `127.0.0.1` only and the first entry becomes `inter.broker.listener.name`. |
 | `controllerTls` | KafkaListenerTlsConfig | no | — | Enables TLS on the KRaft `CONTROLLER:9093` listener. When set, all nodes load their TLS secret at startup. |
 | `proxyMtls` | KafkaProxyMtlsConfig | no | — | Enables mTLS on the broker `INTERNAL` listener for a Kroxylicious-style proxy. Driven from the cluster spec (not KafkaProxy presence) so every cluster in the MCS topology reconciles consistently, even when the proxy Deployment only runs on one cluster. |
+| `cruiseControl` | KafkaClusterCruiseControlSpec | no | — | Deploys LinkedIn Cruise Control for partition rebalancing. When set, the Cruise Control Metrics Reporter is added to every broker (a one-time rolling restart) and one Cruise Control Deployment runs on the primary cluster. |
 
 ### spec.clusters[] — ClusterEntry
 
@@ -78,6 +80,48 @@ TLS requires a Secret named `{podName}-tls` in the same namespace with keys `tls
 | `enabled` | boolean | no | `false` | Enables mTLS on the broker `INTERNAL` listener. When `true`, the operator expects a pre-provisioned TLS secret per broker pool (cert-manager in production, `mcs-setup.sh` in tests). |
 | `proxyPrincipal` | string | no | `"kafka-proxy"` | The CN the proxy presents on its client cert. Added to `super.users` so the proxy has unrestricted access. |
 
+### spec.cruiseControl — KafkaClusterCruiseControlSpec
+
+Deploys LinkedIn Cruise Control as a **singleton** — one Deployment + ClusterIP Service on the primary cluster (`spec.clusters[0]`); every other cluster reports `status.cruiseControl.phase=SKIPPED`. Enabling this sub-spec adds the Cruise Control Metrics Reporter to every broker's `metric.reporters`, which triggers a **one-time rolling restart** of all brokers.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `image` | string | no | `cruise-control-ubi:2.5.146` | Cruise Control container image (compiled from source on a UBI base). |
+| `replicas` | integer | no | `1` | Cruise Control is a singleton; the operator pins the effective replica count to 1. |
+| `resources` | ResourceRequirements | no | req `500m`/`1Gi`, lim `1`/`2Gi` | CPU/memory for the Cruise Control container. |
+| `config` | map[string]string | no | `{}` | Extra `cruisecontrol.properties` entries. Operator-computed keys (bootstrap, TLS, capacity-file path, sampler) always win. |
+| `goals` | []string | no | — | Ordered Cruise Control goal class names. Empty = Cruise Control's own default goal set. |
+| `capacity` | CruiseControlCapacityConfig | no | — | Per-broker capacity inputs for `capacity.json`. |
+| `apiSecurity` | CruiseControlApiSecurity | no | — | Optional HTTP basic auth on the Cruise Control REST API. |
+| `metricsReporter` | CruiseControlMetricsReporterConfig | no | — | Tuning for the `__CruiseControlMetrics` topic. |
+| `brokerClientCertSecretRef` | string | no | — | cert-manager PEM Secret for Cruise Control's AdminClient when broker mTLS is on. Null = reuse the operator's admin client cert (`proxyMtls.adminClientCertSecretRef`). |
+| `principal` | string | no | — | CN of a dedicated Cruise Control cert; when set it is appended to broker `super.users`. Null = Cruise Control uses the shared operator identity (already a super-user). |
+
+#### spec.cruiseControl.capacity — CruiseControlCapacityConfig
+
+All fields optional; unset fields fall back to documented defaults.
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `disk` | string | `100000` | Per-broker disk capacity in MB. |
+| `cpu` | number | `100` | Per-broker CPU capacity (Cruise Control capacity units). |
+| `inboundNetwork` | string | `100000` | Per-broker inbound network capacity in KB/s. |
+| `outboundNetwork` | string | `100000` | Per-broker outbound network capacity in KB/s. |
+
+#### spec.cruiseControl.apiSecurity — CruiseControlApiSecurity
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enabled` | boolean | `false` | Require HTTP basic auth on the Cruise Control REST API. |
+| `basicAuthSecretRef` | string | — | Secret with the Cruise Control `auth-credentials.properties` file plus `username`/`password` keys (the latter used by the `KafkaRebalance` reconciler). Required when `enabled`. |
+
+#### spec.cruiseControl.metricsReporter — CruiseControlMetricsReporterConfig
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `metricsTopicReplicas` | integer | `min(3, brokers)` | Replication factor for `__CruiseControlMetrics`. |
+| `metricsTopicPartitions` | integer | reporter default | Partition count for `__CruiseControlMetrics`. |
+
 ### status
 
 | Field | Type | Description |
@@ -90,6 +134,7 @@ TLS requires a Secret named `{podName}-tls` in the same namespace with keys `tls
 | `currentKafkaVersion` | string | Kafka version currently running. |
 | `upgradePhase` | string | `IDLE` \| `ROLLING` — used by the cross-cluster roll coordinator. |
 | `currentMetadataVersion` | integer | `metadata.version` currently active in the cluster. |
+| `cruiseControl` | CruiseControlStatus | Cruise Control sub-status (set when `spec.cruiseControl` is present): `phase` (`RECONCILING`/`READY`/`FAILED`/`SKIPPED`), `message`, `url` (in-cluster REST URL). `SKIPPED` on every non-primary cluster. |
 
 ### Operator-owned config keys
 
@@ -1328,3 +1373,100 @@ Idempotent like KafkaRestore.
 ### status
 
 `phase` walks `PENDING` → `RUNNING` → `VALID` / `INVALID` / `FAILED` (or `SKIPPED`).
+
+---
+
+## KafkaRebalance
+
+Declarative Cruise Control rebalance. The operator generates an optimization proposal, surfaces it on `status.optimizationResult`, and — once the user approves it via an annotation — executes the rebalance and tracks it to completion. Requires the referenced `KafkaCluster` to have `spec.cruiseControl` enabled. Reconciled only by the operator on the primary cluster (`spec.clusters[0]`).
+
+### spec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `clusterRef` | string | **yes** | — | Name of the target `KafkaCluster` in the same namespace. |
+| `mode` | enum | no | `full` | `full` (whole-cluster rebalance), `add-brokers`, or `remove-brokers`. |
+| `brokers` | []integer | conditional | — | Broker IDs to add/remove. Required for `add-brokers` / `remove-brokers`. |
+| `goals` | []string | no | — | Cruise Control goal class names to optimize against. Empty = Cruise Control defaults. |
+| `skipHardGoalCheck` | boolean | no | `false` | Skip the check that the proposal satisfies all hard goals. |
+| `rebalanceDisk` | boolean | no | `false` | Intra-broker disk rebalance (across log dirs). Only honored for `mode: full`. |
+| `concurrentPartitionMovementsPerBroker` | integer | no | — | Cap on concurrent partition movements per broker. |
+| `concurrentLeaderMovements` | integer | no | — | Cap on concurrent leadership movements. |
+| `replicationThrottle` | long | no | — | Replication throttle in bytes/sec applied during execution. |
+| `excludedTopics` | string | no | — | Regex of topic names to exclude from replica movement. |
+
+### status
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `phase` | enum | `NEW` → `PENDING_PROPOSAL` → `PROPOSAL_READY` → `REBALANCING` → `READY`; plus `STOPPED` and `NOT_READY`. |
+| `message` | string | Human-readable status / error message. |
+| `optimizationResult` | map[string]string | Flattened Cruise Control proposal summary (data to move, # movements, balancedness scores). |
+| `dataToMoveMB` | string | Denormalized `dataToMoveMB` from the proposal (printer column). |
+| `sessionId` | string | Cruise Control User-Task-ID of the proposal request. |
+| `executionTaskId` | string | Cruise Control User-Task-ID of the execution request. |
+| `conditions` | []Condition | Standard `Ready` condition. |
+| `observedGeneration` | long | Generation of the spec last reconciled. |
+
+### Approval annotation
+
+The CR is driven by the annotation `kafka.yavari.afshin.se/rebalance`. The operator consumes and clears it.
+
+| Value | Effect |
+|-------|--------|
+| `approve` | Execute the ready proposal (`PROPOSAL_READY` → `REBALANCING`). |
+| `refresh` | Discard the current proposal and regenerate it (→ `NEW`). |
+| `stop` | Abort — discard the proposal or stop an in-flight execution (→ `STOPPED`). |
+
+A spec edit on a settled CR also regenerates the proposal from scratch.
+
+### Configuration recipes
+
+#### Full cluster rebalance
+
+```yaml
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaRebalance
+metadata:
+  name: nightly-rebalance
+  namespace: kafka
+spec:
+  clusterRef: my-kafka
+  mode: full
+```
+
+Then, once `status.phase` is `PROPOSAL_READY`:
+
+```bash
+kubectl annotate kafkarebalance nightly-rebalance \
+  kafka.yavari.afshin.se/rebalance=approve
+```
+
+#### Add brokers
+
+```yaml
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaRebalance
+metadata:
+  name: scale-out
+  namespace: kafka
+spec:
+  clusterRef: my-kafka
+  mode: add-brokers
+  brokers: [1003, 1004]
+  replicationThrottle: 10485760
+```
+
+#### Intra-broker disk rebalance
+
+```yaml
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaRebalance
+metadata:
+  name: disk-rebalance
+  namespace: kafka
+spec:
+  clusterRef: my-kafka
+  mode: full
+  rebalanceDisk: true
+```

@@ -10,6 +10,8 @@ APICURIO_PROXY_IMG := apicurio-rbac-proxy:dev
 KAFKA_UI_IMG       := kafka-ui:dev
 MM2_IMG            := mm2:dev
 KAFKA_BACKUP_IMG   := kafka-backup:dev
+CC_VERSION         := 2.5.146
+CC_IMAGE           := cruise-control-ubi:$(CC_VERSION)
 OPERATOR_DIR       := ..
 MANIFESTS_DIR      := manifests
 
@@ -19,6 +21,7 @@ MANIFESTS_DIR      := manifests
         kafka-ui-image reload-kafka-ui-image kafka-ui-setup ui-test \
         mm2-image reload-mm2-image \
         kafka-backup-image reload-kafka-backup-image kafka-backup-test \
+        cruise-control-image reload-cruise-control-image cruise-control-test \
         keycloak-setup proxy-setup rbac-test apicurio-setup apicurio-rbac-test \
         setup-external proxy-external-lb-test proxy-external-gateway-test \
         proxy-external-ingress-test help \
@@ -96,8 +99,9 @@ cr-status:  ## Show KafkaCluster CR status on all clusters
 	  echo ""; \
 	done
 
-kafka-image:  ## Build the UBI9-based Kafka image
+kafka-image:  ## Build the UBI9-based Kafka image (bundles the Cruise Control metrics reporter)
 	docker build --build-arg KAFKA_VERSION=$(KAFKA_VERSION) \
+	  --build-arg CC_VERSION=$(CC_VERSION) \
 	  -t $(KAFKA_IMAGE) $(OPERATOR_DIR)/kafka-image
 
 reload-kafka-image:  ## Rebuild + reload Kafka image into Kind clusters
@@ -157,6 +161,15 @@ kafka-backup-image:  ## Build the kafka-backup image (osodevops tool compiled fr
 reload-kafka-backup-image: kafka-backup-image  ## Rebuild + reload kafka-backup image into all Kind clusters
 	@for cluster in $(CLUSTERS); do \
 	  kind load docker-image $(KAFKA_BACKUP_IMG) --name $$cluster; \
+	done
+
+cruise-control-image:  ## Build the Cruise Control image (compiled from source on UBI)
+	docker build --build-arg CC_VERSION=$(CC_VERSION) \
+	  -t $(CC_IMAGE) $(OPERATOR_DIR)/cruise-control-image
+
+reload-cruise-control-image: cruise-control-image  ## Rebuild + reload Cruise Control image into all Kind clusters
+	@for cluster in $(CLUSTERS); do \
+	  kind load docker-image $(CC_IMAGE) --name $$cluster; \
 	done
 
 kafka-ui-setup:  ## Deploy kafka-ui to all clusters via KafkaUI CR (HA #20; operator filters by targetClusters)
@@ -246,6 +259,9 @@ mm2-smoke-test:  ## MM2 CRD + reconciler smoke (managed→external dummy bootstr
 kafka-backup-test:  ## KafkaBackup/KafkaRestore/KafkaBackupValidation reconciler smoke
 	@chmod +x kafka-backup-test.sh && ./kafka-backup-test.sh
 
+cruise-control-test:  ## Cruise Control deploy + KafkaRebalance proposal smoke
+	@chmod +x cruise-control-test.sh && ./cruise-control-test.sh
+
 mm2-mirror-test:  ## MM2 data + Apicurio schema mirror e2e (external source → managed target)
 	@chmod +x mm2-mirror-test.sh && ./mm2-mirror-test.sh
 
@@ -268,7 +284,7 @@ mm2-mirror-test:  ## MM2 data + Apicurio schema mirror e2e (external source → 
 # `make mcs-proxy-test` manually only on a topology without externalAccess.
 SMOKE_E2E := quorum kafkatopic-test rbac-test apicurio-rbac-test \
              xml-filter-test json-schema-test kafka-ui-setup ui-test \
-             mm2-smoke-test kafka-backup-test
+             mm2-smoke-test kafka-backup-test cruise-control-test
 EXTENDED_E2E := proxy-external-lb-test durability-test \
                 rolling-restart-test broker-kill-test mm2-mirror-test
 

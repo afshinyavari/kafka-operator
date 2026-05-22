@@ -1,0 +1,12 @@
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaRebalance
+metadata:
+  name: cc-rebalance-smoke
+  namespace: kafka
+spec:
+  # Target KafkaCluster (same namespace). It must have spec.cruiseControl enabled.
+  clusterRef: my-kafka
+  # Full cluster rebalance. Annotate the CR with
+  #   kafka.yavari.afshin.se/rebalance=approve
+  # once status.phase=PROPOSAL_READY to execute the proposal.
+  mode: full

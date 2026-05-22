@@ -29,6 +29,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.apicurio.ApicurioOrchestrator;
+import se.afshin.yavari.kafka.operator.cruisecontrol.CruiseControlOrchestrator;
 import se.afshin.yavari.kafka.operator.proxy.KafkaProxyOrchestrator;
 import se.afshin.yavari.kafka.operator.upgrade.VersionUpgradeController;
 
@@ -65,6 +66,9 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
 
     @Inject
     ApicurioOrchestrator apicurioOrchestrator;
+
+    @Inject
+    CruiseControlOrchestrator cruiseControlOrchestrator;
 
     @Inject
     se.afshin.yavari.kafka.operator.infra.EventRecorder eventRecorder;
@@ -112,7 +116,8 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
                             .resources(KafkaCluster.class).inNamespace(ns).list().getItems().stream()
                             .filter(c -> proxyReferencesSecret(c, secretName)
                                     || se.afshin.yavari.kafka.operator.apicurio.ApicurioOrchestrator
-                                            .referencesSecret(c, secretName))
+                                            .referencesSecret(c, secretName)
+                                    || CruiseControlOrchestrator.referencesSecret(c, secretName))
                             .map(c -> new ResourceID(c.getMetadata().getName(), ns))
                             .collect(Collectors.toSet());
                 })
@@ -194,6 +199,10 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
         if (cr.getSpec().getApicurio() != null) {
             status.setApicurio(apicurioOrchestrator.reconcile(cr, namespace, localClusterId));
         }
+        // Reconcile the optional Cruise Control sub-spec (singleton on the primary cluster).
+        if (cr.getSpec().getCruiseControl() != null) {
+            status.setCruiseControl(cruiseControlOrchestrator.reconcile(cr, namespace, localClusterId));
+        }
 
         // Kubernetes-style conditions alongside the bespoke phase — let generic tooling
         // react to Available / Progressing / Degraded without knowing our enum.
@@ -219,8 +228,10 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
                 && status.getProxy().getPhase() == se.afshin.yavari.kafka.operator.crd.KafkaProxyStatus.Phase.RECONCILING;
         boolean apicurioConverging = status.getApicurio() != null
                 && status.getApicurio().getPhase() == se.afshin.yavari.kafka.operator.crd.ApicurioRegistryStatus.Phase.RECONCILING;
+        boolean ccConverging = status.getCruiseControl() != null
+                && status.getCruiseControl().getPhase() == se.afshin.yavari.kafka.operator.crd.CruiseControlStatus.Phase.RECONCILING;
         if (status.getPhase() != KafkaClusterStatus.Phase.READY
-                || proxyConverging || apicurioConverging) {
+                || proxyConverging || apicurioConverging || ccConverging) {
             return UpdateControl.patchStatus(cr).rescheduleAfter(java.time.Duration.ofSeconds(15));
         }
         return UpdateControl.patchStatus(cr);
@@ -239,6 +250,9 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
         }
         if (cr.getSpec().getApicurio() != null) {
             apicurioOrchestrator.cleanup(cr, namespace);
+        }
+        if (cr.getSpec().getCruiseControl() != null) {
+            cruiseControlOrchestrator.cleanup(cr, namespace);
         }
 
         List<KafkaNodePool> pools = client.resources(KafkaNodePool.class)

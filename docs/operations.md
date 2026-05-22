@@ -48,6 +48,7 @@ Each sub-target stays runnable on its own.
 | `broker-kill-test` | Delete `brokers-a-0`; producer/consumer through cluster-B's proxy keep working (RF=3+min.isr=2); broker rejoins ISR after |
 | `ui-test` | kafka-ui smoke: login via Keycloak, list clusters, browse a topic |
 | `kafka-backup-test` | `KafkaBackup` builds a CronJob + ConfigMap and reports `SCHEDULED`; a `KafkaRestore` without `spec.confirm` is rejected; `KafkaBackupValidation` builds a Job; CRs cascade-delete |
+| `cruise-control-test` | Enabling `spec.cruiseControl` deploys Cruise Control (`status.cruiseControl.phase=READY`); a `KafkaRebalance` CR drives Cruise Control to `PENDING_PROPOSAL`/`PROPOSAL_READY` and does not auto-execute without the approve annotation |
 
 The KafkaProxy is exposed via MetalLB-backed LoadBalancer on every cluster
 (IP pools `172.19.255.{200-210,220-230,240-250}` — reachable from the Docker
@@ -184,6 +185,82 @@ kubectl patch kafkanodepool brokers-a -n kafka \
 **Scale-down:** the operator deletes one pod at a time, checking ISR safety before each deletion (no sole-ISR partitions on the departing broker). PVCs are **not deleted** — data is preserved if the replica count is later increased again.
 
 > **Note:** The operator does not yet trigger partition reassignment before scale-down. Replicas hosted on the departing broker remain under-replicated until Kafka's own partition reassignment runs or you use Cruise Control.
+
+---
+
+## Rebalancing with Cruise Control
+
+[LinkedIn Cruise Control](https://github.com/linkedin/cruise-control) automates partition rebalancing. It is an opt-in sub-component of `KafkaCluster` plus a declarative `KafkaRebalance` CRD.
+
+### Enabling Cruise Control
+
+Add `spec.cruiseControl` to the `KafkaCluster`:
+
+```bash
+kubectl patch kafkacluster my-kafka -n kafka --type merge \
+  -p '{"spec":{"cruiseControl":{}}}'
+```
+
+This deploys one Cruise Control instance on the primary cluster (`spec.clusters[0]`) and adds the Cruise Control Metrics Reporter to every broker — a **one-time rolling restart** of all brokers. Wait for it:
+
+```bash
+kubectl get kafkacluster my-kafka -n kafka -o jsonpath='{.status.cruiseControl.phase}'
+# → READY
+```
+
+The Cruise Control REST API is exposed in-cluster only, on `cruise-control.<ns>.svc.cluster.local:9090`. Cruise Control needs several minutes of metric windows after first start before it can produce a proposal.
+
+### Requesting a rebalance
+
+Apply a `KafkaRebalance` CR (to the **primary** cluster):
+
+```bash
+kubectl apply -f - <<'EOF'
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaRebalance
+metadata:
+  name: nightly-rebalance
+  namespace: kafka
+spec:
+  clusterRef: my-kafka
+  mode: full
+EOF
+```
+
+The operator asks Cruise Control for a proposal. Watch the phase:
+
+```bash
+kubectl get kafkarebalance nightly-rebalance -n kafka -w
+# NEW → PENDING_PROPOSAL → PROPOSAL_READY
+```
+
+Inspect the proposal before approving:
+
+```bash
+kubectl get kafkarebalance nightly-rebalance -n kafka -o jsonpath='{.status.optimizationResult}'
+```
+
+### Approving / stopping
+
+Once `status.phase=PROPOSAL_READY`, drive the CR with the `kafka.yavari.afshin.se/rebalance` annotation:
+
+```bash
+# Execute the proposal
+kubectl annotate kafkarebalance nightly-rebalance -n kafka \
+  kafka.yavari.afshin.se/rebalance=approve
+
+# Regenerate a stale proposal
+kubectl annotate --overwrite kafkarebalance nightly-rebalance -n kafka \
+  kafka.yavari.afshin.se/rebalance=refresh
+
+# Abort (discard a proposal, or stop an in-flight execution)
+kubectl annotate --overwrite kafkarebalance nightly-rebalance -n kafka \
+  kafka.yavari.afshin.se/rebalance=stop
+```
+
+The operator consumes and clears the annotation. After `approve`, the phase moves `REBALANCING → READY`. A `NOT_READY` phase is terminal — re-trigger it with `refresh`.
+
+To scale out and move data onto new brokers, use `mode: add-brokers` with `spec.brokers: [<ids>]`; for scale-down use `mode: remove-brokers` before deleting the pods.
 
 ---
 
