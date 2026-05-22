@@ -1,0 +1,54 @@
+# MirrorMaker2 CR for the mirror e2e test (kind/mm2-mirror-test.sh).
+#
+# Mirrors data + Apicurio schemas from an external single-node source cluster
+# (kafka-src namespace) into the operator-managed `my-kafka` cluster:
+#   - source: external bootstrap + standalone Apicurio registry (no auth).
+#   - target: the managed KafkaCluster, reached through its Kroxylicious proxy; the
+#     schema-sync SMT writes mirrored schemas through the managed registry's
+#     apicurio-rbac-proxy, authenticating with an OAuth2 client-credentials Secret.
+#   - mcs/targetClusters pin the single MM2 worker to cluster A (the source cluster
+#     only exists there; workers on B/C could not reach it).
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: MirrorMaker2
+metadata:
+  name: mm2-mirror
+  namespace: kafka
+spec:
+  image: mm2:dev
+  replicas: 1
+  # A real MM2 worker (3 connectors + consumers/producers + the SMT) needs far more
+  # than the 512Mi default, which OOM-kills it. Heap is MaxRAMPercentage=70 of the limit.
+  resources:
+    requests:
+      cpu: 250m
+      memory: 768Mi
+    limits:
+      cpu: "1"
+      memory: 1536Mi
+  mcs:
+    enabled: true
+  targetClusters: ["A"]
+  source:
+    external:
+      bootstrap: src-kafka.kafka-src.svc.cluster.local:9092
+      schemaRegistry:
+        type: APICURIO
+        url: http://src-apicurio.kafka-src.svc.cluster.local:8080
+  target:
+    kafkaClusterRef:
+      name: my-kafka
+    # OAuth2 client-credentials Secret — lets the SMT write mirrored schemas through
+    # the managed registry's authenticating apicurio-rbac-proxy. Created by the test.
+    schemaRegistryAuthSecretRef: mm2-schema-registry-oauth
+  schemaSync:
+    enabled: true
+    behaviorOnError: WARN
+    applyTo: VALUE
+    applyToTopics: [".*"]
+  flow:
+    flowName: mirror
+    topics: ["mm2-orders"]
+    # RF 3 matches the managed cluster's 3 brokers + min.insync.replicas=2.
+    replicationFactor: 3
+    tasksMax: 1
+    emitHeartbeats: false

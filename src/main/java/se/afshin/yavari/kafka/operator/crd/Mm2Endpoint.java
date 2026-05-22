@@ -19,11 +19,24 @@ public class Mm2Endpoint {
     /** Raw external endpoint (bootstrap + credentials). */
     private Mm2ExternalEndpoint external;
 
+    /** Name of a Secret holding OAuth2 client-credentials for authenticating to this
+     *  endpoint's schema registry. Required when the registry sits behind an OIDC-gated
+     *  proxy — notably a managed KafkaCluster's {@code apicurio-rbac-proxy}, which rejects
+     *  unauthenticated schema writes. Expected keys: {@code token-url}, {@code client-id},
+     *  {@code client-secret} (and optional {@code scope}). When unset, the schema-sync SMT
+     *  accesses this endpoint's registry without authentication. */
+    private String schemaRegistryAuthSecretRef;
+
     public KafkaClusterRef getKafkaClusterRef() { return kafkaClusterRef; }
     public void setKafkaClusterRef(KafkaClusterRef kafkaClusterRef) { this.kafkaClusterRef = kafkaClusterRef; }
 
     public Mm2ExternalEndpoint getExternal() { return external; }
     public void setExternal(Mm2ExternalEndpoint external) { this.external = external; }
+
+    public String getSchemaRegistryAuthSecretRef() { return schemaRegistryAuthSecretRef; }
+    public void setSchemaRegistryAuthSecretRef(String schemaRegistryAuthSecretRef) {
+        this.schemaRegistryAuthSecretRef = schemaRegistryAuthSecretRef;
+    }
 
     @JsonIgnore
     public boolean hasManaged() { return kafkaClusterRef != null; }

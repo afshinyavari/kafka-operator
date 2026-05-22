@@ -724,6 +724,18 @@ per-record detection, tombstone passthrough, `applyTo` knob, topic
 allowlist, default `behavior.on.error=WARN`, and per-record evaluation. See
 [api-reference.md#non-apicurio-topics](api-reference.md#non-apicurio-topics).
 
+### Schema-registry authentication
+
+The SMT **writes** mirrored schemas to the target registry. A managed
+cluster's Apicurio sits behind its `apicurio-rbac-proxy`, which OIDC-gates
+every request — writes need an authenticated `schema-admin` identity.
+Setting `schemaRegistryAuthSecretRef` on an endpoint points the SMT at a
+Secret of OAuth2 client-credentials (`token-url` / `client-id` /
+`client-secret`); the SMT runs the `client_credentials` grant and refreshes
+the token before expiry and on a 401/403 (`OAuthTokenProvider`). The
+operator mounts the Secret at `/etc/mm2/registry-auth/{source,target}/` and
+passes the SMT only the directory path — never the secret values.
+
 ### Internal topics
 
 The reconciler creates three KafkaTopic CRs on the target managed cluster
@@ -744,8 +756,11 @@ MCS gives single-K8s-cluster fault tolerance for the same flow.
 
 - `src/main/java/se/afshin/yavari/kafka/operator/mm2/` — reconciler + builders
 - `src/main/java/se/afshin/yavari/kafka/operator/crd/MirrorMaker2*.java` — CRD classes
-- `schema-sync-smt/` — Connect SMT JAR (shaded with Jackson)
+- `schema-sync-smt/` — Connect SMT JAR (shaded with Jackson); also carries
+  `OAuthTokenProvider` and the `Mm2MirrorProbe` e2e helper
 - `mm2-image/Dockerfile` — kafka-ubi:4.0.0 + the SMT JAR
-- `kind/mm2-smoke-test.sh` — smoke e2e
+- `kind/mm2-smoke-test.sh` — smoke e2e (CRD + reconciler wiring)
+- `kind/mm2-mirror-test.sh` — extended e2e: real data + schema mirror
+  (external source → managed target) exercising the SMT's OAuth write path
 - See [api-reference.md#mirrormaker2](api-reference.md#mirrormaker2) for the
   full CRD reference.

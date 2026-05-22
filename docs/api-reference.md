@@ -971,7 +971,11 @@ Cross-cluster (and cross-region) Kafka topic + schema replication driven by Apac
 
 Each end (`spec.source` / `spec.target`) is independently either a **managed** reference to a `KafkaCluster` CR in this operator (bootstrap resolves to the cluster's Kroxylicious proxy, TLS material is reused from `proxyMtls`) or an **external** descriptor (raw bootstrap + optional TLS/SASL Secrets + optional schema registry). At least one end must be managed — there's nowhere for the operator to run MM2 otherwise.
 
+A managed end is reached through the proxy, which enforces RBAC. The MM2 worker connects as the `proxyMtls.proxyPrincipal` identity, so that cluster's `KafkaRbac` must grant that principal broad Kafka access (`users: [{ name: <proxyPrincipal>, kafka: { topics: ["*"], operations: ["*"] } }]`) — MM2 mirrors arbitrary topics and manages its own internal topics. Without it the worker fails with `TopicAuthorizationException`.
+
 When both ends carry an Apicurio schema registry (managed clusters with `spec.apicurio`, or external endpoints with `schemaRegistry` set) and `spec.schemaSync.enabled=true`, the operator wires an Apicurio-aware Connect SMT (`ApicurioSchemaTransferSmt`) into the MirrorSourceConnector. Per-record it parses the V3 envelope (`0x00` + 8-byte big-endian globalId), ensures the schema exists in the target registry (recursively for references), and rewrites the envelope with the target's globalId. See [Non-Apicurio topics](#non-apicurio-topics) below for the passthrough safety net.
+
+The SMT **writes** mirrored schemas into the target registry. A managed cluster's Apicurio is reachable only through its `apicurio-rbac-proxy`, which OIDC-gates every request — writing into such a target needs `target.schemaRegistryAuthSecretRef`. See [Schema-registry authentication](#schema-registry-authentication).
 
 ### spec
 
@@ -987,7 +991,7 @@ When both ends carry an Apicurio schema registry (managed clusters with `spec.ap
 | `mcs.enabled` | bool | no | `false` | When true, the reconciler only runs on K8s clusters listed in `targetClusters`. |
 | `targetClusters` | string[] | no | `[]` | K8s cluster IDs where this MM2 should be reconciled (MCS placement gate). |
 | `clusterRollOrder` | string[] | no | — | Ordered cluster IDs for sequenced Deployment rolls on config/image change. |
-| `resources` / `probes` | — | no | — | Same shapes as the KafkaUI resource/probes fields. |
+| `resources` / `probes` | — | no | — | Same shapes as the KafkaUI resource/probes fields. **Set `resources` explicitly** — a real MM2 worker (3 connectors + clients + SMT) needs ~1.5Gi memory; the small default OOM-kills it. |
 
 ### Mm2Endpoint
 
@@ -1001,6 +1005,7 @@ Discriminated union — exactly one of `kafkaClusterRef` or `external` must be s
 | `external.tlsSecretRef` | string | PEM-shaped Secret (`tls.crt`/`tls.key`/`ca.crt`) for TLS or mTLS. |
 | `external.sasl` | [Mm2SaslConfig](#mm2saslconfig) | Optional SASL credentials. |
 | `external.schemaRegistry` | [Mm2SchemaRegistryRef](#mm2schemaregistryref) | Optional schema registry on this end. |
+| `schemaRegistryAuthSecretRef` | string | OAuth2 client-credentials Secret authenticating the schema-sync SMT to this endpoint's registry. Required when the registry is behind an authenticating proxy (a managed cluster's `apicurio-rbac-proxy`). See [Schema-registry authentication](#schema-registry-authentication). |
 
 ### Mm2SaslConfig
 
@@ -1039,6 +1044,21 @@ Discriminated union — exactly one of `kafkaClusterRef` or `external` must be s
 | `behaviorOnError` | enum | `WARN` | `FAIL` re-throws (worker dies); `WARN` logs + passes through; `IGNORE` drops. Default WARN for false-positive resilience. |
 | `applyTo` | enum | `VALUE` | `VALUE`, `KEY`, or `BOTH`. |
 | `applyToTopics` | string[] | `[".*"]` | Topic regex allowlist. Tighten in mixed-format clusters. |
+
+### Schema-registry authentication
+
+The schema-sync SMT reads from the source registry and **writes** mirrored schemas to the target registry. A managed cluster's Apicurio is reachable only through its `apicurio-rbac-proxy`, which OIDC-gates every request — so writing mirrored schemas into a managed target requires an authenticated identity with the `schema-admin` role.
+
+Set `schemaRegistryAuthSecretRef` on the endpoint to a Secret holding OAuth2 client-credentials:
+
+| Secret key | Description |
+|------------|-------------|
+| `token-url` | OAuth2 token endpoint (e.g. Keycloak `.../protocol/openid-connect/token`). |
+| `client-id` | Client (service-account) id. |
+| `client-secret` | Client secret. |
+| `scope` | Optional OAuth scope. |
+
+The SMT performs the `client_credentials` grant, caches the access token, and refreshes it before expiry (and on a 401/403) — a static bearer token would expire mid-run in a long-lived MM2 worker. The Secret is mounted into the worker at `/etc/mm2/registry-auth/{source,target}/`; the operator passes the SMT only the directory path, never the secret values. An unauthenticated registry (an external endpoint, or a bare Apicurio with no proxy) needs no `schemaRegistryAuthSecretRef`.
 
 ### status
 

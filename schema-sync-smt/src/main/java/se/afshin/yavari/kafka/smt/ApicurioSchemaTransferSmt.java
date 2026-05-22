@@ -7,7 +7,11 @@ import org.apache.kafka.connect.transforms.Transformation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.IOException;
 import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -48,6 +52,8 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
     public static final String TARGET_URL = "target.url";
     public static final String SOURCE_AUTH_HEADER = "source.auth.header";
     public static final String TARGET_AUTH_HEADER = "target.auth.header";
+    public static final String SOURCE_AUTH_OAUTH_DIR = "source.auth.oauth.dir";
+    public static final String TARGET_AUTH_OAUTH_DIR = "target.auth.oauth.dir";
     public static final String CACHE_SIZE = "cache.size";
     public static final String BEHAVIOR_ON_ERROR = "behavior.on.error";
     public static final String APPLY_TO = "apply.to";
@@ -66,6 +72,12 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
                     "Pre-formed Authorization header value for source registry (e.g. 'Bearer …')")
             .define(TARGET_AUTH_HEADER, ConfigDef.Type.STRING, null, ConfigDef.Importance.MEDIUM,
                     "Pre-formed Authorization header value for target registry")
+            .define(SOURCE_AUTH_OAUTH_DIR, ConfigDef.Type.STRING, null, ConfigDef.Importance.MEDIUM,
+                    "Directory of OAuth2 client-credentials for the source registry "
+                            + "(files: token-url, client-id, client-secret, optional scope)")
+            .define(TARGET_AUTH_OAUTH_DIR, ConfigDef.Type.STRING, null, ConfigDef.Importance.MEDIUM,
+                    "Directory of OAuth2 client-credentials for the target registry "
+                            + "(files: token-url, client-id, client-secret, optional scope)")
             .define(CACHE_SIZE, ConfigDef.Type.INT, 10_000, ConfigDef.Importance.LOW,
                     "LRU cache size for source→target globalId mappings")
             .define(BEHAVIOR_ON_ERROR, ConfigDef.Type.STRING, "WARN", ConfigDef.Importance.MEDIUM,
@@ -90,8 +102,10 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
         Map<String, Object> parsed = CONFIG_DEF.parse(configs);
         String srcUrl = (String) parsed.get(SOURCE_URL);
         String tgtUrl = (String) parsed.get(TARGET_URL);
-        this.source = new ApicurioClient(srcUrl, (String) parsed.get(SOURCE_AUTH_HEADER));
-        this.target = new ApicurioClient(tgtUrl, (String) parsed.get(TARGET_AUTH_HEADER));
+        this.source = new ApicurioClient(srcUrl, buildAuth(
+                (String) parsed.get(SOURCE_AUTH_OAUTH_DIR), (String) parsed.get(SOURCE_AUTH_HEADER)));
+        this.target = new ApicurioClient(tgtUrl, buildAuth(
+                (String) parsed.get(TARGET_AUTH_OAUTH_DIR), (String) parsed.get(TARGET_AUTH_HEADER)));
         this.onError = OnError.valueOf(((String) parsed.get(BEHAVIOR_ON_ERROR)).toUpperCase());
         this.applyTo = ApplyTo.valueOf(((String) parsed.get(APPLY_TO)).toUpperCase());
         this.maxRefDepth = (Integer) parsed.get(MAX_REF_DEPTH);
@@ -102,6 +116,45 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
         this.topicPatterns = patterns.stream().map(Pattern::compile).toList();
         LOG.info("ApicurioSchemaTransferSmt configured: source={}, target={}, applyTo={}, onError={}, cacheSize={}, topics={}",
                 srcUrl, tgtUrl, applyTo, onError, cacheSize, patterns);
+    }
+
+    /** Builds the auth provider for one registry: OAuth2 client-credentials when an oauth
+     *  directory is configured (the common case for a managed target behind the RBAC proxy),
+     *  a static header when one is given, otherwise no auth. */
+    private static ApicurioClient.AuthProvider buildAuth(String oauthDir, String staticHeader) {
+        if (oauthDir != null && !oauthDir.isBlank()) {
+            Path dir = Path.of(oauthDir);
+            String tokenUrl = readCredential(dir, "token-url");
+            String clientId = readCredential(dir, "client-id");
+            String clientSecret = readCredential(dir, "client-secret");
+            String scope = readCredentialOrNull(dir, "scope");
+            LOG.info("Schema-registry auth: OAuth2 client-credentials (tokenUrl={}, clientId={})",
+                    tokenUrl, clientId);
+            return ApicurioClient.AuthProvider.oauth(
+                    new OAuthTokenProvider(tokenUrl, clientId, clientSecret, scope));
+        }
+        if (staticHeader != null && !staticHeader.isBlank()) {
+            return ApicurioClient.AuthProvider.staticHeader(staticHeader);
+        }
+        return ApicurioClient.AuthProvider.none();
+    }
+
+    private static String readCredential(Path dir, String name) {
+        String v = readCredentialOrNull(dir, name);
+        if (v == null || v.isBlank()) {
+            throw new ConnectException("Missing OAuth credential file '" + name + "' in " + dir);
+        }
+        return v;
+    }
+
+    private static String readCredentialOrNull(Path dir, String name) {
+        Path p = dir.resolve(name);
+        if (!Files.isReadable(p)) return null;
+        try {
+            return Files.readString(p, StandardCharsets.UTF_8).trim();
+        } catch (IOException e) {
+            throw new ConnectException("Cannot read OAuth credential file " + p, e);
+        }
     }
 
     /** Sentinel returned by {@link #maybeRewrite} when {@code behavior.on.error=IGNORE}

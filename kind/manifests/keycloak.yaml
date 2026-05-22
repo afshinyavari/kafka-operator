@@ -64,6 +64,16 @@ data:
               }
             }
           ]
+        },
+        {
+          "clientId": "mm2-schema-sync",
+          "enabled": true,
+          "publicClient": false,
+          "clientAuthenticatorType": "client-secret",
+          "secret": "mm2-schema-sync-secret",
+          "serviceAccountsEnabled": true,
+          "standardFlowEnabled": false,
+          "directAccessGrantsEnabled": false
         }
       ],
       "requiredActions": [
@@ -107,6 +117,12 @@ data:
           "emailVerified": true,
           "requiredActions": [],
           "credentials": [{ "type": "password", "value": "schemadmin", "temporary": false }],
+          "realmRoles": ["schema-admin"]
+        },
+        {
+          "username": "service-account-mm2-schema-sync",
+          "enabled": true,
+          "serviceAccountClientId": "mm2-schema-sync",
           "realmRoles": ["schema-admin"]
         }
       ]

@@ -123,6 +123,22 @@ class Mm2EndpointResolverTest {
     }
 
     @Test
+    void managedRefWithSchemaRegistryAuthSecret() {
+        registerManagedCluster(managedCluster("my-cluster", "kafka", true, true));
+
+        KafkaClusterRef ref = new KafkaClusterRef();
+        ref.setName("my-cluster");
+        Mm2Endpoint ep = new Mm2Endpoint();
+        ep.setKafkaClusterRef(ref);
+        ep.setSchemaRegistryAuthSecretRef("mm2-schema-registry-oauth");
+
+        ResolvedEndpoint r = resolver.resolve(ep, "kafka");
+
+        assertThat(r.schemaRegistryUrl()).contains("apicurio-rbac-proxy.kafka.svc.cluster.local");
+        assertThat(r.schemaRegistryAuthSecretRef()).isEqualTo("mm2-schema-registry-oauth");
+    }
+
+    @Test
     void externalPassthrough() {
         Mm2Endpoint ep = new Mm2Endpoint();
         Mm2ExternalEndpoint ext = new Mm2ExternalEndpoint();

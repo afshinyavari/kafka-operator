@@ -1,0 +1,121 @@
+# Source Kafka for the MirrorMaker2 mirror e2e test (kind/mm2-mirror-test.sh).
+#
+# A single-node KRaft Kafka (combined broker+controller, PLAINTEXT) in the dedicated
+# `kafka-src` namespace. It is NOT operator-managed — MirrorMaker2 reaches it as an
+# `external` endpoint. The image is `mm2:dev` (kafka-ubi + the schema-sync-smt JAR) so
+# the in-cluster Mm2MirrorProbe is available for producing binary Apicurio-envelope
+# records via `kafka-run-class.sh`.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: src-kafka-config
+  namespace: kafka-src
+data:
+  server.properties: |
+    process.roles=broker,controller
+    node.id=1
+    controller.quorum.voters=1@src-kafka-0.src-kafka.kafka-src.svc.cluster.local:9093
+    listeners=PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093
+    advertised.listeners=PLAINTEXT://src-kafka-0.src-kafka.kafka-src.svc.cluster.local:9092
+    listener.security.protocol.map=PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT
+    inter.broker.listener.name=PLAINTEXT
+    controller.listener.names=CONTROLLER
+    log.dirs=/var/lib/kafka/data
+    num.partitions=1
+    auto.create.topics.enable=true
+    offsets.topic.replication.factor=1
+    transaction.state.log.replication.factor=1
+    transaction.state.log.min.isr=1
+    group.initial.rebalance.delay.ms=0
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: src-kafka
+  namespace: kafka-src
+  labels:
+    app: src-kafka
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    app: src-kafka
+  ports:
+    - name: plaintext
+      port: 9092
+    - name: controller
+      port: 9093
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: src-kafka
+  namespace: kafka-src
+  labels:
+    app: src-kafka
+spec:
+  serviceName: src-kafka
+  replicas: 1
+  selector:
+    matchLabels:
+      app: src-kafka
+  template:
+    metadata:
+      labels:
+        app: src-kafka
+    spec:
+      securityContext:
+        fsGroup: 1000
+      containers:
+        - name: kafka
+          image: mm2:dev
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsUser: 1000
+            runAsNonRoot: true
+          command: ["/bin/bash", "-c"]
+          args:
+            - |
+              set -e
+              DATA=/var/lib/kafka/data
+              if [ ! -f "$DATA/meta.properties" ]; then
+                /opt/kafka/bin/kafka-storage.sh format \
+                  -t "$(/opt/kafka/bin/kafka-storage.sh random-uuid)" \
+                  -c /config/server.properties
+              fi
+              exec /opt/kafka/bin/kafka-server-start.sh /config/server.properties
+          env:
+            - name: KAFKA_HEAP_OPTS
+              value: "-Xmx512m -Xms256m"
+            - name: LOG_DIR
+              value: "/tmp/kafka-logs"
+          ports:
+            - containerPort: 9092
+              name: plaintext
+            - containerPort: 9093
+              name: controller
+          volumeMounts:
+            - name: config
+              mountPath: /config
+            - name: data
+              mountPath: /var/lib/kafka/data
+          readinessProbe:
+            tcpSocket:
+              port: 9092
+            initialDelaySeconds: 15
+            periodSeconds: 5
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 400Mi
+            limits:
+              cpu: "1"
+              memory: 900Mi
+      volumes:
+        - name: config
+          configMap:
+            name: src-kafka-config
+        - name: data
+          emptyDir: {}

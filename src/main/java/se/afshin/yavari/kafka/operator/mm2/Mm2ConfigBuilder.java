@@ -91,6 +91,16 @@ public class Mm2ConfigBuilder {
             p.put(prefix + "transforms.schemaSync.apply.to", schemaSync.getApplyTo().name());
             p.put(prefix + "transforms.schemaSync.apply.to.topics",
                     String.join(",", schemaSync.getApplyToTopics()));
+            // Schema-registry auth — OAuth2 client-credentials read from a mounted Secret dir.
+            // The SMT does the token fetch/refresh; the operator only points it at the dir.
+            if (source.schemaRegistryAuthSecretRef() != null) {
+                p.put(prefix + "transforms.schemaSync.source.auth.oauth.dir",
+                        REGISTRY_AUTH_BASE + "/source");
+            }
+            if (target.schemaRegistryAuthSecretRef() != null) {
+                p.put(prefix + "transforms.schemaSync.target.auth.oauth.dir",
+                        REGISTRY_AUTH_BASE + "/target");
+            }
         }
 
         // Passthrough escape hatch — overrides everything above except the cluster aliases.
@@ -123,6 +133,11 @@ public class Mm2ConfigBuilder {
             p.put(alias + ".ssl.truststore.type", "PKCS12");
             p.put(alias + ".ssl.truststore.location", base + "/truststore.p12");
             p.put(alias + ".ssl.truststore.password", PKCS12_PASSWORD);
+            // A managed cluster's proxy advertises broker addresses (LB IPs / clusterset.local
+            // names) that its server-cert SANs don't all cover. Disable hostname verification —
+            // the cert chain is still validated against the truststore CA — matching every
+            // other client that reaches brokers through the proxy.
+            p.put(alias + ".ssl.endpoint.identification.algorithm", "");
         }
         if (ep.hasSasl()) {
             p.put(alias + ".sasl.mechanism", ep.sasl().mechanism());

@@ -1,0 +1,68 @@
+# Source Apicurio Registry for the MirrorMaker2 mirror e2e test (kind/mm2-mirror-test.sh).
+#
+# A standalone, unauthenticated Apicurio Registry in the `kafka-src` namespace — the
+# schema-sync SMT reads source schemas from it. It uses the SAME image as the managed
+# cluster's registry (kafkasql, v3 API) so the wire format matches, and is backed by the
+# adjacent single-node `src-kafka`. There is no rbac-proxy sidecar here: the source
+# registry is read-only for the SMT and needs no authorization.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: src-apicurio
+  namespace: kafka-src
+  labels:
+    app: src-apicurio
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: src-apicurio
+  template:
+    metadata:
+      labels:
+        app: src-apicurio
+    spec:
+      containers:
+        - name: registry
+          image: quay.io/apicurio/apicurio-registry-kafkasql:latest-snapshot
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "src-kafka.kafka-src.svc.cluster.local:9092"
+            - name: KAFKA_TOPIC
+              value: "src-kafkasql-journal"
+            - name: JAVA_TOOL_OPTIONS
+              value: "-XX:MaxRAMPercentage=60.0"
+          ports:
+            - containerPort: 8080
+              name: http
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 300Mi
+            limits:
+              cpu: 600m
+              memory: 700Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: src-apicurio
+  namespace: kafka-src
+  labels:
+    app: src-apicurio
+spec:
+  selector:
+    app: src-apicurio
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

@@ -39,13 +39,23 @@ public class Mm2EndpointResolver {
         if (endpoint == null) {
             throw new IllegalArgumentException("endpoint is null");
         }
+        ResolvedEndpoint base;
         if (endpoint.hasManaged()) {
-            return resolveManaged(endpoint, mm2Namespace);
+            base = resolveManaged(endpoint, mm2Namespace);
+        } else if (endpoint.hasExternal()) {
+            base = resolveExternal(endpoint.getExternal());
+        } else {
+            throw new IllegalStateException("Mm2Endpoint has neither kafkaClusterRef nor external set");
         }
-        if (endpoint.hasExternal()) {
-            return resolveExternal(endpoint.getExternal());
+        // An endpoint-level OAuth Secret overrides the auth derived above. This is how a
+        // managed target authenticates to its RBAC-proxied Apicurio: resolveManaged() can't
+        // mint credentials, so the user supplies a client-credentials Secret on the endpoint.
+        String authSecret = endpoint.getSchemaRegistryAuthSecretRef();
+        if (authSecret != null && !authSecret.isBlank() && base.schemaRegistryUrl() != null) {
+            return new ResolvedEndpoint(base.bootstrap(), base.tlsSecretRef(), base.sasl(),
+                    base.schemaRegistryUrl(), authSecret, base.schemaRegistryConfluent());
         }
-        throw new IllegalStateException("Mm2Endpoint has neither kafkaClusterRef nor external set");
+        return base;
     }
 
     private ResolvedEndpoint resolveManaged(Mm2Endpoint endpoint, String mm2Namespace) {

@@ -51,3 +51,11 @@ spec:
           - orders
         operations:
           - PRODUCE
+    # Operator / MirrorMaker2 AdminClient cert CN — mcs-setup mints kafka-operator-client
+    # with CN=<proxyPrincipal> (kafka-proxy). MM2 reaches the managed cluster through the
+    # proxy and must mirror arbitrary topics + manage its own internal topics, so it needs
+    # unrestricted access. This is the privileged infra principal (already a broker super-user).
+    - name: kafka-proxy
+      kafka:
+        topics: ["*"]
+        operations: ["*"]

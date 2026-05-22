@@ -21,7 +21,7 @@ MANIFESTS_DIR      := manifests
         setup-external proxy-external-lb-test proxy-external-gateway-test \
         proxy-external-ingress-test help \
         kafkatopic-test json-schema-test durability-test rolling-restart-test \
-        broker-kill-test mm2-smoke-test e2e
+        broker-kill-test mm2-smoke-test mm2-mirror-test e2e
 
 all: setup  ## Full setup: build → image → clusters → deploy
 
@@ -233,6 +233,9 @@ broker-kill-test:  ## Kill a broker; producers/consumers keep going; broker rejo
 mm2-smoke-test:  ## MM2 CRD + reconciler smoke (managed→external dummy bootstrap)
 	@chmod +x mm2-smoke-test.sh && ./mm2-smoke-test.sh
 
+mm2-mirror-test:  ## MM2 data + Apicurio schema mirror e2e (external source → managed target)
+	@chmod +x mm2-mirror-test.sh && ./mm2-mirror-test.sh
+
 # ── Tiered e2e: smoke (fast default) / extended (slow) / full (both) ──────────
 # All tiers assume mcs-setup is already done (it bakes in MetalLB + KafkaProxy
 # on all 3 clusters + kafkasql Apicurio). Run `make teardown && make mcs-setup`
@@ -254,7 +257,7 @@ SMOKE_E2E := quorum kafkatopic-test rbac-test apicurio-rbac-test \
              xml-filter-test json-schema-test kafka-ui-setup ui-test \
              mm2-smoke-test
 EXTENDED_E2E := proxy-external-lb-test durability-test \
-                rolling-restart-test broker-kill-test
+                rolling-restart-test broker-kill-test mm2-mirror-test
 
 e2e: $(SMOKE_E2E)  ## Smoke e2e: fast feature-coverage sweep
 	@echo ""

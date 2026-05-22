@@ -9,12 +9,15 @@ import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.io.OutputStream;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -30,8 +33,10 @@ class ApicurioSchemaTransferSmtTest {
 
     private HttpServer sourceServer;
     private HttpServer targetServer;
+    private HttpServer tokenServer;
     private FakeApicurio source;
     private FakeApicurio target;
+    private final AtomicInteger tokenCalls = new AtomicInteger();
 
     @BeforeEach
     void start() throws IOException {
@@ -43,12 +48,35 @@ class ApicurioSchemaTransferSmtTest {
         targetServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         targetServer.createContext("/", target);
         targetServer.start();
+        // OAuth2 client-credentials token endpoint — issues a fresh token per request.
+        tokenCalls.set(0);
+        tokenServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        tokenServer.createContext("/token", ex -> {
+            int n = tokenCalls.incrementAndGet();
+            byte[] body = ("{\"access_token\":\"tok-" + n + "\",\"expires_in\":300}")
+                    .getBytes(StandardCharsets.UTF_8);
+            ex.getResponseHeaders().add("Content-Type", "application/json");
+            ex.sendResponseHeaders(200, body.length);
+            try (OutputStream os = ex.getResponseBody()) { os.write(body); }
+            ex.close();
+        });
+        tokenServer.start();
     }
 
     @AfterEach
     void stop() {
         if (sourceServer != null) sourceServer.stop(0);
         if (targetServer != null) targetServer.stop(0);
+        if (tokenServer != null) tokenServer.stop(0);
+    }
+
+    /** Writes the three OAuth credential files the SMT expects in an {@code auth.oauth.dir}. */
+    private String writeOauthDir(Path dir) throws IOException {
+        Files.writeString(dir.resolve("token-url"),
+                "http://127.0.0.1:" + tokenServer.getAddress().getPort() + "/token");
+        Files.writeString(dir.resolve("client-id"), "mm2-schema-sync");
+        Files.writeString(dir.resolve("client-secret"), "secret");
+        return dir.toString();
     }
 
     private ApicurioSchemaTransferSmt<SourceRecord> newSmt() {
@@ -193,13 +221,53 @@ class ApicurioSchemaTransferSmtTest {
         }
     }
 
-    /** In-process Apicurio stub. Implements just the endpoints the SMT calls. */
+    @Test
+    void oauthAuthenticatedUpsertSucceeds(@TempDir Path tmp) throws IOException {
+        // Target registry demands a bearer token; the SMT acquires one via client-credentials.
+        source.register(42L, "default", "events-value", "AVRO", "{\"type\":\"string\"}");
+        target.assignNextGlobalId(99L);
+        target.requireBearer = "tok-1";
+
+        try (var smt = newSmt(Map.of(
+                ApicurioSchemaTransferSmt.TARGET_AUTH_OAUTH_DIR, writeOauthDir(tmp)))) {
+            SourceRecord out = smt.apply(recordValue("events", envelope(42L, "p")));
+            byte[] outBytes = (byte[]) out.value();
+            assertThat(ByteBuffer.wrap(outBytes, 1, 8).getLong()).isEqualTo(99L);
+            assertThat(target.upsertCalls.get()).isEqualTo(1);
+            assertThat(tokenCalls.get()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void oauthRefreshesAndRetriesAfter401(@TempDir Path tmp) throws IOException {
+        // First POST is rejected 401 (stale token) — the client must refresh + retry once.
+        source.register(42L, "default", "events-value", "AVRO", "{\"type\":\"string\"}");
+        target.assignNextGlobalId(99L);
+        target.rejectPostsRemaining.set(1);
+
+        try (var smt = newSmt(Map.of(
+                ApicurioSchemaTransferSmt.TARGET_AUTH_OAUTH_DIR, writeOauthDir(tmp)))) {
+            SourceRecord out = smt.apply(recordValue("events", envelope(42L, "p")));
+            byte[] outBytes = (byte[]) out.value();
+            assertThat(ByteBuffer.wrap(outBytes, 1, 8).getLong()).isEqualTo(99L);
+            assertThat(target.upsertCalls.get()).isEqualTo(1);
+            // token fetched once up front, then re-fetched after the 401
+            assertThat(tokenCalls.get()).isEqualTo(2);
+        }
+    }
+
+    /** In-process Apicurio <strong>v2</strong> stub. Implements just the endpoints the SMT calls. */
     static class FakeApicurio implements com.sun.net.httpserver.HttpHandler {
         record Artifact(String groupId, String artifactId, String type, String content) {}
         final Map<Long, Artifact> byGlobalId = new HashMap<>();
         long nextAssignedGlobalId = 1L;
+        /** Counts content lookups (GET /ids/globalIds/{id}). */
         final AtomicInteger metadataCalls = new AtomicInteger();
         final AtomicInteger upsertCalls = new AtomicInteger();
+        /** When set, any request lacking {@code Authorization: Bearer <requireBearer>} gets 401. */
+        volatile String requireBearer;
+        /** Number of upcoming POSTs to reject with 401 (simulates a stale token). */
+        final AtomicInteger rejectPostsRemaining = new AtomicInteger();
 
         void register(long globalId, String groupId, String artifactId, String type, String content) {
             byGlobalId.put(globalId, new Artifact(groupId, artifactId, type, content));
@@ -211,58 +279,73 @@ class ApicurioSchemaTransferSmtTest {
         public void handle(HttpExchange ex) throws IOException {
             try {
                 String path = ex.getRequestURI().getPath();
+                String query = ex.getRequestURI().getQuery();
                 String method = ex.getRequestMethod();
-                // GET /apis/registry/v3/ids/globalIds/{id} (metadata + content double-duty
-                // in the SMT — we serve the metadata JSON when Accept is JSON, raw content
-                // otherwise — but the SMT uses two GETs to the same path; we always return JSON
-                // for the first call and raw content for the second by checking metadataCalls).
-                if (method.equals("GET") && path.matches("^/apis/registry/v3/ids/globalIds/\\d+$")) {
-                    long id = Long.parseLong(path.substring(path.lastIndexOf('/') + 1));
+                if (requireBearer != null
+                        && !("Bearer " + requireBearer).equals(
+                                ex.getRequestHeaders().getFirst("Authorization"))) {
+                    ex.sendResponseHeaders(401, -1);
+                    return;
+                }
+                // GET /apis/registry/v2/ids/globalIds/{id} — raw schema content.
+                if (method.equals("GET") && path.matches("^/apis/registry/v2/ids/globalIds/\\d+$")) {
+                    metadataCalls.incrementAndGet();
+                    Artifact a = byGlobalId.get(idFromPath(path));
+                    if (a == null) { ex.sendResponseHeaders(404, -1); return; }
+                    sendBytes(ex, 200, a.content().getBytes(StandardCharsets.UTF_8));
+                    return;
+                }
+                // GET /apis/registry/v2/ids/globalIds/{id}/references — references list.
+                if (method.equals("GET")
+                        && path.matches("^/apis/registry/v2/ids/globalIds/\\d+/references$")) {
+                    sendJson(ex, 200, "[]");
+                    return;
+                }
+                // GET /apis/registry/v2/search/artifacts?globalId={id} — artifact identity.
+                if (method.equals("GET") && path.equals("/apis/registry/v2/search/artifacts")) {
+                    long id = Long.parseLong((query == null ? "" : query)
+                            .replaceAll(".*globalId=(\\d+).*", "$1"));
                     Artifact a = byGlobalId.get(id);
-                    if (a == null) {
-                        ex.sendResponseHeaders(404, -1);
+                    sendJson(ex, 200, a == null
+                            ? "{\"artifacts\":[],\"count\":0}"
+                            : MAPPER.writeValueAsString(Map.of(
+                                    "artifacts", java.util.List.of(
+                                            Map.of("id", a.artifactId(), "type", a.type())),
+                                    "count", 1)));
+                    return;
+                }
+                // POST /apis/registry/v2/groups/{g}/artifacts — create; returns ArtifactMetaData.
+                if (method.equals("POST")
+                        && path.matches("^/apis/registry/v2/groups/[^/]+/artifacts$")) {
+                    if (rejectPostsRemaining.getAndUpdate(x -> x > 0 ? x - 1 : 0) > 0) {
+                        ex.sendResponseHeaders(401, -1);
                         return;
                     }
-                    int call = metadataCalls.incrementAndGet();
-                    byte[] body;
-                    if (call % 2 == 1) {
-                        // Metadata
-                        body = MAPPER.writeValueAsBytes(Map.of(
-                                "groupId", a.groupId(),
-                                "artifactId", a.artifactId(),
-                                "artifactType", a.type(),
-                                "globalId", id));
-                        ex.getResponseHeaders().add("Content-Type", "application/json");
-                    } else {
-                        // Content
-                        body = a.content().getBytes(StandardCharsets.UTF_8);
-                    }
-                    ex.sendResponseHeaders(200, body.length);
-                    try (OutputStream os = ex.getResponseBody()) { os.write(body); }
-                    return;
-                }
-                if (method.equals("GET") && path.matches("^/apis/registry/v3/ids/globalIds/\\d+/references$")) {
-                    byte[] body = "[]".getBytes(StandardCharsets.UTF_8);
-                    ex.getResponseHeaders().add("Content-Type", "application/json");
-                    ex.sendResponseHeaders(200, body.length);
-                    try (OutputStream os = ex.getResponseBody()) { os.write(body); }
-                    return;
-                }
-                if (method.equals("POST") && path.startsWith("/apis/registry/v3/groups/")) {
                     upsertCalls.incrementAndGet();
-                    JsonNode req = MAPPER.readTree(ex.getRequestBody());
+                    ex.getRequestBody().readAllBytes();
                     long assigned = nextAssignedGlobalId++;
-                    Map<String, Object> ver = Map.of("globalId", assigned);
-                    byte[] body = MAPPER.writeValueAsBytes(Map.of("version", ver));
-                    ex.getResponseHeaders().add("Content-Type", "application/json");
-                    ex.sendResponseHeaders(200, body.length);
-                    try (OutputStream os = ex.getResponseBody()) { os.write(body); }
+                    sendJson(ex, 200, MAPPER.writeValueAsString(Map.of("globalId", assigned)));
                     return;
                 }
                 ex.sendResponseHeaders(404, -1);
             } finally {
                 ex.close();
             }
+        }
+
+        private static long idFromPath(String path) {
+            String[] parts = path.split("/");
+            return Long.parseLong(parts[parts.length - 1]);
+        }
+
+        private static void sendJson(HttpExchange ex, int code, String body) throws IOException {
+            ex.getResponseHeaders().add("Content-Type", "application/json");
+            sendBytes(ex, code, body.getBytes(StandardCharsets.UTF_8));
+        }
+
+        private static void sendBytes(HttpExchange ex, int code, byte[] body) throws IOException {
+            ex.sendResponseHeaders(code, body.length);
+            try (OutputStream os = ex.getResponseBody()) { os.write(body); }
         }
     }
 }

@@ -33,6 +33,15 @@
             <scope>provided</scope>
         </dependency>
 
+        <!-- kafka-clients — compile-only, for the Mm2MirrorProbe e2e helper. Provided at
+             runtime by the Kafka image when run via kafka-run-class.sh. -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>${kafka.version}</version>
+            <scope>provided</scope>
+        </dependency>
+
         <!-- Jackson for Apicurio REST JSON. Bundled into the JAR — Connect's
              PluginClassLoader isolates plugin classpaths, so our Jackson can't conflict
              with Kafka's bundled version. -->

@@ -13,37 +13,89 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpRequest.BodyPublishers;
 import java.net.http.HttpResponse;
 import java.net.http.HttpResponse.BodyHandlers;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
- * Minimal Apicurio v3 REST client used by {@link ApicurioSchemaTransferSmt}. Avoids the
- * apicurio-registry-client SDK to keep the SMT JAR small and free of classloader
- * conflicts with Connect's own classpath.
+ * Minimal Apicurio Registry <strong>v2</strong> REST client used by
+ * {@link ApicurioSchemaTransferSmt}. Avoids the apicurio-registry-client SDK to keep the
+ * SMT JAR small and free of classloader conflicts with Connect's own classpath.
  *
- * <p>Used endpoints:
+ * <p>The operator deploys the {@code apicurio-registry-kafkasql} image, which serves the
+ * v2 API ({@code /apis/registry/v2}); the v3 API is not present. Endpoints used:
  * <ul>
- *   <li>{@code GET /apis/registry/v3/ids/globalIds/{id}} — fetch raw schema content
- *   <li>{@code GET /apis/registry/v3/ids/globalIds/{id}/references} — fetch refs
- *   <li>{@code GET /apis/registry/v3/groups/{g}/artifacts/{a}/versions/latest} — find existing
- *   <li>{@code POST /apis/registry/v3/groups/{g}/artifacts?ifExists=RETURN_OR_UPDATE} — upsert
+ *   <li>{@code GET  /apis/registry/v2/ids/globalIds/{id}} — raw schema content
+ *   <li>{@code GET  /apis/registry/v2/ids/globalIds/{id}/references} — references
+ *   <li>{@code GET  /apis/registry/v2/search/artifacts?globalId={id}} — artifact identity
+ *       ({@code id} + {@code type}); v2 has no metadata-by-globalId endpoint
+ *   <li>{@code POST /apis/registry/v2/groups/{g}/artifacts?ifExists=RETURN_OR_UPDATE} —
+ *       create/return; identity + type travel in {@code X-Registry-*} headers
  * </ul>
+ *
+ * <p>Authentication is supplied by an {@link AuthProvider}: none, a static header, or an
+ * OAuth2 client-credentials provider that refreshes tokens (see {@link OAuthTokenProvider}).
+ * When a request comes back 401/403, the client asks the provider to refresh and retries
+ * once — this keeps a long-lived MirrorMaker2 worker authenticated as tokens expire.
  */
 public class ApicurioClient implements AutoCloseable {
 
     private static final Logger LOG = LoggerFactory.getLogger(ApicurioClient.class);
     private static final ObjectMapper MAPPER = new ObjectMapper();
+    private static final String V2 = "/apis/registry/v2";
 
     private final String baseUrl;
     private final HttpClient http;
-    private final String authHeader;
+    private final AuthProvider auth;
 
-    /** Auth modes carry the value already prefixed (e.g. "Basic ...", "Bearer ..."). */
+    /** Supplies the {@code Authorization} header for each request and refreshes credentials
+     *  after an authentication failure. */
+    public interface AuthProvider {
+        /** Header value (e.g. {@code "Bearer …"}), or {@code null} for no auth. */
+        String header() throws ApicurioException;
+
+        /** Forces a credential refresh after a 401/403. Returns {@code true} if a retry
+         *  may now succeed (i.e. the credentials are refreshable). */
+        boolean refresh();
+
+        /** No authentication. */
+        static AuthProvider none() {
+            return new AuthProvider() {
+                public String header() { return null; }
+                public boolean refresh() { return false; }
+            };
+        }
+
+        /** A fixed, pre-formed header value (e.g. {@code "Basic …"} or {@code "Bearer …"}). */
+        static AuthProvider staticHeader(String value) {
+            if (value == null) return none();
+            return new AuthProvider() {
+                public String header() { return value; }
+                public boolean refresh() { return false; }
+            };
+        }
+
+        /** OAuth2 client-credentials — fetches and refreshes bearer tokens. */
+        static AuthProvider oauth(OAuthTokenProvider provider) {
+            return new AuthProvider() {
+                public String header() throws ApicurioException { return "Bearer " + provider.token(); }
+                public boolean refresh() { provider.invalidate(); return true; }
+            };
+        }
+    }
+
+    /** Backwards-compatible constructor: a static (or absent) {@code Authorization} header. */
     public ApicurioClient(String baseUrl, String authHeader) {
+        this(baseUrl, AuthProvider.staticHeader(authHeader));
+    }
+
+    public ApicurioClient(String baseUrl, AuthProvider auth) {
         this.baseUrl = baseUrl.endsWith("/") ? baseUrl.substring(0, baseUrl.length() - 1) : baseUrl;
-        this.authHeader = authHeader;
+        this.auth = auth != null ? auth : AuthProvider.none();
         this.http = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
@@ -80,18 +132,25 @@ public class ApicurioClient implements AutoCloseable {
 
     public record ArtifactReference(String name, String groupId, String artifactId, String version) {}
 
-    /** Fetches the artifact metadata + content for a given globalId from this registry. */
+    /** Fetches the artifact content + identity for a given globalId from this registry. */
     public ArtifactByGlobalId fetchByGlobalId(long globalId) throws ApicurioException {
-        // Metadata first — we need groupId/artifactId/type to recreate on target.
-        JsonNode meta = getJson("/apis/registry/v3/ids/globalIds/" + globalId);
-        String groupId = textOrDefault(meta.get("groupId"), "default");
-        String artifactId = meta.get("artifactId").asText();
-        String artifactType = meta.get("artifactType").asText();
-        // Content via the content endpoint.
-        byte[] content = getRaw("/apis/registry/v3/ids/globalIds/" + globalId);
+        // Content.
+        byte[] content = getRaw(V2 + "/ids/globalIds/" + globalId);
+        // Identity — v2 has no metadata-by-globalId endpoint, so search for the artifact
+        // owning the version with this globalId. The result carries `id` and `type`;
+        // `groupId` is omitted for the default group.
+        JsonNode search = getJson(V2 + "/search/artifacts?globalId=" + globalId);
+        JsonNode artifacts = search.get("artifacts");
+        if (artifacts == null || !artifacts.isArray() || artifacts.isEmpty()) {
+            throw new ApicurioException("No artifact found for globalId " + globalId);
+        }
+        JsonNode a = artifacts.get(0);
+        String groupId = textOrDefault(a.get("groupId"), "default");
+        String artifactId = a.get("id").asText();
+        String artifactType = textOrDefault(a.get("type"), "JSON");
         // References.
         List<ArtifactReference> refs = new ArrayList<>();
-        JsonNode refNode = getJsonOrNull("/apis/registry/v3/ids/globalIds/" + globalId + "/references");
+        JsonNode refNode = getJsonOrNull(V2 + "/ids/globalIds/" + globalId + "/references");
         if (refNode != null && refNode.isArray()) {
             for (JsonNode r : refNode) {
                 refs.add(new ArtifactReference(
@@ -104,41 +163,59 @@ public class ApicurioClient implements AutoCloseable {
         return new ArtifactByGlobalId(content, groupId, artifactId, artifactType, refs);
     }
 
-    /** Creates (or returns existing identical) artifact in this registry. Returns the
+    /** Creates (or returns the existing identical) artifact in this registry. Returns the
      *  globalId assigned by this registry. */
     public long upsertArtifact(String groupId, String artifactId, String artifactType,
                                 byte[] content, List<ArtifactReference> references)
             throws ApicurioException {
-        ObjectNode body = MAPPER.createObjectNode();
-        body.put("artifactId", artifactId);
-        body.put("artifactType", artifactType);
-        ObjectNode firstVersion = body.putObject("firstVersion");
-        ObjectNode contentNode = firstVersion.putObject("content");
-        // Send raw content as a string; Apicurio interprets per artifactType (JSON for AVRO/JSON,
-        // raw text for PROTOBUF/XML).
-        contentNode.put("content", new String(content));
+        // v2: identity + type go in X-Registry-* headers. The body is the raw schema
+        // content — unless there are references, which require the extended envelope.
+        Map<String, String> headers = new LinkedHashMap<>();
+        headers.put("X-Registry-ArtifactId", artifactId);
+        headers.put("X-Registry-ArtifactType", artifactType);
+        byte[] body;
         if (references != null && !references.isEmpty()) {
-            ArrayNode refsArr = contentNode.putArray("references");
+            ObjectNode env = MAPPER.createObjectNode();
+            env.put("content", new String(content, StandardCharsets.UTF_8));
+            ArrayNode refsArr = env.putArray("references");
             for (ArtifactReference ref : references) {
                 ObjectNode r = refsArr.addObject();
-                r.put("name", ref.name());
                 r.put("groupId", ref.groupId());
                 r.put("artifactId", ref.artifactId());
                 if (ref.version() != null) r.put("version", ref.version());
+                if (ref.name() != null) r.put("name", ref.name());
             }
+            try {
+                body = MAPPER.writeValueAsBytes(env);
+            } catch (Exception e) {
+                throw new ApicurioException("Failed to serialise artifact envelope", e);
+            }
+            headers.put("Content-Type", "application/create.extended+json");
+        } else {
+            body = content;
+            headers.put("Content-Type", "application/json");
         }
-        String path = "/apis/registry/v3/groups/" + urlEncode(groupId)
-                + "/artifacts?ifExists=FIND_OR_CREATE_VERSION";
-        JsonNode result = postJson(path, body);
-        JsonNode versionMeta = result.has("version") ? result.get("version") : result;
-        if (versionMeta != null && versionMeta.has("globalId")) {
-            return versionMeta.get("globalId").asLong();
+        String path = V2 + "/groups/" + urlEncode(groupId)
+                + "/artifacts?ifExists=RETURN_OR_UPDATE";
+        HttpResponse<byte[]> resp = exchange("POST", path, body, headers);
+        if (resp.statusCode() / 100 != 2) {
+            throw new ApicurioException("POST " + path + " → " + resp.statusCode()
+                    + " body=" + new String(resp.body(), StandardCharsets.UTF_8));
+        }
+        JsonNode result;
+        try {
+            result = MAPPER.readTree(resp.body());
+        } catch (Exception e) {
+            throw new ApicurioException("Failed to parse JSON from " + path, e);
+        }
+        if (result != null && result.has("globalId")) {
+            return result.get("globalId").asLong();
         }
         throw new ApicurioException("Apicurio response missing globalId: " + result);
     }
 
     private JsonNode getJson(String path) throws ApicurioException {
-        HttpResponse<byte[]> resp = send(buildGet(path));
+        HttpResponse<byte[]> resp = exchange("GET", path, null, null);
         if (resp.statusCode() / 100 != 2) {
             throw new ApicurioException("GET " + path + " → " + resp.statusCode());
         }
@@ -150,7 +227,7 @@ public class ApicurioClient implements AutoCloseable {
     }
 
     private JsonNode getJsonOrNull(String path) throws ApicurioException {
-        HttpResponse<byte[]> resp = send(buildGet(path));
+        HttpResponse<byte[]> resp = exchange("GET", path, null, null);
         if (resp.statusCode() == 404) return null;
         if (resp.statusCode() / 100 != 2) {
             throw new ApicurioException("GET " + path + " → " + resp.statusCode());
@@ -163,52 +240,45 @@ public class ApicurioClient implements AutoCloseable {
     }
 
     private byte[] getRaw(String path) throws ApicurioException {
-        HttpResponse<byte[]> resp = send(buildGet(path));
+        HttpResponse<byte[]> resp = exchange("GET", path, null, null);
         if (resp.statusCode() / 100 != 2) {
             throw new ApicurioException("GET " + path + " → " + resp.statusCode());
         }
         return resp.body();
     }
 
-    private JsonNode postJson(String path, JsonNode body) throws ApicurioException {
-        HttpRequest req;
-        try {
-            HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(baseUrl + path))
-                    .header("Content-Type", "application/json")
-                    .header("Accept", "application/json")
-                    .timeout(Duration.ofSeconds(30))
-                    .POST(BodyPublishers.ofByteArray(MAPPER.writeValueAsBytes(body)));
-            if (authHeader != null) b.header("Authorization", authHeader);
-            req = b.build();
-        } catch (Exception e) {
-            throw new ApicurioException("Failed to build POST " + path, e);
+    /** Sends a request with the current auth header; on a 401/403 refreshes the credentials
+     *  (if refreshable) and retries exactly once. */
+    private HttpResponse<byte[]> exchange(String method, String path, byte[] body,
+                                          Map<String, String> headers) throws ApicurioException {
+        HttpResponse<byte[]> resp = send(method, path, body, headers);
+        if ((resp.statusCode() == 401 || resp.statusCode() == 403) && auth.refresh()) {
+            LOG.debug("Auth rejected ({}) on {} {} — refreshed credentials, retrying",
+                    resp.statusCode(), method, path);
+            resp = send(method, path, body, headers);
         }
-        HttpResponse<byte[]> resp = send(req);
-        if (resp.statusCode() / 100 != 2) {
-            throw new ApicurioException("POST " + path + " → " + resp.statusCode()
-                    + " body=" + new String(resp.body()));
-        }
-        try {
-            return MAPPER.readTree(resp.body());
-        } catch (Exception e) {
-            throw new ApicurioException("Failed to parse JSON from " + path, e);
-        }
+        return resp;
     }
 
-    private HttpRequest buildGet(String path) {
+    private HttpResponse<byte[]> send(String method, String path, byte[] body,
+                                      Map<String, String> headers) throws ApicurioException {
         HttpRequest.Builder b = HttpRequest.newBuilder(URI.create(baseUrl + path))
                 .header("Accept", "application/json")
-                .timeout(Duration.ofSeconds(30))
-                .GET();
-        if (authHeader != null) b.header("Authorization", authHeader);
-        return b.build();
-    }
-
-    private HttpResponse<byte[]> send(HttpRequest req) throws ApicurioException {
+                .timeout(Duration.ofSeconds(30));
+        if (headers != null) {
+            headers.forEach(b::header);
+        }
+        if ("POST".equals(method)) {
+            b.POST(BodyPublishers.ofByteArray(body));
+        } else {
+            b.GET();
+        }
+        String header = auth.header();
+        if (header != null) b.header("Authorization", header);
         try {
-            return http.send(req, BodyHandlers.ofByteArray());
+            return http.send(b.build(), BodyHandlers.ofByteArray());
         } catch (Exception e) {
-            throw new ApicurioException("HTTP request failed: " + req.uri(), e);
+            throw new ApicurioException("HTTP request failed: " + method + " " + baseUrl + path, e);
         }
     }
 

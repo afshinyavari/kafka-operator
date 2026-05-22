@@ -43,6 +43,9 @@ class Mm2ConfigBuilderTest {
         assertThat(props).contains("target.security.protocol=SSL");
         assertThat(props).contains("source.ssl.keystore.location=/etc/mm2/pkcs12/source/keystore.p12");
         assertThat(props).contains("target.ssl.truststore.location=/etc/mm2/pkcs12/target/truststore.p12");
+        // Hostname verification disabled — the proxy advertises addresses outside its cert SANs.
+        assertThat(props).contains("source.ssl.endpoint.identification.algorithm=");
+        assertThat(props).contains("target.ssl.endpoint.identification.algorithm=");
         assertThat(props).contains("source->target.enabled=true");
         assertThat(props).contains("source->target.replication.factor=3");
         assertThat(props).contains("offset.storage.topic=mm2-offsets.my-mm2");
@@ -104,6 +107,30 @@ class Mm2ConfigBuilderTest {
         assertThat(props).contains("source->target.transforms.schemaSync.apply.to=VALUE");
         assertThat(props).contains("source->target.transforms.schemaSync.behavior.on.error=WARN");
         assertThat(props).contains("source->target.transforms.schemaSync.apply.to.topics=events\\..*");
+    }
+
+    @Test
+    void schemaSyncWithRegistryAuthEmitsOauthDir() {
+        MirrorMaker2Spec spec = new MirrorMaker2Spec();
+        spec.setFlow(new Mm2FlowConfig());
+        Mm2SchemaSyncConfig sync = new Mm2SchemaSyncConfig();
+        sync.setEnabled(true);
+        spec.setSchemaSync(sync);
+
+        // External source registry needs no auth; managed target sits behind the RBAC proxy.
+        ResolvedEndpoint src = new ResolvedEndpoint(
+                "broker:9092", null, null, "http://reg.src:8080", null, false);
+        ResolvedEndpoint tgt = new ResolvedEndpoint(
+                "kafka-proxy.kafka.svc.cluster.local:9094", "tls", null,
+                "http://apicurio-rbac-proxy.kafka.svc.cluster.local:8082",
+                "mm2-schema-registry-oauth", false);
+
+        String props = builder.build(cr(spec), src, tgt);
+
+        assertThat(props).contains(
+                "source->target.transforms.schemaSync.target.auth.oauth.dir=/etc/mm2/registry-auth/target");
+        // Source carries no auth Secret → no source oauth dir emitted.
+        assertThat(props).doesNotContain("schemaSync.source.auth.oauth.dir");
     }
 
     @Test

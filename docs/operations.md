@@ -568,6 +568,21 @@ EOF
 
 The reconciler creates one ConfigMap, one Deployment (3 replicas by default when the target is multi-cluster managed), and three KafkaTopic CRs (`mm2-configs.{flow}`, `mm2-offsets.{flow}`, `mm2-status.{flow}`) on the target.
 
+### Proxy RBAC and resources for MM2
+
+A managed target is reached through its Kroxylicious proxy, which enforces RBAC. The MM2 worker connects with the operator's admin certificate, whose CN is the cluster's `proxyMtls.proxyPrincipal` (e.g. `kafka-proxy`). The cluster's `KafkaRbac` **must grant that principal broad Kafka access** — MM2 mirrors arbitrary topics and manages its own internal topics — or the worker dies with `TopicAuthorizationException`:
+
+```yaml
+spec:
+  users:
+    - name: kafka-proxy        # = proxyMtls.proxyPrincipal
+      kafka:
+        topics: ["*"]
+        operations: ["*"]
+```
+
+Also set `spec.resources` on the `MirrorMaker2` CR — a real worker (3 connectors + clients + the SMT) needs ~1.5Gi; the default 512Mi OOM-kills it.
+
 ### Observing status
 
 ```bash
@@ -596,6 +611,23 @@ make reload-mm2-image   # builds JAR, rebuilds image, kind load, restart MM2 Dep
 ```
 
 The Deployment annotation `kafka.yavari.afshin.se/config-hash` only flips on properties/Secret changes, not image changes — `reload-mm2-image` issues an explicit rollout restart.
+
+### Schema-registry authentication
+
+When `schemaSync` is enabled and the target is a managed cluster, the SMT writes mirrored schemas through that cluster's `apicurio-rbac-proxy`, which rejects unauthenticated writes. Give the endpoint an OAuth2 client-credentials Secret:
+
+```bash
+kubectl create secret generic mm2-schema-registry-oauth -n kafka \
+  --from-literal=token-url="http://keycloak.kafka.svc.clusterset.local:8080/realms/demo/protocol/openid-connect/token" \
+  --from-literal=client-id="mm2-schema-sync" \
+  --from-literal=client-secret="<secret>"
+```
+
+then set `target.schemaRegistryAuthSecretRef: mm2-schema-registry-oauth` on the CR. The client (a Keycloak service account here) must hold the `schema-admin` role. The SMT fetches and refreshes the token itself. See [api-reference.md#schema-registry-authentication](api-reference.md#schema-registry-authentication).
+
+### End-to-end test
+
+`make -C kind mm2-mirror-test` (the `e2e-extended` tier) runs a full data + schema mirror: it stands up a single-node Kafka + Apicurio in a throwaway `kafka-src` namespace, produces Apicurio-enveloped records, mirrors them into the managed `my-kafka` cluster, and asserts the SMT wrote the schema into the managed registry via the OAuth path above. Binary envelope records go through the in-cluster `Mm2MirrorProbe` (bundled in `mm2:dev`), since `kafka-console-producer` corrupts arbitrary bytes.
 
 ### Schema mirroring failure modes
 
