@@ -18,6 +18,9 @@ public class KafkaProxySpec {
     private List<BrokerNodeIdRange> brokerNodeIdRanges = List.of();
     private List<String> targetClusters = List.of();
     private KafkaProxyExternalAccessConfig externalAccess;
+    /** Derived (synthetic-CR only): true when the parent KafkaCluster has spec.metricsConfig set.
+     *  Drives the Kroxylicious management/Prometheus endpoint + the metrics Service/ServiceMonitor. */
+    private boolean metricsEnabled;
 
     public String getClusterRef() { return clusterRef; }
     public void setClusterRef(String clusterRef) { this.clusterRef = clusterRef; }
@@ -63,4 +66,7 @@ public class KafkaProxySpec {
 
     public KafkaProxyExternalAccessConfig getExternalAccess() { return externalAccess; }
     public void setExternalAccess(KafkaProxyExternalAccessConfig externalAccess) { this.externalAccess = externalAccess; }
+
+    public boolean isMetricsEnabled() { return metricsEnabled; }
+    public void setMetricsEnabled(boolean metricsEnabled) { this.metricsEnabled = metricsEnabled; }
 }

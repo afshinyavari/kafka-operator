@@ -2,7 +2,6 @@ package se.afshin.yavari.kafka.operator.nodepool;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
-import io.fabric8.kubernetes.api.model.GenericKubernetesResourceBuilder;
 import io.fabric8.kubernetes.api.model.IntOrString;
 import io.fabric8.kubernetes.api.model.LabelSelectorBuilder;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
@@ -10,7 +9,6 @@ import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.Service;
-import io.fabric8.kubernetes.api.model.ServiceBuilder;
 import io.fabric8.kubernetes.api.model.policy.v1.PodDisruptionBudget;
 import io.fabric8.kubernetes.api.model.policy.v1.PodDisruptionBudgetBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -44,6 +42,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaPodSetSpec;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.crd.PodEntry;
 import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
+import se.afshin.yavari.kafka.operator.infra.MetricsResources;
 import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
 import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 import se.afshin.yavari.kafka.operator.infra.ServiceExportManager;
@@ -70,6 +69,7 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
     @Inject SecretRevisionTracker secretRevisionTracker;
     @Inject ServiceExportManager serviceExportManager;
     @Inject OptionalResourceApplier optionalApplier;
+    @Inject MetricsResources metricsResources;
 
     @ConfigProperty(name = "kafka.cluster.id")
     String localClusterId;
@@ -320,54 +320,30 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
         client.policy().v1().podDisruptionBudget().inNamespace(namespace).resource(pdb).serverSideApply();
     }
 
+    /** Labels carried by the pool's {@code -metrics} Service and ServiceMonitor metadata. */
+    private Map<String, String> metricsLabels(KafkaNodePool pool, String clusterName) {
+        return Map.of(
+            KafkaPodSet.CLUSTER_LABEL,    clusterName,
+            KafkaPodSet.NODE_POOL_LABEL,  pool.getMetadata().getName(),
+            KafkaPodSet.MANAGED_BY_LABEL, KafkaPodSet.MANAGED_BY_VALUE);
+    }
+
     private void applyMetricsService(KafkaNodePool pool, String namespace, String clusterName) {
-        Service svc = new ServiceBuilder()
-                .withNewMetadata()
-                    .withName(pool.getMetadata().getName() + "-metrics")
-                    .withNamespace(namespace)
-                    .withLabels(Map.of(
-                        KafkaPodSet.CLUSTER_LABEL,    clusterName,
-                        KafkaPodSet.NODE_POOL_LABEL,  pool.getMetadata().getName(),
-                        KafkaPodSet.MANAGED_BY_LABEL, KafkaPodSet.MANAGED_BY_VALUE
-                    ))
-                    .withOwnerReferences(poolOwnerRef(pool))
-                .endMetadata()
-                .withNewSpec()
-                    .withSelector(Map.of(
-                        KafkaPodSet.NODE_POOL_LABEL, pool.getMetadata().getName(),
-                        KafkaPodSet.CLUSTER_LABEL,   clusterName))
-                    .addNewPort()
-                        .withName("jmx")
-                        .withPort(9101)
-                        .withTargetPort(new IntOrString(9101))
-                    .endPort()
-                .endSpec()
-                .build();
+        Service svc = metricsResources.metricsService(
+                pool.getMetadata().getName(), namespace,
+                metricsLabels(pool, clusterName),
+                Map.of(KafkaPodSet.NODE_POOL_LABEL, pool.getMetadata().getName(),
+                       KafkaPodSet.CLUSTER_LABEL,   clusterName),
+                "jmx", 9101, poolOwnerRef(pool));
         client.services().inNamespace(namespace).resource(svc).serverSideApply();
     }
 
     private void applyServiceMonitor(KafkaNodePool pool, String namespace, String clusterName) {
-        Map<String, Object> spec = Map.of(
-            "selector", Map.of("matchLabels", Map.of(
-                KafkaPodSet.NODE_POOL_LABEL,  pool.getMetadata().getName(),
-                KafkaPodSet.CLUSTER_LABEL,    clusterName,
-                KafkaPodSet.MANAGED_BY_LABEL, KafkaPodSet.MANAGED_BY_VALUE)),
-            "endpoints", List.of(Map.of("port", "jmx", "interval", "30s")));
-        GenericKubernetesResource sm = new GenericKubernetesResourceBuilder()
-                .withApiVersion("monitoring.coreos.com/v1")
-                .withKind("ServiceMonitor")
-                .withNewMetadata()
-                    .withName(pool.getMetadata().getName() + "-metrics")
-                    .withNamespace(namespace)
-                    .withLabels(Map.of(
-                        KafkaPodSet.CLUSTER_LABEL,    clusterName,
-                        KafkaPodSet.NODE_POOL_LABEL,  pool.getMetadata().getName(),
-                        KafkaPodSet.MANAGED_BY_LABEL, KafkaPodSet.MANAGED_BY_VALUE
-                    ))
-                    .withOwnerReferences(poolOwnerRef(pool))
-                .endMetadata()
-                .addToAdditionalProperties("spec", spec)
-                .build();
+        GenericKubernetesResource sm = metricsResources.serviceMonitor(
+                pool.getMetadata().getName(), namespace,
+                metricsLabels(pool, clusterName),
+                metricsLabels(pool, clusterName),
+                "jmx", poolOwnerRef(pool));
         optionalApplier.applyServiceMonitor(sm, namespace);
     }
 

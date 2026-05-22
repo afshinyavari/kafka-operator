@@ -1,6 +1,7 @@
 package se.afshin.yavari.kafka.operator.mm2;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
+import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
 import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
@@ -23,6 +24,8 @@ import se.afshin.yavari.kafka.operator.crd.MirrorMaker2Status;
 import se.afshin.yavari.kafka.operator.crd.Mm2Endpoint;
 import se.afshin.yavari.kafka.operator.crd.SchemaRegistryType;
 import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
+import se.afshin.yavari.kafka.operator.infra.MetricsResources;
+import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
 import se.afshin.yavari.kafka.operator.infra.ReconcileContext;
 import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 import se.afshin.yavari.kafka.operator.infra.ServiceExportManager;
@@ -31,6 +34,7 @@ import se.afshin.yavari.kafka.operator.rolling.CrossClusterRollCoordinator;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Reconciler for the {@link MirrorMaker2} CRD. Mirrors {@code KafkaUIReconciler}'s
@@ -66,6 +70,8 @@ public class MirrorMaker2Reconciler implements Reconciler<MirrorMaker2>, Cleaner
     @Inject SecretRevisionTracker secretRevisionTracker;
     @Inject ServiceExportManager serviceExportManager;
     @Inject CrossClusterRollCoordinator rollCoordinator;
+    @Inject MetricsResources metricsResources;
+    @Inject OptionalResourceApplier optionalApplier;
 
     @ConfigProperty(name = "kafka.cluster.id", defaultValue = "")
     String localClusterId;
@@ -139,11 +145,21 @@ public class MirrorMaker2Reconciler implements Reconciler<MirrorMaker2>, Cleaner
             String properties = configBuilder.build(cr, source, target);
             String secretRevisions = secretRevisionTracker.revisionsOf(
                     secretRefs(source, target), namespace);
-            String configHash = ConfigHasher.sha256(properties + "::" + secretRevisions);
-            ConfigMap cm = configMapBuilder.build(cr, properties, ownerRef);
+
+            // Metrics gated on spec.metricsConfig. MM2 is a Connect worker exposing metrics
+            // only via JMX, so the operator bundles a fixed JMX exporter config (configMapRef
+            // is not consulted — see MirrorMaker2Spec.metricsConfig).
+            boolean metricsEnabled = cr.getSpec().getMetricsConfig() != null;
+            String jmxConfigYaml = metricsEnabled
+                    ? MetricsResources.jmxConfig("connect-jmx-config.yaml") : null;
+
+            String configHash = ConfigHasher.sha256(properties + "::" + secretRevisions
+                    + "::" + (jmxConfigYaml == null ? "" : jmxConfigYaml));
+            ConfigMap cm = configMapBuilder.build(cr, properties, jmxConfigYaml, ownerRef);
             client.configMaps().inNamespace(namespace).resource(cm).serverSideApply();
 
-            Deployment dep = deploymentBuilder.build(cr, source, target, replicas, configHash, ownerRef);
+            Deployment dep = deploymentBuilder.build(cr, source, target, replicas, configHash,
+                    metricsEnabled, ownerRef);
 
             // Cross-cluster roll gate — only matters when MCS-enabled with clusterRollOrder.
             Deployment existing = client.apps().deployments().inNamespace(namespace).withName(name).get();
@@ -163,6 +179,12 @@ public class MirrorMaker2Reconciler implements Reconciler<MirrorMaker2>, Cleaner
             }
 
             client.apps().deployments().inNamespace(namespace).resource(dep).serverSideApply();
+
+            if (metricsEnabled) {
+                applyMm2Metrics(name, namespace, ownerRef);
+            } else {
+                deleteMm2Metrics(name, namespace);
+            }
 
             if (mcsEnabled) {
                 serviceExportManager.apply(name, namespace);
@@ -199,8 +221,28 @@ public class MirrorMaker2Reconciler implements Reconciler<MirrorMaker2>, Cleaner
         if (mcs != null && mcs.isEnabled()) {
             serviceExportManager.delete(name, namespace);
         }
+        deleteMm2Metrics(name, namespace);
         LOG.infof("MirrorMaker2 %s/%s deleted", namespace, name);
         return DeleteControl.defaultDelete();
+    }
+
+    /** Applies the MM2 {@code <name>-metrics} ClusterIP Service + ServiceMonitor. MM2 worker
+     *  pods carry {@link Mm2Labels#labels}, so that map serves as the Service labels, pod
+     *  selector, and ServiceMonitor matchLabels. */
+    private void applyMm2Metrics(String name, String namespace, OwnerReference ownerRef) {
+        Map<String, String> labels = Mm2Labels.labels(name);
+        var svc = metricsResources.metricsService(name, namespace, labels, labels,
+                "metrics", Mm2DeploymentBuilder.METRICS_PORT, List.of(ownerRef));
+        client.services().inNamespace(namespace).resource(svc).serverSideApply();
+        GenericKubernetesResource sm = metricsResources.serviceMonitor(name, namespace,
+                labels, labels, "metrics", List.of(ownerRef));
+        optionalApplier.applyServiceMonitor(sm, namespace);
+    }
+
+    private void deleteMm2Metrics(String name, String namespace) {
+        client.services().inNamespace(namespace)
+              .withName(name + MetricsResources.METRICS_SUFFIX).delete();
+        optionalApplier.deleteServiceMonitor(name + MetricsResources.METRICS_SUFFIX, namespace);
     }
 
     /** Default replicas: 3 when the target is a multi-cluster managed KafkaCluster,

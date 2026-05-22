@@ -2,6 +2,7 @@ package se.afshin.yavari.kafka.operator.cruisecontrol;
 
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.ContainerBuilder;
+import io.fabric8.kubernetes.api.model.EnvVar;
 import io.fabric8.kubernetes.api.model.EnvVarBuilder;
 import io.fabric8.kubernetes.api.model.Quantity;
 import io.fabric8.kubernetes.api.model.ResourceRequirements;
@@ -34,6 +35,10 @@ public class CruiseControlDeploymentBuilder {
     /** PodTemplate annotation carrying the operator's config hash. Flipping it rolls the pod. */
     public static final String CONFIG_HASH_ANNOTATION = "kafka.yavari.afshin.se/config-hash";
 
+    /** Port the bundled jmx_prometheus_javaagent serves Cruise Control metrics on. Only
+     *  exposed as a container port when metrics are enabled. Matches the broker convention. */
+    public static final int METRICS_PORT = 9101;
+
     private static final String CONFIG_VOLUME = "cc-config";
     private static final String CLIENT_TLS_VOLUME = "cc-client-tls";
     private static final String PKCS12_VOLUME = "cc-pkcs12";
@@ -48,10 +53,12 @@ public class CruiseControlDeploymentBuilder {
      * @param mtls               true when the broker INTERNAL listener is mTLS
      * @param ccClientCertSecret cert-manager PEM Secret name (only used when {@code mtls})
      * @param initImage          image carrying openssl + keytool (the Kafka image)
+     * @param metricsEnabled     true when KafkaCluster.spec.metricsConfig is set — attaches
+     *                           the JMX exporter agent and exposes the metrics port
      */
     public Deployment build(KafkaClusterCruiseControlSpec spec, String namespace,
                             String configHash, boolean mtls, String ccClientCertSecret,
-                            String initImage) {
+                            String initImage, boolean metricsEnabled) {
         Map<String, String> labels = labels();
         CruiseControlApiSecurity api = spec.getApiSecurity();
         boolean authEnabled = api != null && api.isEnabled() && api.getBasicAuthSecretRef() != null;
@@ -102,7 +109,22 @@ public class CruiseControlDeploymentBuilder {
                     .build());
         }
 
-        Container container = new ContainerBuilder()
+        List<EnvVar> env = new ArrayList<>();
+        env.add(new EnvVarBuilder()
+                .withName("KAFKA_HEAP_OPTS")
+                .withValue("-XX:MaxRAMPercentage=70.0")
+                .build());
+        if (metricsEnabled) {
+            // The Cruise Control start script honors KAFKA_OPTS — attach the JMX exporter
+            // agent reading the jmx-config.yaml key the operator added to the config ConfigMap.
+            env.add(new EnvVarBuilder()
+                    .withName("KAFKA_OPTS")
+                    .withValue("-javaagent:/opt/jmx-exporter/jmx-exporter.jar=" + METRICS_PORT
+                            + ":" + CruiseControlConfigBuilder.CONFIG_DIR + "/jmx-config.yaml")
+                    .build());
+        }
+
+        ContainerBuilder containerBuilder = new ContainerBuilder()
                 .withName(CruiseControlOrchestrator.CC_NAME)
                 .withImage(spec.getImage())
                 // The image ENTRYPOINT is the Cruise Control start script; pass the
@@ -111,11 +133,15 @@ public class CruiseControlDeploymentBuilder {
                 .addNewPort()
                     .withName("cc-rest")
                     .withContainerPort(CruiseControlOrchestrator.REST_PORT)
-                .endPort()
-                .withEnv(new EnvVarBuilder()
-                        .withName("KAFKA_HEAP_OPTS")
-                        .withValue("-XX:MaxRAMPercentage=70.0")
-                        .build())
+                .endPort();
+        if (metricsEnabled) {
+            containerBuilder.addNewPort()
+                    .withName("metrics")
+                    .withContainerPort(METRICS_PORT)
+                    .endPort();
+        }
+        Container container = containerBuilder
+                .withEnv(env)
                 .withVolumeMounts(mounts)
                 .withResources(resources(spec.getResources()))
                 .withNewReadinessProbe()

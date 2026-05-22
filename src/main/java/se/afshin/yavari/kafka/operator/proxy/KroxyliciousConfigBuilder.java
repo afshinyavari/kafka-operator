@@ -128,6 +128,17 @@ public class KroxyliciousConfigBuilder {
             activeFilters.forEach(f -> cfg.append("  - ").append(f).append("\n"));
         }
 
+        // Management endpoint — Kroxylicious 0.21.0 serves Prometheus metrics at /metrics on
+        // this port. Enabled when the parent KafkaCluster has spec.metricsConfig set; folding
+        // it into the generated YAML also flips the config hash so the proxy rolls on toggle.
+        if (spec.isMetricsEnabled()) {
+            cfg.append("\nmanagement:\n");
+            cfg.append("  bindAddress: 0.0.0.0\n");
+            cfg.append("  port: ").append(ProxyDeploymentBuilder.METRICS_PORT).append("\n");
+            cfg.append("  endpoints:\n");
+            cfg.append("    prometheus: {}\n");
+        }
+
         return cfg.toString();
     }
 

@@ -839,10 +839,35 @@ Enable automatic scraping via the Prometheus Operator:
 ```yaml
 spec:
   metricsConfig:
-    configMapRef: my-jmx-config   # ConfigMap with jmx-config.yaml key
+    configMapRef: my-jmx-config   # ConfigMap with jmx-config.yaml key (broker-only)
 ```
 
-This creates a `ServiceMonitor` and a `Service` (port 9101) per node pool for Kafka JMX metrics, in addition to the operator's own `/metrics` endpoint.
+When `spec.metricsConfig` is set, the operator creates a dedicated `<name>-metrics`
+ClusterIP `Service` and a `monitoring.coreos.com/v1` `ServiceMonitor` for every
+data-plane workload owned by the cluster:
+
+| Workload | Service name | Port (name → number) | Metrics source |
+|----------|--------------|----------------------|----------------|
+| Kafka brokers / controllers | `<pool>-metrics` | `jmx` → 9101 | `jmx_prometheus_javaagent` reading the user-supplied `configMapRef` |
+| Kroxylicious proxy | `kafka-proxy-metrics` | `metrics` → 9190 | Kroxylicious native `management.endpoints.prometheus` (no JMX) |
+| Cruise Control | `cruise-control-metrics` | `metrics` → 9101 | `jmx_prometheus_javaagent` with an operator-bundled JMX config |
+
+`MirrorMaker2` is a separate CRD and is gated on its own `MirrorMaker2.spec.metricsConfig`
+(see api-reference). When set the operator creates `<mm2-name>-metrics` on port 9101
+(JMX exporter, operator-bundled config).
+
+`configMapRef` is consulted **only** for the broker JMX exporter; for the proxy, Cruise
+Control, and MirrorMaker2 the operator ships a fixed exporter config — presence of the
+`metricsConfig` field alone enables them.
+
+`ServiceMonitor` is applied via `OptionalResourceApplier`, which silently no-ops when the
+Prometheus Operator CRD (`monitoring.coreos.com/v1`) is absent — so this is safe on
+clusters without Prometheus installed.
+
+> **Cruise Control image rebuild.** Enabling Cruise Control metrics requires the
+> `cruise-control-image` to carry the JMX exporter jar. The image must be rebuilt and
+> reloaded into the cluster before metrics will appear on `cruise-control-metrics:9101`.
+> The Kafka and MM2 images already bundle the jar.
 
 ### Health endpoint
 

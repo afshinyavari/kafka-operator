@@ -122,6 +122,20 @@ class ProxyServiceBuilderTest {
         assertThat(svc.getSpec().getType()).isEqualTo("LoadBalancer");
     }
 
+    @Test
+    void mainService_carriesNoMetricsPort() {
+        // The metrics port belongs on the dedicated kafka-proxy-metrics ClusterIP Service
+        // (built by MetricsResources), never the main Service — which may be a LoadBalancer.
+        Service svc = builder.build(proxy(null), 3, NS);
+        assertThat(svc.getSpec().getPorts()).extracting(ServicePort::getName)
+                .doesNotContain("metrics");
+
+        Service lb = builder.build(proxy(null), 3, NS,
+                ExternalAccessResolution.resolved(ExternalAccessType.LOADBALANCER, "10.0.0.1"));
+        assertThat(lb.getSpec().getPorts()).extracting(ServicePort::getName)
+                .doesNotContain("metrics");
+    }
+
     // --- helpers ---
 
     private KafkaProxy proxy(List<BrokerNodeIdRange> ranges) {

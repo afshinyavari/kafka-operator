@@ -25,6 +25,10 @@ public class ProxyDeploymentBuilder {
      *  and therefore whether the cross-cluster roll gate should fire. */
     public static final String CONFIG_HASH_ANNOTATION = "kafka.yavari.afshin.se/config-hash";
 
+    /** Port the Kroxylicious management endpoint serves Prometheus metrics on (default 9190).
+     *  Only exposed as a container port when {@code spec.metricsEnabled} is set. */
+    public static final int METRICS_PORT = 9190;
+
     public Deployment build(KafkaProxy proxy, String namespace, String configHash) {
         String name = proxy.getMetadata().getName();
         KafkaProxySpec spec = proxy.getSpec();
@@ -84,6 +88,19 @@ public class ProxyDeploymentBuilder {
                 .withReadOnly(true)
                 .build());
 
+        ContainerBuilder container = new ContainerBuilder()
+                .withName("kroxylicious")
+                .withImage(spec.getImage())
+                .withArgs("--config", "/etc/kroxy/config.yaml")
+                .withVolumeMounts(mounts)
+                .withSecurityContext(SecurityContextDefaults.containerDefaults());
+        if (spec.isMetricsEnabled()) {
+            container.addNewPort()
+                    .withName("metrics")
+                    .withContainerPort(METRICS_PORT)
+                    .endPort();
+        }
+
         return new DeploymentBuilder()
                 .withNewMetadata()
                     .withName(name)
@@ -101,13 +118,7 @@ public class ProxyDeploymentBuilder {
                             .withAnnotations(Map.of(CONFIG_HASH_ANNOTATION, configHash))
                         .endMetadata()
                         .withNewSpec()
-                            .withContainers(new ContainerBuilder()
-                                    .withName("kroxylicious")
-                                    .withImage(spec.getImage())
-                                    .withArgs("--config", "/etc/kroxy/config.yaml")
-                                    .withVolumeMounts(mounts)
-                                    .withSecurityContext(SecurityContextDefaults.containerDefaults())
-                                    .build())
+                            .withContainers(container.build())
                             .withVolumes(volumes)
                             .withSecurityContext(SecurityContextDefaults.podDefaults())
                         .endSpec()

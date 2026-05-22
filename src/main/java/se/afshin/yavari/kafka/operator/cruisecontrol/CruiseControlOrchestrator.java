@@ -1,6 +1,7 @@
 package se.afshin.yavari.kafka.operator.cruisecontrol;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
+import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
 import io.fabric8.kubernetes.api.model.OwnerReference;
 import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.Service;
@@ -13,11 +14,14 @@ import se.afshin.yavari.kafka.operator.crd.CruiseControlStatus;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterCruiseControlSpec;
 import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
+import se.afshin.yavari.kafka.operator.infra.MetricsResources;
+import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
 import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 import se.afshin.yavari.kafka.operator.rolling.RollTracker;
 import se.afshin.yavari.kafka.operator.topic.BrokerBootstrapResolver;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 
 /**
@@ -53,6 +57,8 @@ public class CruiseControlOrchestrator {
     @Inject BrokerBootstrapResolver bootstrapResolver;
     @Inject SecretRevisionTracker secretRevisionTracker;
     @Inject RollTracker rollTracker;
+    @Inject OptionalResourceApplier optionalApplier;
+    @Inject MetricsResources metricsResources;
 
     /** Reconciles the Cruise Control described by {@code cr.spec.cruiseControl}. */
     public CruiseControlStatus reconcile(KafkaCluster cr, String namespace, String localClusterId) {
@@ -102,16 +108,24 @@ public class CruiseControlOrchestrator {
             String ccProps = configBuilder.build(spec, bootstrap, mtls);
             String capacityJson = capacityBuilder.build(spec.getCapacity());
 
-            ConfigMap cm = configMapBuilder.build(namespace, ccProps, capacityJson);
+            // Metrics are gated on the parent cluster's spec.metricsConfig. Cruise Control
+            // exposes metrics only via JMX, so the operator bundles a fixed JMX exporter
+            // config (configMapRef is not consulted here — it is broker-only).
+            boolean metricsEnabled = cr.getSpec().getMetricsConfig() != null;
+            String jmxConfigYaml = metricsEnabled
+                    ? MetricsResources.jmxConfig("cruise-control-jmx-config.yaml") : null;
+
+            ConfigMap cm = configMapBuilder.build(namespace, ccProps, capacityJson, jmxConfigYaml);
             cm.getMetadata().setOwnerReferences(clusterOwnerRef(cr));
             client.configMaps().inNamespace(namespace).resource(cm).serverSideApply();
 
             String secretRevisions = mtls
                     ? secretRevisionTracker.revisionsOf(List.of(ccCertSecret), namespace) : "";
-            String configHash = ConfigHasher.sha256(ccProps, capacityJson, secretRevisions);
+            String configHash = ConfigHasher.sha256(ccProps, capacityJson, secretRevisions,
+                    jmxConfigYaml == null ? "" : jmxConfigYaml);
 
             Deployment dep = deploymentBuilder.build(spec, namespace, configHash, mtls,
-                    ccCertSecret, cr.getSpec().getKafkaImage());
+                    ccCertSecret, cr.getSpec().getKafkaImage(), metricsEnabled);
             dep.getMetadata().setOwnerReferences(clusterOwnerRef(cr));
 
             Deployment existing = client.apps().deployments()
@@ -124,6 +138,12 @@ public class CruiseControlOrchestrator {
             Service svc = serviceBuilder.build(namespace);
             svc.getMetadata().setOwnerReferences(clusterOwnerRef(cr));
             client.services().inNamespace(namespace).resource(svc).serverSideApply();
+
+            if (metricsEnabled) {
+                applyCcMetrics(namespace, clusterOwnerRef(cr));
+            } else {
+                deleteCcMetrics(namespace);
+            }
 
             int ready = readyReplicas(namespace);
             if (ready >= 1) {
@@ -147,6 +167,26 @@ public class CruiseControlOrchestrator {
         client.apps().deployments().inNamespace(namespace).withName(CC_NAME).delete();
         client.services().inNamespace(namespace).withName(CC_NAME).delete();
         client.configMaps().inNamespace(namespace).withName(CONFIG_MAP_NAME).delete();
+        deleteCcMetrics(namespace);
+    }
+
+    /** Applies the {@code cruise-control-metrics} ClusterIP Service + ServiceMonitor. The
+     *  Cruise Control pod carries {@link CruiseControlDeploymentBuilder#labels}, so that map
+     *  serves as Service labels, pod selector, and ServiceMonitor matchLabels. */
+    private void applyCcMetrics(String namespace, List<OwnerReference> owner) {
+        Map<String, String> labels = CruiseControlDeploymentBuilder.labels();
+        Service svc = metricsResources.metricsService(CC_NAME, namespace, labels, labels,
+                "metrics", CruiseControlDeploymentBuilder.METRICS_PORT, owner);
+        client.services().inNamespace(namespace).resource(svc).serverSideApply();
+        GenericKubernetesResource sm = metricsResources.serviceMonitor(CC_NAME, namespace,
+                labels, labels, "metrics", owner);
+        optionalApplier.applyServiceMonitor(sm, namespace);
+    }
+
+    private void deleteCcMetrics(String namespace) {
+        client.services().inNamespace(namespace)
+              .withName(CC_NAME + MetricsResources.METRICS_SUFFIX).delete();
+        optionalApplier.deleteServiceMonitor(CC_NAME + MetricsResources.METRICS_SUFFIX, namespace);
     }
 
     /** True when the cluster's Cruise Control config references the given Secret. Used by the

@@ -23,6 +23,9 @@ RUN ./gradlew --no-daemon -x test :cruise-control:jar :cruise-control:copyDepend
 # ---- runtime: UBI9 JDK-21 + the built classpath ----------------------------
 FROM registry.access.redhat.com/ubi9/openjdk-21:latest
 ARG CC_VERSION
+# Prometheus JMX exporter version — kept in lock-step with kafka-image/Dockerfile so the
+# operator's -javaagent wiring (path + version) is identical across both images.
+ARG JMX_EXPORTER_VERSION=1.1.0
 LABEL org.opencontainers.image.title="cruise-control" \
       org.opencontainers.image.description="LinkedIn Cruise Control compiled on Red Hat UBI" \
       org.opencontainers.image.source="https://github.com/linkedin/cruise-control" \
@@ -38,6 +41,15 @@ COPY --from=build /src/config                              /opt/cruise-control/c
 RUN chmod 0755 /opt/cruise-control/kafka-cruise-control-start.sh \
     && chown -R 1000:0 /opt/cruise-control \
     && chmod -R g=u /opt/cruise-control
+# Prometheus JMX exporter agent. Cruise Control exposes metrics only via JMX; the operator
+# attaches this jar as a -javaagent when KafkaCluster.spec.metricsConfig is set. Same jar
+# name and path (/opt/jmx-exporter/jmx-exporter.jar) as the Kafka image.
+RUN mkdir -p /opt/jmx-exporter \
+    && curl -sSfL \
+       https://github.com/prometheus/jmx_exporter/releases/download/${JMX_EXPORTER_VERSION}/jmx_prometheus_javaagent-${JMX_EXPORTER_VERSION}.jar \
+       -o /opt/jmx-exporter/jmx-exporter.jar \
+    && chown -R 1000:0 /opt/jmx-exporter \
+    && chmod -R g=u /opt/jmx-exporter
 USER 1000
 WORKDIR /opt/cruise-control
 # The operator-rendered cruisecontrol.properties path is supplied as the container arg.

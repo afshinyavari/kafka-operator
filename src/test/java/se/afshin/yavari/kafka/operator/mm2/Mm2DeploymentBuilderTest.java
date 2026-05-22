@@ -34,7 +34,7 @@ class Mm2DeploymentBuilderTest {
     @Test
     void noTlsNoSaslMinimal() {
         ResolvedEndpoint ep = new ResolvedEndpoint("b:9092", null, null, null, null, false);
-        Deployment dep = builder.build(cr(), ep, ep, 1, "hash1", owner());
+        Deployment dep = builder.build(cr(), ep, ep, 1, "hash1", false, owner());
 
         assertThat(dep.getMetadata().getName()).isEqualTo("my-mm2");
         assertThat(dep.getSpec().getReplicas()).isEqualTo(1);
@@ -55,7 +55,7 @@ class Mm2DeploymentBuilderTest {
     void tlsAddsPerSideInitContainersAndMounts() {
         ResolvedEndpoint src = new ResolvedEndpoint("b:9094", "src-tls", null, null, null, false);
         ResolvedEndpoint tgt = new ResolvedEndpoint("c:9094", "tgt-tls", null, null, null, false);
-        Deployment dep = builder.build(cr(), src, tgt, 3, "h", owner());
+        Deployment dep = builder.build(cr(), src, tgt, 3, "h", false, owner());
 
         var pod = dep.getSpec().getTemplate().getSpec();
         assertThat(pod.getInitContainers()).extracting(Container::getName)
@@ -71,7 +71,7 @@ class Mm2DeploymentBuilderTest {
         ResolvedEndpoint src = new ResolvedEndpoint("b:9093", null,
                 new ResolvedEndpoint.Mm2Sasl("PLAIN", "src-creds"), null, null, false);
         ResolvedEndpoint tgt = new ResolvedEndpoint("c:9094", "tgt-tls", null, null, null, false);
-        Deployment dep = builder.build(cr(), src, tgt, 1, "h", owner());
+        Deployment dep = builder.build(cr(), src, tgt, 1, "h", false, owner());
 
         var worker = dep.getSpec().getTemplate().getSpec().getContainers().get(0);
         assertThat(worker.getVolumeMounts()).extracting(v -> v.getMountPath())
@@ -84,7 +84,7 @@ class Mm2DeploymentBuilderTest {
                 "http://reg.src", "src-reg-auth", false);
         ResolvedEndpoint tgt = new ResolvedEndpoint("c:9094", "tgt-tls", null,
                 "http://reg.dst", "dst-reg-auth", false);
-        Deployment dep = builder.build(cr(), src, tgt, 1, "h", owner());
+        Deployment dep = builder.build(cr(), src, tgt, 1, "h", false, owner());
 
         var worker = dep.getSpec().getTemplate().getSpec().getContainers().get(0);
         assertThat(worker.getVolumeMounts()).extracting(v -> v.getMountPath())
@@ -94,7 +94,39 @@ class Mm2DeploymentBuilderTest {
     @Test
     void replicasArePropagated() {
         ResolvedEndpoint ep = new ResolvedEndpoint("b:9092", null, null, null, null, false);
-        Deployment dep = builder.build(cr(), ep, ep, 3, "h", owner());
+        Deployment dep = builder.build(cr(), ep, ep, 3, "h", false, owner());
         assertThat(dep.getSpec().getReplicas()).isEqualTo(3);
+    }
+
+    @Test
+    void metricsEnabledAttachesJavaagentPortAndMount() {
+        ResolvedEndpoint ep = new ResolvedEndpoint("b:9092", null, null, null, null, false);
+        Deployment dep = builder.build(cr(), ep, ep, 1, "h", true, owner());
+        Container worker = dep.getSpec().getTemplate().getSpec().getContainers().get(0);
+
+        assertThat(worker.getEnv()).extracting(e -> e.getName())
+                .contains("KAFKA_OPTS", "KAFKA_HEAP_OPTS");
+        assertThat(worker.getEnv()).anySatisfy(e -> {
+            if ("KAFKA_OPTS".equals(e.getName())) {
+                assertThat(e.getValue())
+                        .contains("-javaagent:/opt/jmx-exporter/jmx-exporter.jar=9101:")
+                        .contains("/etc/mm2/jmx-config.yaml");
+            }
+        });
+        assertThat(worker.getPorts()).extracting(p -> p.getName()).contains("metrics");
+        assertThat(worker.getVolumeMounts()).extracting(v -> v.getMountPath())
+                .contains("/etc/mm2/jmx-config.yaml");
+    }
+
+    @Test
+    void metricsDisabledHasNoJavaagentNoPortNoMount() {
+        ResolvedEndpoint ep = new ResolvedEndpoint("b:9092", null, null, null, null, false);
+        Deployment dep = builder.build(cr(), ep, ep, 1, "h", false, owner());
+        Container worker = dep.getSpec().getTemplate().getSpec().getContainers().get(0);
+
+        assertThat(worker.getEnv()).extracting(e -> e.getName()).doesNotContain("KAFKA_OPTS");
+        assertThat(worker.getPorts()).isNullOrEmpty();
+        assertThat(worker.getVolumeMounts()).extracting(v -> v.getMountPath())
+                .doesNotContain("/etc/mm2/jmx-config.yaml");
     }
 }

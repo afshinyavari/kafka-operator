@@ -306,6 +306,8 @@ Downgrade protection: `CrValidator` rejects a `targetMetadataVersion` lower than
 | `BrokerBootstrapResolver` | `topic` | Picks the alphabetically-first broker `KafkaNodePool` and builds its headless bootstrap address |
 | `TopicReconcileLeader` / `StaticPrimaryClusterLeader` | `topic` | Cross-cluster single-writer gate. v1 impl returns `localClusterId == spec.clusters[0].id`; v2 will swap in a Kafka consumer-group leader implementation |
 | `AdminClientTlsLoader` | `topic` | Reads a cert-manager TLS Secret (PEM) and returns Kafka client SSL properties using `ssl.keystore.type=PEM` (no PKCS12 conversion) |
+| `MetricsResources` | `infra` | Shared builder for the `<name>-metrics` ClusterIP Service + `monitoring.coreos.com/v1` ServiceMonitor used by every workload that exposes Prometheus metrics (node pools, proxy, Cruise Control, MM2). Also loads bundled JMX exporter configs from the classpath. |
+| `OptionalResourceApplier` | `infra` | Apply/delete wrapper for ServiceMonitor / TLSRoute / HTTPRoute / Ingress that silently no-ops when the CRD is absent on the cluster. |
 
 ---
 
@@ -824,3 +826,36 @@ osodevops/kafka-backup tool, exactly as MirrorMaker2 wraps Kafka Connect.
 - `kind/kafka-backup-test.sh` — smoke e2e (CRD + reconciler wiring)
 - See [api-reference.md#kafkabackup](api-reference.md#kafkabackup) for the
   full CRD reference.
+
+---
+
+## Observability
+
+Two layers of Prometheus metrics:
+
+- **Operator metrics** — Quarkus Micrometer endpoint at `:8080/metrics`. Counters/timers
+  for rolling updates, ISR checks, scale-down, plus JVM defaults. Always on.
+- **Data-plane metrics** — opt-in via `KafkaCluster.spec.metricsConfig` (and
+  `MirrorMaker2.spec.metricsConfig` for MM2, a separate CRD). When set, the operator
+  creates a dedicated `<name>-metrics` ClusterIP Service and a
+  `monitoring.coreos.com/v1` ServiceMonitor for every relevant workload via the shared
+  `MetricsResources` helper.
+
+Each workload exposes metrics differently:
+
+| Workload | Mechanism | Port |
+|----------|-----------|------|
+| Kafka brokers / controllers | `jmx_prometheus_javaagent` reading a user ConfigMap (`metricsConfig.configMapRef`) | 9101 |
+| Kroxylicious proxy | Native — `management.endpoints.prometheus` in the proxy config | 9190 |
+| Cruise Control | `jmx_prometheus_javaagent` + operator-bundled JMX config | 9101 |
+| MirrorMaker2 (Connect) | `jmx_prometheus_javaagent` + operator-bundled JMX config | 9101 |
+
+For the brokers, the user supplies the JMX exporter rules because they typically want
+to tune the metric set. For CC and MM2 the MBean set is fixed, so the operator ships a
+sensible default rules file (`src/main/resources/metrics/{cruise-control,connect}-jmx-config.yaml`)
+and `MetricsConfig.configMapRef` is ignored for those workloads. The proxy needs no JMX
+config at all — Kroxylicious exposes Prometheus natively over HTTP.
+
+ServiceMonitor application goes through `OptionalResourceApplier`, which silently
+no-ops when the Prometheus Operator CRD is absent — making the operator safe to deploy
+on clusters without Prometheus.

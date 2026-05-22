@@ -290,6 +290,26 @@ class KroxyliciousConfigBuilderTest {
         assertThat(cfg).contains("advertisedBrokerAddressPattern: " + PROXY_NAME + "." + NS + ".svc.cluster.local");
     }
 
+    @Test
+    void metricsDisabled_noManagementBlock() {
+        String cfg = builder.build(proxy(), 3, 0, NS, false);
+        assertThat(cfg).doesNotContain("management:");
+        assertThat(cfg).doesNotContain("prometheus");
+    }
+
+    @Test
+    void metricsEnabled_emitsManagementBlock() {
+        KafkaProxy p = proxy();
+        p.getSpec().setMetricsEnabled(true);
+
+        String cfg = builder.build(p, 3, 0, NS, false);
+
+        assertThat(cfg).contains("management:");
+        assertThat(cfg).contains("bindAddress: 0.0.0.0");
+        assertThat(cfg).contains("port: 9190");
+        assertThat(cfg).contains("prometheus: {}");
+    }
+
     // --- helpers ---
 
     private KafkaProxy proxy() {

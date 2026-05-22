@@ -27,6 +27,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.McsConfig;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
+import se.afshin.yavari.kafka.operator.infra.MetricsResources;
 import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
 import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 import se.afshin.yavari.kafka.operator.infra.ServiceExportManager;
@@ -82,6 +83,7 @@ public class KafkaProxyOrchestrator {
     @Inject SecretRevisionTracker secretRevisionTracker;
     @Inject ServiceExportManager serviceExportManager;
     @Inject OptionalResourceApplier optionalApplier;
+    @Inject MetricsResources metricsResources;
 
     /** Reconciles the proxy described by {@code cr.spec.proxy}. Returns the new sub-status. */
     public KafkaProxyStatus reconcile(KafkaCluster cr, String namespace, String localClusterId) {
@@ -201,6 +203,15 @@ public class KafkaProxyOrchestrator {
             attachOwnerRef(service.getMetadata(), clusterOwnerRef(cr));
             client.services().inNamespace(namespace).resource(service).serverSideApply();
 
+            // Metrics — Kroxylicious exposes Prometheus natively on its management endpoint.
+            // A dedicated -metrics ClusterIP Service keeps metrics off the main Service,
+            // which may be of type LoadBalancer.
+            if (cr.getSpec().getMetricsConfig() != null) {
+                applyProxyMetrics(name, namespace, clusterOwnerRef(cr));
+            } else {
+                deleteProxyMetrics(name, namespace);
+            }
+
             if (mcsEnabled) {
                 serviceExportManager.apply(name, namespace);
             }
@@ -247,6 +258,7 @@ public class KafkaProxyOrchestrator {
         client.configMaps().inNamespace(namespace).withName(name + "-config").delete();
         client.apps().deployments().inNamespace(namespace).withName(name).delete();
         client.services().inNamespace(namespace).withName(name).delete();
+        deleteProxyMetrics(name, namespace);
         boolean mcsEnabled = cr.getSpec().getClusters() != null
                 && cr.getSpec().getClusters().size() > 1;
         if (mcsEnabled) {
@@ -254,6 +266,26 @@ public class KafkaProxyOrchestrator {
         }
         optionalApplier.deleteTlsRoute(name, namespace);
         optionalApplier.deleteIngress(name, namespace);
+    }
+
+    /** Applies the proxy's dedicated {@code kafka-proxy-metrics} ClusterIP Service +
+     *  ServiceMonitor. The proxy pods carry {@link ProxyDeploymentBuilder#labels} both as
+     *  the Deployment selector and as Service metadata, so the same map serves as the
+     *  Service labels, pod selector, and ServiceMonitor matchLabels. */
+    private void applyProxyMetrics(String name, String namespace, List<OwnerReference> owner) {
+        Map<String, String> labels = ProxyDeploymentBuilder.labels(name);
+        Service svc = metricsResources.metricsService(name, namespace, labels, labels,
+                "metrics", ProxyDeploymentBuilder.METRICS_PORT, owner);
+        client.services().inNamespace(namespace).resource(svc).serverSideApply();
+        GenericKubernetesResource sm = metricsResources.serviceMonitor(name, namespace,
+                labels, labels, "metrics", owner);
+        optionalApplier.applyServiceMonitor(sm, namespace);
+    }
+
+    private void deleteProxyMetrics(String name, String namespace) {
+        client.services().inNamespace(namespace)
+              .withName(name + MetricsResources.METRICS_SUFFIX).delete();
+        optionalApplier.deleteServiceMonitor(name + MetricsResources.METRICS_SUFFIX, namespace);
     }
 
     /** True if any KafkaProxy in the namespace references the given Secret name. With the
@@ -334,6 +366,7 @@ public class KafkaProxyOrchestrator {
         spec.setExternalAccess(p.getExternalAccess());
         spec.setBrokerNodeIdRanges(brokers.ranges);
         spec.setTargetClusters(targets);
+        spec.setMetricsEnabled(cr.getSpec().getMetricsConfig() != null);
         if (mcsEnabled) {
             McsConfig mcs = new McsConfig();
             mcs.setEnabled(true);

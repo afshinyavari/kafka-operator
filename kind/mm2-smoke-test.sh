@@ -70,6 +70,26 @@ TGT_BS=$(kubectl --context "${CTX}" -n "${NS}" get mm2 "${CR}" \
   || fail "status.targetBootstrap expected proxy svc address, got '${TGT_BS}'"
 ok "status.{source,target}Bootstrap populated correctly"
 
+# Metrics — manifest sets metricsConfig: {} → operator creates -metrics Service
+# and ServiceMonitor (the SM may be absent if Prometheus Operator's CRD isn't
+# installed; OptionalResourceApplier no-ops in that case, which is correct).
+kubectl --context "${CTX}" -n "${NS}" get svc "${CR}-metrics" >/dev/null \
+  || fail "Service ${CR}-metrics not created (metrics gating broken?)"
+METRICS_PORT=$(kubectl --context "${CTX}" -n "${NS}" get svc "${CR}-metrics" \
+                 -o jsonpath='{.spec.ports[?(@.name=="metrics")].port}')
+[[ "${METRICS_PORT}" == "9101" ]] \
+  || fail "Service ${CR}-metrics expected port 9101, got '${METRICS_PORT}'"
+ok "Service ${CR}-metrics present on port 9101"
+if kubectl --context "${CTX}" get crd servicemonitors.monitoring.coreos.com \
+     >/dev/null 2>&1; then
+  kubectl --context "${CTX}" -n "${NS}" get servicemonitor "${CR}-metrics" \
+    >/dev/null 2>&1 \
+    && ok "ServiceMonitor ${CR}-metrics present" \
+    || fail "ServiceMonitor ${CR}-metrics not created (Prometheus CRD is installed)"
+else
+  ok "Prometheus Operator CRD absent — ServiceMonitor apply correctly skipped"
+fi
+
 # Cleanup
 kubectl --context "${CTX}" delete -f manifests/mm2-smoke-cr.yaml >/dev/null
 for i in $(seq 1 30); do

@@ -1,0 +1,57 @@
+# Prometheus JMX exporter rules for Kafka Connect / MirrorMaker2.
+#
+# Bundled by the operator (loaded via MetricsResources.jmxConfig) and written into the
+# MirrorMaker2 config ConfigMap as `jmx-config.yaml` when MirrorMaker2.spec.metricsConfig
+# is set. The operator attaches jmx_prometheus_javaagent with this file. MM2 runs as a
+# dedicated Connect worker, so the Connect MBean set is fixed.
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+rules:
+  # Connect worker + connector + task metrics.
+  - pattern: 'kafka.connect<type=connect-worker-metrics><>([a-z-]+)'
+    name: kafka_connect_worker_$1
+    type: GAUGE
+  - pattern: 'kafka.connect<type=connect-worker-metrics, connector=(.+)><>([a-z-]+)'
+    name: kafka_connect_worker_connector_$2
+    labels:
+      connector: "$1"
+    type: GAUGE
+  - pattern: 'kafka.connect<type=connector-task-metrics, connector=(.+), task=(.+)><>([a-z-]+)'
+    name: kafka_connect_connector_task_$3
+    labels:
+      connector: "$1"
+      task: "$2"
+    type: GAUGE
+  # MirrorMaker2 replication metrics — lag, record count, byte rate per topic-partition.
+  - pattern: 'kafka.connect.mirror<type=MirrorSourceConnector, (.+)=(.+), (.+)=(.+), (.+)=(.+)><>([a-z-]+)'
+    name: kafka_connect_mirror_source_$7
+    labels:
+      "$1": "$2"
+      "$3": "$4"
+      "$5": "$6"
+    type: GAUGE
+  # Kafka producer / consumer client metrics used by the Connect workers.
+  - pattern: 'kafka.(producer|consumer)<type=(.+), client-id=(.+)><>(.+):'
+    name: kafka_connect_$1_$4
+    labels:
+      client_id: "$3"
+    type: GAUGE
+  # JVM heap / non-heap memory.
+  - pattern: 'java.lang<type=Memory><(HeapMemoryUsage|NonHeapMemoryUsage)>(\w+)'
+    name: jvm_memory_$1_$2_bytes
+    type: GAUGE
+  # JVM threads.
+  - pattern: 'java.lang<type=Threading><>(\w*ThreadCount)'
+    name: jvm_threads_$1
+    type: GAUGE
+  # JVM garbage collection.
+  - pattern: 'java.lang<type=GarbageCollector, name=(.+)><>CollectionCount'
+    name: jvm_gc_collection_count_total
+    labels:
+      gc: "$1"
+    type: COUNTER
+  - pattern: 'java.lang<type=GarbageCollector, name=(.+)><>CollectionTime'
+    name: jvm_gc_collection_time_ms_total
+    labels:
+      gc: "$1"
+    type: COUNTER

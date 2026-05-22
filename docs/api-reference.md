@@ -34,7 +34,7 @@ Cluster-scoped configuration and KRaft quorum definition. One `KafkaCluster` CR 
 | `targetMetadataVersion` | integer | no | — | When set, the operator bumps `metadata.version` to this value after all pods are on `kafkaVersion`. Must not be lower than `status.currentMetadataVersion`. |
 | `clusters` | []ClusterEntry | **yes** | — | Ordered list of all clusters in the KRaft quorum. Index position determines the controller `node.id` (`10000 + index`). At least 1 entry required. |
 | `config` | map[string]string | no | `{}` | Shared Kafka config properties applied to all node pools. Operator-owned keys (see below) are silently overridden. |
-| `metricsConfig` | MetricsConfig | no | — | Enables JMX metrics. When present, `jmx_prometheus_javaagent` is started in each broker pod. |
+| `metricsConfig` | MetricsConfig | no | — | Enables Prometheus scraping for the cluster. For brokers it starts `jmx_prometheus_javaagent` reading the user-supplied ConfigMap and creates a `<pool>-metrics` ServiceMonitor. When set, the operator **also** creates `kafka-proxy-metrics` (Kroxylicious native `/metrics` on 9190) and `cruise-control-metrics` (JMX exporter with operator-bundled config, on 9101) when those sub-components are deployed. `configMapRef` is consulted only by the broker exporter; the proxy and CC ignore it. |
 | `clusterRollOrder` | []string | no | — | Ordered list of cluster IDs (matching `spec.clusters[].id`) for cross-cluster rolling coordination. First cluster in the list rolls first. Absent = no coordination. |
 | `listeners` | []KafkaListenerSpec | no | `[]` | Additional client-facing listeners beyond the always-present `INTERNAL:9092`. When non-empty, `INTERNAL` binds to `127.0.0.1` only and the first entry becomes `inter.broker.listener.name`. |
 | `controllerTls` | KafkaListenerTlsConfig | no | — | Enables TLS on the KRaft `CONTROLLER:9093` listener. When set, all nodes load their TLS secret at startup. |
@@ -53,7 +53,7 @@ Cluster-scoped configuration and KRaft quorum definition. One `KafkaCluster` CR 
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `configMapRef` | string | **yes** | Name of a `ConfigMap` in the same namespace with a `jmx-config.yaml` key containing the JMX exporter config. |
+| `configMapRef` | string | **yes** (for brokers) | Name of a `ConfigMap` in the same namespace with a `jmx-config.yaml` key containing the JMX exporter config. Consulted **only** by the broker `jmx_prometheus_javaagent`. The proxy uses Kroxylicious' native Prometheus endpoint, and Cruise Control + MirrorMaker2 use operator-bundled JMX configs — for those, presence of `metricsConfig` alone enables metrics. |
 
 ### spec.listeners[] — KafkaListenerSpec
 
@@ -1039,6 +1039,7 @@ The SMT **writes** mirrored schemas into the target registry. A managed cluster'
 | `mcs.enabled` | bool | no | `false` | When true, the reconciler only runs on K8s clusters listed in `targetClusters`. |
 | `targetClusters` | string[] | no | `[]` | K8s cluster IDs where this MM2 should be reconciled (MCS placement gate). |
 | `clusterRollOrder` | string[] | no | — | Ordered cluster IDs for sequenced Deployment rolls on config/image change. |
+| `metricsConfig` | [MetricsConfig](#specmetricsconfig--metricsconfig) | no | — | When set, exposes the MM2 Connect-worker JMX metrics via `jmx_prometheus_javaagent` and creates a `<name>-metrics` ClusterIP Service + ServiceMonitor on port 9101. The operator bundles a fixed JMX exporter config for Connect/MM2 — the `configMapRef` field is **not consulted** here; presence of `metricsConfig` alone enables metrics. |
 | `resources` / `probes` | — | no | — | Same shapes as the KafkaUI resource/probes fields. **Set `resources` explicitly** — a real MM2 worker (3 connectors + clients + SMT) needs ~1.5Gi memory; the small default OOM-kills it. |
 
 ### Mm2Endpoint

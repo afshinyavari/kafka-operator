@@ -1,0 +1,41 @@
+# Prometheus JMX exporter rules for LinkedIn Cruise Control.
+#
+# Bundled by the operator (loaded via MetricsResources.jmxConfig) and written into the
+# cruise-control-config ConfigMap as `jmx-config.yaml` when KafkaCluster.spec.metricsConfig
+# is set. The operator attaches jmx_prometheus_javaagent with this file. Cruise Control's
+# JMX MBean set is fixed, so this default needs no user override.
+lowercaseOutputName: true
+lowercaseOutputLabelNames: true
+rules:
+  # Cruise Control sensor metrics — analyzer, anomaly detector, executor, monitor.
+  - pattern: 'kafka.cruisecontrol<name=(.+)><>(\w+)'
+    name: cruise_control_$1_$2
+    type: GAUGE
+  - pattern: 'kafka.cruisecontrol<type=(.+), name=(.+)><>(\w+)'
+    name: cruise_control_$1_$2_$3
+    type: GAUGE
+  # Kafka client metrics from Cruise Control's metric sampler / admin client.
+  - pattern: 'kafka.(consumer|producer|admin\.client)<type=(.+), client-id=(.+)><>(.+):'
+    name: cruise_control_kafka_$1_$4
+    labels:
+      client_id: "$3"
+    type: GAUGE
+  # JVM heap / non-heap memory.
+  - pattern: 'java.lang<type=Memory><(HeapMemoryUsage|NonHeapMemoryUsage)>(\w+)'
+    name: jvm_memory_$1_$2_bytes
+    type: GAUGE
+  # JVM threads.
+  - pattern: 'java.lang<type=Threading><>(\w*ThreadCount)'
+    name: jvm_threads_$1
+    type: GAUGE
+  # JVM garbage collection.
+  - pattern: 'java.lang<type=GarbageCollector, name=(.+)><>CollectionCount'
+    name: jvm_gc_collection_count_total
+    labels:
+      gc: "$1"
+    type: COUNTER
+  - pattern: 'java.lang<type=GarbageCollector, name=(.+)><>CollectionTime'
+    name: jvm_gc_collection_time_ms_total
+    labels:
+      gc: "$1"
+    type: COUNTER

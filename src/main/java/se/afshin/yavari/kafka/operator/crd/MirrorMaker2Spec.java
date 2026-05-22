@@ -52,6 +52,12 @@ public class MirrorMaker2Spec {
     private KafkaUIResourceRequirements resources = new KafkaUIResourceRequirements();
     private KafkaUIProbesConfig probes = new KafkaUIProbesConfig();
 
+    /** When set, exposes the MM2 Connect-worker JMX metrics via the bundled
+     *  jmx_prometheus_javaagent and creates a {@code <name>-metrics} Service + ServiceMonitor.
+     *  Note: the {@link MetricsConfig#getConfigMapRef()} field is not consulted for MM2 — the
+     *  operator bundles a fixed JMX exporter config; presence of this field alone enables it. */
+    private MetricsConfig metricsConfig;
+
     public String getImage() { return image; }
     public void setImage(String image) { this.image = image; }
 
@@ -87,4 +93,7 @@ public class MirrorMaker2Spec {
 
     public KafkaUIProbesConfig getProbes() { return probes; }
     public void setProbes(KafkaUIProbesConfig probes) { this.probes = probes; }
+
+    public MetricsConfig getMetricsConfig() { return metricsConfig; }
+    public void setMetricsConfig(MetricsConfig metricsConfig) { this.metricsConfig = metricsConfig; }
 }

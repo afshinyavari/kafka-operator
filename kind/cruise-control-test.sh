@@ -41,9 +41,11 @@ kubectl --context "${CTX}" -n "${NS}" delete kafkarebalance cc-rebalance-smoke \
   --ignore-not-found >/dev/null 2>&1 || true
 
 # ── Enable Cruise Control ────────────────────────────────────────────────────
+# Also set spec.metricsConfig: presence (without configMapRef) leaves broker JMX
+# disabled but turns on the operator-bundled metrics path for the proxy + CC.
 kubectl --context "${CTX}" -n "${NS}" patch kafkacluster my-kafka --type merge \
-  -p '{"spec":{"cruiseControl":{}}}' >/dev/null
-ok "spec.cruiseControl enabled on KafkaCluster my-kafka"
+  -p '{"spec":{"cruiseControl":{},"metricsConfig":{}}}' >/dev/null
+ok "spec.cruiseControl + spec.metricsConfig enabled on KafkaCluster my-kafka"
 
 CCPHASE=""
 for i in $(seq 1 90); do
@@ -62,6 +64,43 @@ kubectl --context "${CTX}" -n "${NS}" get deployment cruise-control >/dev/null 2
 kubectl --context "${CTX}" -n "${NS}" get svc cruise-control >/dev/null 2>&1 \
   || fail "cruise-control Service not created"
 ok "cruise-control Deployment + Service present"
+
+# ── Metrics — gated on spec.metricsConfig ────────────────────────────────────
+# CC: dedicated cruise-control-metrics Service (9101) + ServiceMonitor when the
+# Prometheus Operator CRD is present.
+for i in $(seq 1 30); do
+  kubectl --context "${CTX}" -n "${NS}" get svc cruise-control-metrics \
+    >/dev/null 2>&1 && break
+  sleep 2
+done
+kubectl --context "${CTX}" -n "${NS}" get svc cruise-control-metrics >/dev/null 2>&1 \
+  || fail "cruise-control-metrics Service not created"
+CC_METRICS_PORT=$(kubectl --context "${CTX}" -n "${NS}" get svc cruise-control-metrics \
+                    -o jsonpath='{.spec.ports[?(@.name=="metrics")].port}')
+[[ "${CC_METRICS_PORT}" == "9101" ]] \
+  || fail "cruise-control-metrics expected port 9101, got '${CC_METRICS_PORT}'"
+ok "cruise-control-metrics Service present on port 9101"
+
+# Proxy: kafka-proxy-metrics on 9190 (Kroxylicious native /metrics)
+kubectl --context "${CTX}" -n "${NS}" get svc kafka-proxy-metrics >/dev/null 2>&1 \
+  || fail "kafka-proxy-metrics Service not created"
+PROXY_METRICS_PORT=$(kubectl --context "${CTX}" -n "${NS}" get svc kafka-proxy-metrics \
+                       -o jsonpath='{.spec.ports[?(@.name=="metrics")].port}')
+[[ "${PROXY_METRICS_PORT}" == "9190" ]] \
+  || fail "kafka-proxy-metrics expected port 9190, got '${PROXY_METRICS_PORT}'"
+ok "kafka-proxy-metrics Service present on port 9190"
+
+if kubectl --context "${CTX}" get crd servicemonitors.monitoring.coreos.com \
+     >/dev/null 2>&1; then
+  kubectl --context "${CTX}" -n "${NS}" get servicemonitor cruise-control-metrics \
+    >/dev/null 2>&1 \
+    && kubectl --context "${CTX}" -n "${NS}" get servicemonitor kafka-proxy-metrics \
+      >/dev/null 2>&1 \
+    && ok "ServiceMonitors cruise-control-metrics + kafka-proxy-metrics present" \
+    || fail "ServiceMonitor(s) missing despite Prometheus CRD installed"
+else
+  ok "Prometheus Operator CRD absent — ServiceMonitor apply correctly skipped"
+fi
 
 # ── KafkaRebalance proposal ──────────────────────────────────────────────────
 kubectl --context "${CTX}" apply -f manifests/kafka-rebalance-cr.yaml >/dev/null

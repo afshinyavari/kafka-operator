@@ -9,6 +9,10 @@ metadata:
 spec:
   image: mm2:dev
   replicas: 1
+  # Smoke-test the metrics path too: presence of metricsConfig enables the
+  # bundled jmx_prometheus_javaagent + creates a mm2-smoke-metrics Service +
+  # ServiceMonitor. configMapRef is ignored for MM2 (operator-bundled config).
+  metricsConfig: {}
   source:
     external:
       bootstrap: smoke-source.invalid:9093

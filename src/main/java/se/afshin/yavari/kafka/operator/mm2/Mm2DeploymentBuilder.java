@@ -2,6 +2,7 @@ package se.afshin.yavari.kafka.operator.mm2;
 
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.ContainerBuilder;
+import io.fabric8.kubernetes.api.model.EnvVar;
 import io.fabric8.kubernetes.api.model.EnvVarBuilder;
 import io.fabric8.kubernetes.api.model.IntOrString;
 import io.fabric8.kubernetes.api.model.OwnerReference;
@@ -52,9 +53,16 @@ public class Mm2DeploymentBuilder {
     private static final String CONFIG_MOUNT = "/etc/mm2";
     private static final String JAVA_OPTS = "-XX:MaxRAMPercentage=70.0 -XX:InitialRAMPercentage=70.0";
 
+    /** Port the bundled jmx_prometheus_javaagent serves MM2/Connect metrics on. Only exposed
+     *  as a container port when metrics are enabled. Matches the broker convention. */
+    public static final int METRICS_PORT = 9101;
+    /** Where the bundled JMX exporter config (subPath {@code jmx-config.yaml}) is mounted. */
+    private static final String JMX_CONFIG_MOUNT = CONFIG_MOUNT + "/jmx-config.yaml";
+
     public Deployment build(MirrorMaker2 cr,
                             ResolvedEndpoint source, ResolvedEndpoint target,
-                            int replicas, String configHash, OwnerReference ownerRef) {
+                            int replicas, String configHash, boolean metricsEnabled,
+                            OwnerReference ownerRef) {
         MirrorMaker2Spec spec = cr.getSpec();
         String name = cr.getMetadata().getName();
         String namespace = cr.getMetadata().getNamespace();
@@ -124,23 +132,46 @@ public class Mm2DeploymentBuilder {
                     target.schemaRegistryAuthSecretRef(), Mm2ConfigBuilder.REGISTRY_AUTH_BASE + "/target");
         }
 
-        Container worker = new ContainerBuilder()
+        List<EnvVar> env = new ArrayList<>();
+        env.add(new EnvVarBuilder()
+                .withName("KAFKA_HEAP_OPTS")
+                .withValue(JAVA_OPTS)
+                .build());
+        if (metricsEnabled) {
+            // connect-mirror-maker.sh honors KAFKA_OPTS — attach the JMX exporter agent.
+            // The JMX config rides on the mm2-config ConfigMap (jmx-config.yaml subPath).
+            workerMounts.add(new VolumeMountBuilder()
+                    .withName(CONFIG_VOLUME)
+                    .withMountPath(JMX_CONFIG_MOUNT)
+                    .withSubPath(Mm2ConfigMapBuilder.JMX_CONFIG_KEY)
+                    .withReadOnly(true).build());
+            env.add(new EnvVarBuilder()
+                    .withName("KAFKA_OPTS")
+                    .withValue("-javaagent:/opt/jmx-exporter/jmx-exporter.jar=" + METRICS_PORT
+                            + ":" + JMX_CONFIG_MOUNT)
+                    .build());
+        }
+
+        ContainerBuilder workerBuilder = new ContainerBuilder()
                 .withName("mm2")
                 .withImage(spec.getImage())
                 .withImagePullPolicy(spec.getImagePullPolicy())
                 .withCommand("/opt/kafka/bin/connect-mirror-maker.sh")
                 .withArgs(CONFIG_MOUNT + "/mm2.properties")
-                .withEnv(new EnvVarBuilder()
-                        .withName("KAFKA_HEAP_OPTS")
-                        .withValue(JAVA_OPTS)
-                        .build())
+                .withEnv(env)
                 .withVolumeMounts(workerMounts)
                 .withResources(new ResourceRequirementsBuilder()
                         .withRequests(quantities(spec.getResources().getRequests()))
                         .withLimits(quantities(spec.getResources().getLimits()))
                         .build())
-                .withSecurityContext(SecurityContextDefaults.containerDefaults())
-                .build();
+                .withSecurityContext(SecurityContextDefaults.containerDefaults());
+        if (metricsEnabled) {
+            workerBuilder.addNewPort()
+                    .withName("metrics")
+                    .withContainerPort(METRICS_PORT)
+                    .endPort();
+        }
+        Container worker = workerBuilder.build();
 
         List<TopologySpreadConstraint> spread = List.of(new TopologySpreadConstraintBuilder()
                 .withMaxSkew(1)

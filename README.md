@@ -11,7 +11,7 @@ A Kubernetes operator for running Apache Kafka 4.x in KRaft mode across multiple
 - **Cross-cluster roll ordering** — `spec.clusterRollOrder` sequences controller restarts across clusters
 - **External access (NodePort / LoadBalancer / Gateway API / Ingress)** — per-broker NodePort services with deterministic port assignment; KafkaProxy / KafkaUI / Apicurio Schema Registry / Keycloak all expose the same four modes (KafkaProxy via TLS SNI passthrough, the HTTP services via HTTPRoute / standard Ingress with optional BYO TLS Secret). See [External access](#external-access) below.
 - **TLS / mTLS listeners** — per-listener TLS with PKCS12 keystores generated at pod startup
-- **JMX metrics** — `jmx_prometheus_javaagent` with optional Prometheus `ServiceMonitor`
+- **Prometheus metrics across the data plane** — `spec.metricsConfig` opts in `jmx_prometheus_javaagent` + a `ServiceMonitor` on every Kafka broker pool, the Kroxylicious proxy (native `/metrics` on 9190), Cruise Control (JMX on 9101) and MirrorMaker2 (JMX on 9101). `ServiceMonitor` is applied via `OptionalResourceApplier` and silently no-ops on clusters without the Prometheus Operator CRD.
 - **Pod Disruption Budget** — auto-created `maxUnavailable=1` per pool
 - **Pod anti-affinity + topology spread** — brokers spread across nodes/zones
 - **Storage per pool** — configurable PVC size and storage class
