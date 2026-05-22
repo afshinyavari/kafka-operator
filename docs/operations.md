@@ -482,6 +482,27 @@ that cluster — sticky by IP rather than by user. For cross-cluster failover
 (load balancer drops a backend), point users at the cluster-local URL or use a
 DNS record that resolves to all 3 LB IPs.
 
+### Reaching the UI from the host browser
+
+The UI and Keycloak are reached by their Submariner names
+(`kafka-ui.kafka.svc.clusterset.local`, `keycloak.kafka.svc.clusterset.local`) —
+the OIDC issuer and redirect URIs are pinned to those hostnames, so the browser
+must use them too, not raw IPs. Those names only resolve in-cluster, so the host
+needs `/etc/hosts` entries mapping them to the MetalLB LoadBalancer IPs.
+
+MetalLB hands out pool IPs in service-creation order, which changes on every
+`teardown` + `mcs-setup` — so static `/etc/hosts` entries go stale and the UI's
+login redirect to Keycloak breaks. Resync them after each setup:
+
+```bash
+kind/update-hosts.sh --dry-run   # preview the entries from the live LB IPs
+kind/update-hosts.sh             # rewrite /etc/hosts (prompts once for sudo)
+```
+
+The script rewrites a managed block (between marker comments), so it is
+idempotent and leaves the rest of `/etc/hosts` untouched. Then open
+`http://kafka-ui.kafka.svc.clusterset.local:8080/`.
+
 ### Phase 2 write operations
 
 The UI is no longer read-only. Authenticated users can issue writes whose

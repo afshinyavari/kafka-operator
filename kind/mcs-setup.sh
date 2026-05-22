@@ -86,44 +86,31 @@ cd "${OPERATOR_DIR}"
 mvn package -DskipTests -q
 ok "Build complete"
 
-# ── Step 2: Build Docker image (skip if image already exists) ─────────────────
-if docker inspect "${IMAGE_NAME}" &>/dev/null && [ "${FORCE_BUILD:-0}" != "1" ]; then
-  ok "Image ${IMAGE_NAME} already exists — skipping Docker build (set FORCE_BUILD=1 to rebuild)"
-else
-  info "Building Docker image ${IMAGE_NAME}..."
-  docker build -t "${IMAGE_NAME}" "${OPERATOR_DIR}" -q
-  ok "Image ${IMAGE_NAME} built"
-fi
+# ── Step 2: Build operator Docker image ──────────────────────────────────────
+# Always rebuild — Step 1 just produced a fresh JAR, and there's no reliable way
+# to detect whether an existing image is stale. A skip here silently leaves the
+# old JAR baked in. Use `make reload-image` for a faster operator-only hot-swap.
+info "Building Docker image ${IMAGE_NAME}..."
+docker build -t "${IMAGE_NAME}" "${OPERATOR_DIR}" -q
+ok "Image ${IMAGE_NAME} built"
 
-# ── Step 2b: Build Kafka image (skip if already exists) ──────────────────────
-if docker inspect "${KAFKA_IMAGE_NAME}" &>/dev/null && [ "${FORCE_BUILD:-0}" != "1" ]; then
-  ok "Image ${KAFKA_IMAGE_NAME} already exists — skipping Docker build (set FORCE_BUILD=1 to rebuild)"
-else
-  info "Building Kafka image ${KAFKA_IMAGE_NAME}..."
-  docker build --build-arg KAFKA_VERSION="${KAFKA_VERSION}" \
-    -t "${KAFKA_IMAGE_NAME}" "${SCRIPT_DIR}/../kafka-image" -q
-  ok "Image ${KAFKA_IMAGE_NAME} built"
-fi
+# ── Step 2b: Build Kafka image ───────────────────────────────────────────────
+info "Building Kafka image ${KAFKA_IMAGE_NAME}..."
+docker build --build-arg KAFKA_VERSION="${KAFKA_VERSION}" \
+  -t "${KAFKA_IMAGE_NAME}" "${SCRIPT_DIR}/../kafka-image" -q
+ok "Image ${KAFKA_IMAGE_NAME} built"
 
-# ── Step 2c: Build Kroxylicious filters image (skip if already exists) ────────
-if docker inspect "${KROXY_IMAGE_NAME}" &>/dev/null && [ "${FORCE_BUILD:-0}" != "1" ]; then
-  ok "Image ${KROXY_IMAGE_NAME} already exists — skipping Docker build (set FORCE_BUILD=1 to rebuild)"
-else
-  info "Building Kroxylicious filters image ${KROXY_IMAGE_NAME}..."
-  cd "${OPERATOR_DIR}/filters" && mvn package -DskipTests -q
-  docker build -t "${KROXY_IMAGE_NAME}" "${OPERATOR_DIR}/filters" -q
-  ok "Image ${KROXY_IMAGE_NAME} built"
-fi
+# ── Step 2c: Build Kroxylicious filters image ────────────────────────────────
+info "Building Kroxylicious filters image ${KROXY_IMAGE_NAME}..."
+cd "${OPERATOR_DIR}/filters" && mvn package -DskipTests -q
+docker build -t "${KROXY_IMAGE_NAME}" "${OPERATOR_DIR}/filters" -q
+ok "Image ${KROXY_IMAGE_NAME} built"
 
-# ── Step 2d: Build apicurio-rbac-proxy image (skip if already exists) ─────────
-if docker inspect "${APICURIO_PROXY_IMAGE_NAME}" &>/dev/null && [ "${FORCE_BUILD:-0}" != "1" ]; then
-  ok "Image ${APICURIO_PROXY_IMAGE_NAME} already exists — skipping Docker build (set FORCE_BUILD=1 to rebuild)"
-else
-  info "Building Apicurio RBAC proxy image ${APICURIO_PROXY_IMAGE_NAME}..."
-  cd "${OPERATOR_DIR}/apicurio-proxy" && mvn package -DskipTests -q
-  docker build -t "${APICURIO_PROXY_IMAGE_NAME}" "${OPERATOR_DIR}/apicurio-proxy" -q
-  ok "Image ${APICURIO_PROXY_IMAGE_NAME} built"
-fi
+# ── Step 2d: Build apicurio-rbac-proxy image ─────────────────────────────────
+info "Building Apicurio RBAC proxy image ${APICURIO_PROXY_IMAGE_NAME}..."
+cd "${OPERATOR_DIR}/apicurio-proxy" && mvn package -DskipTests -q
+docker build -t "${APICURIO_PROXY_IMAGE_NAME}" "${OPERATOR_DIR}/apicurio-proxy" -q
+ok "Image ${APICURIO_PROXY_IMAGE_NAME} built"
 
 # ── Step 3: Create Kind clusters in parallel ─────────────────────────────────
 info "Creating Kind clusters in parallel..."
@@ -676,10 +663,12 @@ echo "  make -C kind apicurio-rbac-test       # Apicurio rbac-proxy HTTP authz t
 echo "  make -C kind xml-filter-test          # XML validation filter accept/reject test"
 echo "  make -C kind teardown                 # destroy all clusters"
 echo "  make -C kind reload-image  # hot-swap operator only (~30s, no cluster rebuild)"
-echo "  FORCE_BUILD=1 make -C kind mcs-setup  # force rebuild even if image exists"
 echo ""
 echo "Verification:"
 echo "  kubectl --context kind-kafka-a get serviceexport -n ${NAMESPACE}"
 echo "  kubectl --context kind-kafka-b exec -n ${NAMESPACE} brokers-b-0 -- \\"
 echo "    nslookup controllers-a-headless.${NAMESPACE}.svc.clusterset.local"
+echo ""
+echo "Browser access (MetalLB IPs change each setup — resync /etc/hosts):"
+echo "  kind/update-hosts.sh   # then open http://kafka-ui.kafka.svc.clusterset.local:8080/"
 echo "────────────────────────────────────────────────────────────────────────"
