@@ -376,7 +376,7 @@ Deploys a Kroxylicious proxy in front of a broker pool. Clients connect to the p
 | `brokerNodeIdRanges` | []BrokerNodeIdRange | no | `[]` | Explicit mapping of node-ID ranges to pool names. When omitted, the operator infers ranges by inspecting broker pod labels. |
 | `oidc` | KafkaProxyOidcConfig | no | — | Enables SASL/OAUTHBEARER + JWT group extraction. When set, the four-filter OIDC chain is injected. |
 | `tls` | KafkaProxyTlsConfig | no | — | TLS secrets the proxy mounts. When fields are null the reconciler falls back to convention defaults, so a typical CR omits this block entirely. |
-| `mcs` | McsConfig | no | — | Enables MCS (Submariner ServiceExport) mode for cross-cluster client resolution. |
+| `mcs` | McsConfig | no | — | Enables MCS (`ServiceExport`) mode for cross-cluster client resolution. Works with any MCS-compatible mesh: Submariner Lighthouse, Cilium Cluster Mesh, Istio multi-cluster, etc. |
 | `targetClusters` | []string | no | `[]` | List of cluster IDs (matching `KafkaCluster.spec.clusters[].id`) on which to deploy this proxy. Operators on other clusters set `status.phase=SKIPPED`. Used in MCS mode where the same CR is applied to every cluster. |
 | `filters` | KafkaProxyFiltersConfig | no | (defaults) | Built-in filter toggles (XML validation, schema-registry payload validation). |
 | `customFilters` | []KafkaProxyCustomFilter | no | `[]` | Arbitrary Kroxylicious filter entries appended verbatim to `config.yaml`. |
@@ -432,7 +432,7 @@ Both secrets follow the cert-manager convention (`kubernetes.io/tls` with `tls.c
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `enabled` | boolean | no | `false` | When `true`, the operator creates a Submariner `ServiceExport` for the proxy Service so cross-cluster clients resolve `kafka-proxy.<ns>.svc.clusterset.local`. Used with `targetClusters`. |
+| `enabled` | boolean | no | `false` | When `true`, the operator creates an MCS `ServiceExport` for the proxy Service so cross-cluster clients resolve `kafka-proxy.<ns>.svc.clusterset.local` via the cluster fabric's MCS DNS. Used with `targetClusters`. |
 
 ### spec.filters — KafkaProxyFiltersConfig
 
@@ -692,9 +692,9 @@ Manages an Apicurio Registry deployment and an optional HTTP RBAC proxy that enf
 | `replicas` | integer | no | `1` | Registry pod count. |
 | `oidc` | ApicurioRegistryOidcConfig | no | — | OIDC settings for the RBAC proxy. |
 | `storage` | ApicurioRegistryStorageConfig | no | (defaults) | Storage backend selection. |
-| `exportService` | boolean | no | `false` | When `true`, creates Submariner `ServiceExport` resources for the registry and proxy Services (MCS mode). Redundant when `mcs.enabled=true` (which implies the export). |
+| `exportService` | boolean | no | `false` | When `true`, creates MCS `ServiceExport` resources for the registry and proxy Services. Redundant when `mcs.enabled=true` (which implies the export). |
 | `externalAccess` | HttpExternalAccessConfig | no | — | When set, exposes the `{name}-rbac-proxy` Service externally. Requires `rbacRef` + `rbacProxyImage`; the raw registry on port 8080 is never exposed. See [shared HTTP external access](#http-external-access). |
-| `mcs` | McsConfig | no | — | When `mcs.enabled=true`, the operator creates a Submariner `ServiceExport` for the rbac-proxy Service so cross-cluster clients can resolve `<name>-rbac-proxy.<ns>.svc.clusterset.local`. Used with `targetClusters` for multi-cluster HA (#19). |
+| `mcs` | McsConfig | no | — | When `mcs.enabled=true`, the operator creates an MCS `ServiceExport` for the rbac-proxy Service so cross-cluster clients can resolve `<name>-rbac-proxy.<ns>.svc.clusterset.local`. Used with `targetClusters` for multi-cluster HA (#19). |
 | `targetClusters` | []string | no | `[]` | List of cluster IDs (matching `KafkaCluster.spec.clusters[].id`) on which to deploy this registry. Operators on other clusters set `status.phase=SKIPPED`. Used in MCS mode where the same CR is applied to every cluster. |
 
 ### spec.oidc — ApicurioRegistryOidcConfig
@@ -808,7 +808,7 @@ spec:
   exportService: true
 ```
 
-Submariner `ServiceExport` is created for both the registry and the proxy, so cross-cluster clients resolve `apicurio-rbac-proxy.kafka.svc.clusterset.local`.
+MCS `ServiceExport` is created for both the registry and the proxy, so cross-cluster clients resolve `apicurio-rbac-proxy.kafka.svc.clusterset.local` via the cluster fabric's MCS DNS.
 
 ---
 
@@ -830,7 +830,7 @@ Deploys the Quarkus + htmx Kafka UI as an operator-managed workload: ServiceAcco
 | `probes` | KafkaUIProbesConfig | no | `/q/health/ready` (5/5s) + `/q/health/live` (15/10s) | |
 | `externalAccess` | HttpExternalAccessConfig | no | `{ type: NODEPORT }` | Same shape as `KafkaProxy.spec.externalAccess`. Pick `NODEPORT` / `LOADBALANCER` / `GATEWAY` / `INGRESS`. See [shared HTTP external access](#http-external-access). |
 | `env[]` | KafkaUIEnvVar | no | `[]` | Extra env vars. A name collision overrides the operator-set default. |
-| `mcs` | McsConfig | no | — | When `mcs.enabled=true`, the operator creates a Submariner `ServiceExport` for the kafka-ui Service so cross-cluster clients can resolve `kafka-ui.<ns>.svc.clusterset.local`. Used with `targetClusters` for multi-cluster HA (#20). |
+| `mcs` | McsConfig | no | — | When `mcs.enabled=true`, the operator creates an MCS `ServiceExport` for the kafka-ui Service so cross-cluster clients can resolve `kafka-ui.<ns>.svc.clusterset.local`. Used with `targetClusters` for multi-cluster HA (#20). |
 | `targetClusters` | []string | no | `[]` | List of cluster IDs (matching `KafkaCluster.spec.clusters[].id`) on which to deploy this UI. Operators on other clusters set `status.phase=SKIPPED`. Used in MCS mode where the same CR is applied to every cluster. |
 
 ### spec.oidc — KafkaUIOidcConfig
@@ -850,7 +850,7 @@ Deploys the Quarkus + htmx Kafka UI as an operator-managed workload: ServiceAcco
 | `proxyPort` | `9094` | |
 | `apicurioServiceName` | `apicurio-rbac-proxy` | |
 | `apicurioPort` | `8082` | |
-| `dnsSuffix` | `""` | Empty for in-cluster (`svc.cluster.local`). Set to `clusterset.local` for Submariner-style multi-cluster DNS. |
+| `dnsSuffix` | `""` | Empty for in-cluster (`svc.cluster.local`). Set to `clusterset.local` for MCS multi-cluster DNS (the MCS-spec namespace used by Submariner Lighthouse, Cilium Cluster Mesh, Istio multi-cluster, etc.). |
 
 ### status
 

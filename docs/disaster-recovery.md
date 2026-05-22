@@ -7,7 +7,7 @@ as user-runnable steps — the operator does not automate DR.
 
 | Loss event | Affected data | Recovery owner |
 |---|---|---|
-| One MCS K8s cluster fails | Local broker + controller + proxy + Apicurio replica | KRaft quorum / Submariner Lighthouse — automatic if RF≥3 + min.insync.replicas=2 |
+| One MCS K8s cluster fails | Local broker + controller + proxy + Apicurio replica | KRaft quorum / MCS mesh DNS (Submariner Lighthouse, Cilium Cluster Mesh, Istio multi-cluster) — automatic if RF≥3 + min.insync.replicas=2 |
 | All K8s clusters fail simultaneously | Broker on-disk topic data, Apicurio kafkasql journal, KRaft metadata | [`KafkaBackup`](api-reference.md#kafkabackup) → object storage; restore with [`KafkaRestore`](api-reference.md#kafkarestore) |
 | KafkaRbac CR deleted | RBAC ConfigMaps cascade via owner-ref | Restore CR from git (GitOps source of truth) |
 | KafkaCluster CR deleted | Proxy + Apicurio Deployments cascade; broker PVCs remain bound | Restore CR from git; broker PVCs re-attach by name |

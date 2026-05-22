@@ -2,7 +2,7 @@
 
 ## Overview
 
-The kafka-operator is a Kubernetes operator built with [Java Operator SDK (JOSDK)](https://javaoperatorsdk.io/) and [Quarkus](https://quarkus.io/). It manages Apache Kafka 4.x clusters running in KRaft mode (no ZooKeeper) across multiple Kubernetes clusters connected by [Submariner](https://submariner.io/) MCS.
+The kafka-operator is a Kubernetes operator built with [Java Operator SDK (JOSDK)](https://javaoperatorsdk.io/) and [Quarkus](https://quarkus.io/). It manages Apache Kafka 4.x clusters running in KRaft mode (no ZooKeeper) across multiple Kubernetes clusters connected by any [Multi-Cluster Services (MCS)](https://github.com/kubernetes/enhancements/tree/master/keps/sig-multicluster/1645-multi-cluster-services-api) implementation — [Submariner Lighthouse](https://submariner.io/), [Cilium Cluster Mesh](https://docs.cilium.io/en/stable/network/clustermesh/), [Istio multi-cluster](https://istio.io/latest/docs/setup/install/multicluster/), or any other compliant mesh. The Kind reference setup uses Submariner.
 
 Three reconcilers form a strict hierarchy. Pods are never created directly — they are described in an operator-managed `KafkaPodSet` CRD, which gives the operator full control over the pod lifecycle without using StatefulSets.
 
@@ -90,7 +90,7 @@ Cruise Control itself is not a top-level reconciler — it is an optional sub-co
 └─────────────────────┘  └─────────────────────┘  └─────────────────────┘
 ```
 
-- Controllers form a **single KRaft quorum** across all clusters. Each controller advertises its address via `*.svc.clusterset.local` DNS provided by Submariner MCS.
+- Controllers form a **single KRaft quorum** across all clusters. Each controller advertises its address via `*.svc.clusterset.local` DNS provided by the cluster fabric's MCS implementation (Submariner Lighthouse, Cilium Cluster Mesh, Istio multi-cluster, etc.).
 - Brokers are **independent per cluster** but belong to the same Kafka cluster (same `cluster.id`). Cross-cluster topic replication is handled at the application level, not by the operator.
 - Node IDs are deterministic: controller at cluster index `i` gets `10000 + i`; broker at cluster `i` ordinal `j` gets `i * 1000 + j`. This allows up to 10 clusters × 1000 brokers each before collision.
 
@@ -115,11 +115,11 @@ spec:
   targetClusters: [A, B, C]
 ```
 
-The same CR is applied to every K8s cluster; each operator filters by its own `KAFKA_CLUSTER_ID` env var. Operators on clusters listed in `targetClusters` reconcile fully; operators on other clusters set `status.phase=SKIPPED` with no resources created. When `mcs.enabled=true` the operator also creates a Submariner `ServiceExport` so cross-cluster clients can resolve the service via `<svc>.<ns>.svc.clusterset.local` — **but only for ClusterIP or Headless underlying Services.** Submariner Lighthouse rejects `LoadBalancer`-typed Services (`UnsupportedServiceType`); with `externalAccess.type=LOADBALANCER` the export is created but never aggregated, and clients reach each cluster via its own LB IP instead. Use `GATEWAY` or `INGRESS` modes if you need Lighthouse aggregation.
+The same CR is applied to every K8s cluster; each operator filters by its own `KAFKA_CLUSTER_ID` env var. Operators on clusters listed in `targetClusters` reconcile fully; operators on other clusters set `status.phase=SKIPPED` with no resources created. When `mcs.enabled=true` the operator also creates an MCS `ServiceExport` (the standard MCS-spec CRD) so cross-cluster clients can resolve the service via `<svc>.<ns>.svc.clusterset.local` — **but only for ClusterIP or Headless underlying Services**, per the MCS spec. Submariner Lighthouse explicitly rejects `LoadBalancer`-typed Services (`UnsupportedServiceType`); other MCS implementations have the same restriction. With `externalAccess.type=LOADBALANCER` the export is created but never aggregated, and clients reach each cluster via its own LB IP instead. Use `GATEWAY` or `INGRESS` modes if you need cross-cluster DNS aggregation.
 
 For Apicurio specifically: all replicas across all clusters share **one** kafkasql journal topic on the MCS broker pool. Apicurio v2.6 requires the journal to have `partitions=1` for total ordering — the operator warns if the override is > 1. The kafkasql client cert (`schema-registry-client-tls` Secret with `CN=apicurio-registry`) is distributed to every cluster by `mcs-setup.sh`, so all replicas authenticate as the same Kafka principal and share ACLs. Concurrent writes to the same artifact-version across clusters are resolved by Apicurio's optimistic concurrency (one client gets a `409 Conflict`); this is rare and safe.
 
-For Kafka UI: state is read-mostly (per-pod Caffeine cache, OIDC session local to each pod). External clients pin to one cluster's LB IP / Ingress host; for cross-cluster fallback, internal callers can resolve `kafka-ui.kafka.svc.clusterset.local` via Lighthouse.
+For Kafka UI: state is read-mostly (per-pod Caffeine cache, OIDC session local to each pod). External clients pin to one cluster's LB IP / Ingress host; for cross-cluster fallback, internal callers can resolve `kafka-ui.kafka.svc.clusterset.local` via the MCS mesh's DNS.
 
 ---
 
@@ -633,9 +633,11 @@ payload; Protobuf renders as hex with a Phase-2 TODO.
 ### Multi-cluster routing
 
 The UI lists *KafkaCluster CRs* — those are the logical clusters. The 3 MCS
-K8s clusters (kafka-a/b/c) backing one CR are invisible to the UI; Submariner's
-local-prefer routing through the aggregated `{service}.{ns}.svc.clusterset.local`
-DNS name picks a reachable replica. Per-CR Service names
+K8s clusters (kafka-a/b/c) backing one CR are invisible to the UI; the MCS
+mesh's locality-preferring routing through the aggregated
+`{service}.{ns}.svc.clusterset.local` DNS name picks a reachable replica.
+(Most MCS implementations — Submariner Lighthouse, Cilium Cluster Mesh, Istio
+multi-cluster — prefer local endpoints by default.) Per-CR Service names
 (`kafka-proxy-{crName}`, `apicurio-rbac-proxy-{crName}`) make different CRs
 addressable independently.
 

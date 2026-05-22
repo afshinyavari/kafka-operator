@@ -1,11 +1,11 @@
 # kafka-operator
 
-A Kubernetes operator for running Apache Kafka 4.x in KRaft mode across multiple clusters. It manages controllers and brokers as separate node pools, handles safe rolling updates via ISR/quorum checks, and supports cross-cluster quorum via Submariner MCS.
+A Kubernetes operator for running Apache Kafka 4.x in KRaft mode across multiple clusters. It manages controllers and brokers as separate node pools, handles safe rolling updates via ISR/quorum checks, and supports cross-cluster quorum via the Kubernetes Multi-Cluster Services (MCS) API — any MCS-compatible mesh works (Submariner Lighthouse, Cilium Cluster Mesh, Istio multi-cluster). The Kind reference setup uses Submariner.
 
 ## Features
 
-- **Multi-cluster KRaft quorum** — single controller quorum spanning 3+ clusters via Submariner `clusterset.local` DNS
-- **Multi-cluster HA for KafkaProxy / ApicurioRegistry / KafkaUI** — `spec.mcs.enabled + spec.targetClusters` on each CR; the same CR is applied to every cluster and each operator filters by its own cluster ID. `ServiceExport` resources are auto-created for cross-cluster client resolution via Lighthouse. For Apicurio, all replicas share one kafkasql journal topic on the MCS broker pool (single-partition for total ordering).
+- **Multi-cluster KRaft quorum** — single controller quorum spanning 3+ clusters via MCS `*.svc.clusterset.local` DNS (Submariner Lighthouse, Cilium Cluster Mesh, Istio multi-cluster, or any other MCS implementation)
+- **Multi-cluster HA for KafkaProxy / ApicurioRegistry / KafkaUI** — `spec.mcs.enabled + spec.targetClusters` on each CR; the same CR is applied to every cluster and each operator filters by its own cluster ID. `ServiceExport` resources (the MCS-standard CRD) are auto-created for cross-cluster client resolution. For Apicurio, all replicas share one kafkasql journal topic on the MCS broker pool (single-partition for total ordering).
 - **Node pool model** — separate `KafkaNodePool` CRs for controllers and brokers; mixed roles supported
 - **Safe rolling updates** — spec hash triggers pod restart; ISR/quorum check blocks restart until safe
 - **Cross-cluster roll ordering** — `spec.clusterRollOrder` sequences controller restarts across clusters
@@ -32,7 +32,7 @@ A Kubernetes operator for running Apache Kafka 4.x in KRaft mode across multiple
 - Java 21, Maven 3.9+
 - Docker
 - [`kind`](https://kind.sigs.k8s.io/) 0.23+
-- [`subctl`](https://submariner.io/operations/deployment/subctl/) 0.17+ (for MCS mode)
+- [`subctl`](https://submariner.io/operations/deployment/subctl/) 0.17+ (only for the Submariner reference setup; if you bring your own MCS-compatible mesh, this isn't needed)
 - `kubectl`
 
 ## Quick Start (Kind / Development)

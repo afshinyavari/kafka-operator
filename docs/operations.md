@@ -578,7 +578,7 @@ DNS record that resolves to all 3 LB IPs.
 
 ### Reaching the UI from the host browser
 
-The UI and Keycloak are reached by their Submariner names
+The UI and Keycloak are reached by their MCS clusterset DNS names
 (`kafka-ui.kafka.svc.clusterset.local`, `keycloak.kafka.svc.clusterset.local`) —
 the OIDC issuer and redirect URIs are pinned to those hostnames, so the browser
 must use them too, not raw IPs. Those names only resolve in-cluster, so the host
@@ -904,7 +904,7 @@ make quorum
 
 If a cluster shows `✗ Quorum check failed`:
 
-1. Check Submariner gateway pods: `kubectl --context kind-kafka-{a,b,c} -n submariner-operator get pods`
+1. Check the MCS mesh gateway pods (Submariner in the reference setup): `kubectl --context kind-kafka-{a,b,c} -n submariner-operator get pods`. Cilium Cluster Mesh users check `cilium-operator` and `clustermesh-apiserver`; Istio multi-cluster users check `istiod` cross-cluster discovery.
 2. Verify cross-cluster DNS: `kubectl exec -n kafka {broker-pod} -- nslookup controllers-a-headless.kafka.svc.clusterset.local`
 3. Check controller pod logs for election errors
 
