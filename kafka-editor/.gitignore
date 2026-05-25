@@ -12,9 +12,9 @@ dist
 dist-ssr
 *.local
 
-# Electron desktop build
+# Electron desktop build — anchor to repo root so backend/src/main/resources is not matched
 electron-dist
-resources
+/resources
 release
 
 # Maven build output (backend)

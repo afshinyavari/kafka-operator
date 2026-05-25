@@ -57,6 +57,13 @@
       <artifactId>quarkus-smallrye-health</artifactId>
     </dependency>
 
+    <!-- OIDC web-app (authorization code + PKCE). Browser → Keycloak → callback
+         session cookie; backend forwards the bearer token to Kafka via OAUTHBEARER. -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-oidc</artifactId>
+    </dependency>
+
     <!-- Kafka Streams runtime. Used directly (not the quarkus-kafka-streams
          extension) because the backend runs topologies dynamically. -->
     <dependency>
@@ -87,6 +94,11 @@
     <dependency>
       <groupId>io.quarkus</groupId>
       <artifactId>quarkus-junit5</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-test-security</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
