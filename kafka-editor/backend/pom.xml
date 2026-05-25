@@ -51,6 +51,12 @@
       <artifactId>quarkus-arc</artifactId>
     </dependency>
 
+    <!-- Health endpoints (/q/health/live, /q/health/ready) for k8s probes. -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-smallrye-health</artifactId>
+    </dependency>
+
     <!-- Kafka Streams runtime. Used directly (not the quarkus-kafka-streams
          extension) because the backend runs topologies dynamically. -->
     <dependency>
