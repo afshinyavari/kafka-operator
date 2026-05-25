@@ -31,6 +31,8 @@ const blurbs = {
     'OAuth2 / OIDC client configuration for SASL/OAUTHBEARER and the proxy.',
   'upgrade':
     'Kafka version upgrades with downgrade protection and metadata-version gating.',
+  'audit':
+    'Unified JSON audit channel from the Kroxylicious proxy, Apicurio RBAC proxy, and kafka-editor. Stdout always on; opt-in Kafka topic sink.',
 };
 
 const niceTitles = {
@@ -41,6 +43,7 @@ const niceTitles = {
   'disaster-recovery': 'Disaster recovery',
   'kafka-client-oauth': 'Kafka client OAuth',
   'upgrade': 'Upgrades',
+  'audit': 'Audit logging',
 };
 
 function extractTitle(md, slug) {

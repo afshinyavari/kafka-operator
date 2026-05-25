@@ -171,6 +171,71 @@ const breadcrumbs = {
     </div>
   </section>
 
+  <!-- Pillar 5 -->
+  <section class="container-site grid grid-cols-1 gap-12 py-20 lg:grid-cols-2">
+    <div>
+      <p class="eyebrow mb-3">05 · Compliance you can grep</p>
+      <h2 class="font-display text-4xl tracking-tight">Audit lives where enforcement lives.</h2>
+      <p class="mt-5 text-fg-muted">
+        Most Kafka audit stories bolt a sidecar onto the wire or rely on a
+        broker plugin that nobody updates. {site.brand} emits audit from the
+        same components that enforce authorization — the Kroxylicious proxy,
+        the Apicurio RBAC proxy, and the kafka-editor backend. One JSON record
+        format. <strong>No separate audit gateway to bypass.</strong>
+      </p>
+      <p class="mt-4 text-fg-muted">
+        Stdout is always on; opt in to a <code class="font-mono text-fg">__audit</code>
+        Kafka topic and a connector ships the same records into Loki,
+        OpenSearch, Splunk, or BigQuery. <a class="text-brand-bright underline" href="/features/audit-logging/">More on audit →</a>
+      </p>
+      <ul class="mt-6 space-y-2 text-sm text-fg-muted">
+        <li>· In-process emitters on every enforcement point</li>
+        <li>· JWT claims and mapped groups, not just SASL principals</li>
+        <li>· Request path is never blocked by a sink failure</li>
+      </ul>
+    </div>
+    <div>
+      <CodeBlock filename="kafka-cluster.yaml" lang="yaml" code={`spec:
+  audit:
+    kafkaTopic:
+      enabled: true        # opt-in; stdout is always on
+      name: __audit
+      retentionMs: 2592000000   # 30 days
+`} />
+    </div>
+  </section>
+
+  <!-- Pillar 6 -->
+  <section class="container-site grid grid-cols-1 gap-12 py-20 lg:grid-cols-2">
+    <div class="lg:order-2">
+      <p class="eyebrow mb-3">06 · A UI that inherits the policy stack</p>
+      <h2 class="font-display text-4xl tracking-tight">kafka-editor: writes included, identity preserved.</h2>
+      <p class="mt-5 text-fg-muted">
+        The shipped <code class="font-mono text-fg">KafkaUI</code> CR deploys
+        <strong>kafka-editor</strong>, a React 19 + Quarkus 3.17 console with topic CRUD,
+        message production, consumer-group reset, and schema browsing. Every
+        action flows through the same proxy and the same
+        <code class="font-mono text-fg">KafkaRbac</code> as your real clients.
+      </p>
+      <p class="mt-4 text-fg-muted">
+        OIDC login at the browser, JWT propagation to the proxy via
+        OAUTHBEARER on every backend call. No admin backdoor, no parallel
+        policy stack — and every write is audited per user.
+        <a class="text-brand-bright underline" href="/features/kafka-editor/">More on the editor →</a>
+      </p>
+    </div>
+    <div class="lg:order-1">
+      <CodeBlock filename="kafka-ui.yaml" lang="yaml" code={`spec:
+  image: kafka-editor:dev
+  oidc:
+    issuerUrl: https://keycloak.example.com/realms/prod
+    clientId: kafka-ui-web
+  externalAccess:
+    mode: LOADBALANCER
+`} />
+    </div>
+  </section>
+
   <!-- When NOT to choose -->
   <section class="container-site py-20">
     <div class="mx-auto max-w-3xl rounded-2xl border border-border bg-bg-raised/60 p-10">

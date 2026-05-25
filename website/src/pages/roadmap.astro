@@ -8,7 +8,7 @@ import roadmap from '../data/roadmap.json';
 import { site } from '../site.config';
 
 const title = 'Roadmap';
-const description = `Upcoming features for ${site.brand}: live migration from any Kafka cluster, tiered storage with Apache Iceberg (Aiven), unified audit logging across the proxy and schema registry, and a modern visual designer for Kafka Streams.`;
+const description = `Upcoming features for ${site.brand}: live migration from any Kafka cluster, tiered storage with Apache Iceberg (Aiven), and a visual Kafka Streams topology designer that builds on the shipped kafka-editor.`;
 
 const stripHtml = (s: string) => s.replace(/<[^>]+>/g, '');
 
@@ -45,8 +45,8 @@ const breadcrumbs = {
   <FeatureHero
     eyebrow="Roadmap"
     title="What's coming next."
-    lede="Four headline features in active design. Open development — if any of these is the difference between you adopting this operator or not, tell us and we'll prioritise. The shipped feature set is already production-grade; what follows here makes it strategic."
-    meta={['4 features in design', 'open development', 'priorities user-driven']}
+    lede="Three headline features in active design. Open development — if any of these is the difference between you adopting this operator or not, tell us and we'll prioritise. The shipped feature set is already production-grade; what follows here makes it strategic."
+    meta={['3 features in design', 'open development', 'priorities user-driven']}
   />
 
   <section class="container-site py-12">

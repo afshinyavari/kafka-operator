@@ -4,7 +4,7 @@ export const site = {
   brand: '[BRAND]',
   tagline: 'The multi-cluster Kafka platform for Kubernetes.',
   description:
-    'A Kubernetes operator that runs Apache Kafka 4.x in KRaft mode across 3+ clusters with built-in OIDC RBAC, schema governance, mirror-maker, backup, rebalancing, and a UI. The full Kafka platform — declarative, multi-cluster, one YAML.',
+    'A Kubernetes operator that runs Apache Kafka 4.x in KRaft mode across 3+ clusters with built-in OIDC RBAC, schema governance, mirror-maker, backup, rebalancing, unified audit logging, and a write-capable web editor. The full Kafka platform — declarative, multi-cluster, one YAML.',
   url: 'https://example.com',
   githubUrl: 'https://github.com/afshin-yavari/kafka-operator',
   contactEmail: 'afshin@yavari.se',
@@ -34,6 +34,8 @@ export const site = {
     'kafka migration',
     'kafka streams designer',
     'modern kafka ui',
+    'kafka editor',
+    'kafka web ui',
   ],
 };
 

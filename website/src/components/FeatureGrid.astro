@@ -48,6 +48,18 @@ const features = [
     href: '/features/multi-cluster-kraft/#observability',
     icon: 'M3 3v18h18M7 14l3-3 4 4 5-5',
   },
+  {
+    title: 'Unified audit logging',
+    body: 'One JSON stream from proxy, schema-registry RBAC proxy, and kafka-editor. Always-on stdout; opt-in __audit Kafka topic for SIEMs.',
+    href: '/features/audit-logging/',
+    icon: 'M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11',
+  },
+  {
+    title: 'Kafka web editor',
+    body: 'React 19 + Quarkus 3.17 console deployed by the KafkaUI CRD. OIDC SSO, JWT propagated to the proxy, writes audited per user.',
+    href: '/features/kafka-editor/',
+    icon: 'M4 4h16v12H4zM8 20h8M12 16v4',
+  },
 ];
 ---
 
@@ -56,7 +68,7 @@ const features = [
     <p class="eyebrow mb-3">Everything in the box</p>
     <h2 class="font-display text-4xl tracking-tight md:text-5xl">A platform, not just an operator.</h2>
     <p class="mt-4 text-lg text-fg-muted">
-      Eight pillars, eleven CRDs, one operator. Replace the 6-chart Helm
+      Ten pillars, eleven CRDs, one operator. Replace the 6-chart Helm
       stack you'd otherwise assemble yourself.
     </p>
   </div>

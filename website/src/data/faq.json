@@ -38,5 +38,13 @@
   {
     "q": "Is there a hosted version?",
     "a": "Not yet. The roadmap is open-core: operator stays Apache 2.0; a hosted control plane is the commercial layer. Talk to us if that's interesting."
+  },
+  {
+    "q": "Is the included UI just for read access?",
+    "a": "No. The <code class=\"font-mono\">KafkaUI</code> CR deploys <strong>kafka-editor</strong> — a React 19 + Quarkus 3.17 console with topic CRUD, message produce, consumer-group reset, and schema browsing. Every action is gated by the same <code class=\"font-mono\">KafkaRbac</code> as your real Kafka clients: OIDC login at the browser, JWT propagated to the proxy via SASL/OAUTHBEARER on every backend call. No admin backdoor, and every write is audited per user."
+  },
+  {
+    "q": "What does audit logging cover?",
+    "a": "Every authorization decision in the Kroxylicious proxy and the Apicurio RBAC proxy, plus every write in kafka-editor. One JSON record shape across all three emitters (principal, groups, operation, resource, decision, latency, correlation id) on the SLF4J channel <code class=\"font-mono\">kafka-audit</code> (and <code class=\"font-mono\">kafka-editor.audit</code> for the editor). Stdout is always on; an opt-in <code class=\"font-mono\">__audit</code> Kafka topic ships records into Loki, OpenSearch, Splunk, or BigQuery via Kafka Connect. There is no separate audit gateway to bypass."
   }
 ]

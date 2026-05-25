@@ -1,0 +1,153 @@
+---
+import Base from '../../layouts/Base.astro';
+import FeatureHero from '../../components/FeatureHero.astro';
+import Prose from '../../components/Prose.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Callout from '../../components/Callout.astro';
+import CtaSection from '../../components/CtaSection.astro';
+import { site } from '../../site.config';
+
+const title = 'Audit logging';
+const description = 'A unified JSON audit stream from every enforcement point — Kroxylicious proxy, Apicurio RBAC proxy, kafka-editor backend. Always-on stdout. Opt-in Kafka topic sink. No audit gateway to bypass.';
+
+const faqSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: [
+    { '@type': 'Question', name: 'Is audit logging always on?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. The proxy and the Apicurio RBAC proxy emit one JSON line per authorization decision on the SLF4J channel kafka-audit at INFO. The editor emits one line per write on kafka-editor.audit. Stdout is always on and needs no configuration.' } },
+    { '@type': 'Question', name: 'Can I ship audit events into my SIEM?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. The opt-in spec.audit.kafkaTopic sink lands every record on a Kafka topic (default __audit). From there a Kafka connector ships into Loki, OpenSearch, Splunk, BigQuery, or any other sink. The request path is never blocked — audit ship failures fall back to stdout and surface as operator warnings.' } },
+    { '@type': 'Question', name: 'What does the editor audit log capture that the proxy log does not?', acceptedAnswer: { '@type': 'Answer', text: 'The proxy audits the wire: produce, fetch, topic create, ACL change, consumer-group commit, schema write, schema delete, registry rule change. The editor audits user intent: which logged-in user clicked which button, with the same JWT trail, on writes only (POST/PUT/PATCH/DELETE). Reads are audited at the proxy layer.' } },
+    { '@type': 'Question', name: 'Can I bypass the audit by going around the proxy?', acceptedAnswer: { '@type': 'Answer', text: 'No — provided clients hit the proxy, which is the deployment posture the operator ships. Direct broker access for internal-only operators is mTLS-only and is itself authorised by the broker, but it is not part of the audited surface; production setups should disable direct external broker listeners.' } },
+  ],
+};
+
+const auditYaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaCluster
+metadata:
+  name: prod
+spec:
+  audit:
+    kafkaTopic:
+      enabled: true        # opt-in; stdout is always on
+      name: __audit        # operator upserts a KafkaTopic of this name
+      retentionMs: 2592000000   # 30 days
+`;
+
+const sampleEvent = `{
+  "ts": "2026-05-25T14:02:11.482Z",
+  "channel": "kafka-audit",
+  "component": "kroxylicious",
+  "principal": "alice@example.com",
+  "groups": ["orders-team"],
+  "operation": "PRODUCE",
+  "resource": "topic:orders",
+  "decision": "ALLOW",
+  "latencyMs": 3,
+  "clientId": "orders-svc-7d8c4f",
+  "correlationId": "0193af4c-b22e-7000-9fd1-0a5e1c8b2741"
+}`;
+---
+
+<Base title={title} description={description} schema={faqSchema}>
+  <FeatureHero
+    eyebrow="Audit logging"
+    title="Every decision. Every write. One JSON stream."
+    lede="Audit lives where the policy enforcement lives — the two proxies and the editor that already see every request. One record format. Always-on stdout. Opt-in Kafka topic sink. No separate audit gateway to bypass and no out-of-band trust boundary."
+    meta={['SLF4J kafka-audit', 'always-on stdout', 'optional Kafka sink', 'in-process']}
+  />
+
+  <section class="container-site py-16">
+    <Prose>
+      <h2 id="problem">Compliance you can grep.</h2>
+      <p>
+        Most Kafka audit stories are bolted on after the fact — a sidecar
+        sniffing the wire, a broker plugin nobody updates, a downstream
+        connector with its own auth model. Each adds a trust boundary that
+        someone can route around, and a record format the SIEM has to learn.
+      </p>
+      <p>
+        {site.brand} emits audit from the same components that enforce
+        authorization: the Kroxylicious proxy and the Apicurio RBAC proxy. The
+        kafka-editor backend emits the same record shape for every write a
+        logged-in user performs. There is no "audit gateway" — the audit
+        record is written in-process by the code that just made the decision.
+      </p>
+
+      <h2 id="what">What gets captured.</h2>
+      <p>
+        Every authorization decision is one JSON line on the
+        <code>kafka-audit</code> SLF4J channel at INFO. The editor uses a
+        parallel <code>kafka-editor.audit</code> channel for write actions.
+        Both share the same field set:
+      </p>
+      <ul>
+        <li><code>principal</code> — the resolved identity (JWT <code>sub</code> / mTLS CN).</li>
+        <li><code>groups</code> — JWT-claim groups, post-mapping.</li>
+        <li><code>operation</code> — Kafka op (<code>PRODUCE</code>, <code>FETCH</code>, <code>CREATE_TOPIC</code>, <code>OFFSET_COMMIT</code>…), registry verb (<code>READ</code>, <code>WRITE</code>, <code>DELETE</code>), or editor verb.</li>
+        <li><code>resource</code> — <code>topic:orders</code>, <code>group:orders-svc-*</code>, <code>schema:orders</code>.</li>
+        <li><code>decision</code> — <code>ALLOW</code> / <code>DENY</code> with a reason.</li>
+        <li><code>latencyMs</code>, <code>clientId</code>, <code>correlationId</code> — tracing essentials.</li>
+      </ul>
+    </Prose>
+
+    <div class="my-10 max-w-prose">
+      <CodeBlock code={sampleEvent} lang="json" filename="audit-event.json" />
+    </div>
+
+    <Prose>
+      <h2 id="sinks">Stdout always. Kafka topic on request.</h2>
+      <p>
+        Stdout is the canonical sink and needs no configuration — tail the
+        proxy and the RBAC proxy and you have the audit feed. For long
+        retention or SIEM ingest, opt in to the Kafka topic sink. The
+        operator upserts a <code>KafkaTopic</code> (default
+        <code>__audit</code>), injects <code>KAFKA_AUDIT_*</code> env on the
+        proxy and Apicurio rbac-proxy Deployments, and routes the same
+        SLF4J channel through an in-process Kafka appender.
+      </p>
+    </Prose>
+
+    <div class="my-10 max-w-prose">
+      <CodeBlock code={auditYaml} lang="yaml" filename="kafka-cluster.yaml" />
+    </div>
+
+    <Prose>
+      <p>
+        The request path is never blocked by an audit sink failure.
+        <code>max.block.ms=0</code> on the appender means a stalled topic
+        falls back to stdout immediately, and the operator surfaces the
+        condition as a Pod warning. From the <code>__audit</code> topic, a
+        Kafka Connect sink or Vector pipeline ships into Loki, OpenSearch,
+        Splunk, BigQuery, or any other destination.
+      </p>
+
+      <h2 id="editor">The editor closes the loop.</h2>
+      <p>
+        kafka-editor — see the
+        <a href="/features/kafka-editor/">editor feature page</a> — is the
+        third emitter. Every authenticated POST/PUT/PATCH/DELETE emits one
+        <code>kafka-editor.audit</code> JSON line with the user's JWT trail
+        intact. Reads are audited downstream by the proxy, so there is no
+        double-counting.
+      </p>
+    </Prose>
+
+    <div class="mx-auto max-w-prose">
+      <Callout title="vs. broker-side authorizer logs">
+        <p>
+          Broker authorizer logs (Strimzi, MSK) live below the identity layer:
+          you see SASL principals and mTLS CNs, but not the JWT claims or the
+          end user behind a shared service account. They also lose the
+          schema-registry side entirely.
+        </p>
+        <p>
+          {site.brand} audits at the identity layer — JWT claims, mapped
+          groups, the resource string the user actually requested — across
+          Kafka <em>and</em> the schema registry in the same record format.
+        </p>
+      </Callout>
+    </div>
+  </section>
+
+  <CtaSection />
+</Base>

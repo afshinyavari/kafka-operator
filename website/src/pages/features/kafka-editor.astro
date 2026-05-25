@@ -1,0 +1,155 @@
+---
+import Base from '../../layouts/Base.astro';
+import FeatureHero from '../../components/FeatureHero.astro';
+import Prose from '../../components/Prose.astro';
+import CodeBlock from '../../components/CodeBlock.astro';
+import Callout from '../../components/Callout.astro';
+import CtaSection from '../../components/CtaSection.astro';
+import { site } from '../../site.config';
+
+const title = 'Kafka editor';
+const description = 'A React 19 SPA + Quarkus 3.17 backend for browsing and editing Kafka clusters, topics, messages, and schemas. OIDC SSO, JWT-aware RBAC through the proxy, structured per-write audit log. Deployed by the KafkaUI CRD.';
+
+const faqSchema = {
+  '@context': 'https://schema.org',
+  '@type': 'FAQPage',
+  mainEntity: [
+    { '@type': 'Question', name: 'Can the editor actually write to topics?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. kafka-editor performs topic CRUD, produces test records, and resets consumer groups. Every write is gated by the same KafkaRbac the proxy enforces — the editor never has more authority than the user logged into it.' } },
+    { '@type': 'Question', name: 'How does the editor know who the user is?', acceptedAnswer: { '@type': 'Answer', text: 'OIDC code+PKCE against Keycloak (or any OIDC provider). The Quarkus backend receives the JWT, propagates it to the proxy via SASL/OAUTHBEARER using a JwtCallbackHandler, and shares a single client mTLS cert across all editor pods. The proxy is still the authoritative policy enforcement point.' } },
+    { '@type': 'Question', name: 'Is this the visual designer from the roadmap?', acceptedAnswer: { '@type': 'Answer', text: 'No. kafka-editor is shipped and covers the read-and-edit surface: clusters, topics, messages, consumer groups, schemas. The visual designer on the roadmap is a separate Electron-packaged tool that adds drag-on-canvas Kafka Streams topology authoring and visual schema design on top of kafka-editor.' } },
+    { '@type': 'Question', name: 'Is the editor optional?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. The KafkaUI CRD is independent of KafkaCluster — apply it only on clusters where you want a UI. The operator deploys ServiceAccount + Role/RoleBinding + Deployment + Service, optionally an Ingress.' } },
+  ],
+};
+
+const kafkaUiYaml = `apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaUI
+metadata:
+  name: kafka-ui
+  namespace: kafka
+spec:
+  image: kafka-editor:dev
+  replicas: 2
+  oidc:
+    issuerUrl: https://keycloak.example.com/realms/prod
+    clientId: kafka-ui-web
+  externalAccess:
+    mode: LOADBALANCER      # also: NODEPORT / GATEWAY / INGRESS
+    tlsSecretRef: kafka-ui-tls
+`;
+
+const auditEvent = `{
+  "ts": "2026-05-25T14:08:42.117Z",
+  "channel": "kafka-editor.audit",
+  "principal": "alice@example.com",
+  "action": "topic.create",
+  "resource": "topic:orders-staging",
+  "outcome": "ok",
+  "latencyMs": 41,
+  "correlationId": "0193af52-9b00-7000-9fd1-77e9b3c40e22"
+}`;
+---
+
+<Base title={title} description={description} schema={faqSchema}>
+  <FeatureHero
+    eyebrow="Kafka editor"
+    title="A modern Kafka UI, shipped by the operator."
+    lede="kafka-editor is a React 19 + Vite SPA bundled into a Quarkus 3.17 backend. The operator deploys it via the KafkaUI CRD with OIDC SSO, JWT propagation to the proxy, RBAC inherited from KafkaRbac, and a structured per-write audit log."
+    meta={['React 19 + Vite', 'Quarkus 3.17', 'OIDC SSO', 'JWT-aware RBAC']}
+  />
+
+  <section class="container-site py-16">
+    <Prose>
+      <h2 id="problem">Most "Kafka UIs" are read-only or unaware of identity.</h2>
+      <p>
+        Pick a Kafka UI off the shelf and you usually land on one of two
+        compromises: a read-only console that nobody uses for real work, or a
+        write-capable console that authenticates with a shared admin
+        credential and ignores per-user authorization.
+      </p>
+      <p>
+        {site.brand} solves both. kafka-editor performs real work — topic
+        CRUD, message production, consumer-group reset, schema browsing —
+        but every action travels through the same Kroxylicious proxy and the
+        same <code>KafkaRbac</code> the rest of your clients use. There is
+        no admin backdoor and no separate policy stack.
+      </p>
+
+      <h2 id="how">How the auth flow works.</h2>
+      <p>
+        The browser does OIDC code+PKCE against Keycloak (or any OIDC
+        provider). The Quarkus backend validates the resulting JWT, then
+        uses a <code>JwtCallbackHandler</code> to forward the same JWT to
+        the proxy via SASL/OAUTHBEARER on every outbound Kafka call. All
+        editor pods share one client mTLS certificate to terminate the
+        proxy's transport layer — but the <em>identity</em> on every request
+        is the logged-in user, not the editor.
+      </p>
+      <ul>
+        <li>Reads (browse topics, peek messages, inspect schemas) — authorized by the proxy's <code>KafkaRbac</code>.</li>
+        <li>Writes (create topic, produce, reset consumer-group offsets) — authorized by the proxy <em>and</em> audited a second time by the editor.</li>
+        <li>Schemas — proxied through the Apicurio RBAC proxy with the same JWT.</li>
+      </ul>
+    </Prose>
+
+    <div class="my-10 max-w-prose">
+      <CodeBlock code={kafkaUiYaml} lang="yaml" filename="kafka-ui.yaml" />
+    </div>
+
+    <Prose>
+      <p>
+        The operator reconciles the CR into a <code>Deployment</code> +
+        <code>Service</code> + <code>ServiceAccount</code> with a namespaced
+        <code>Role</code>/<code>RoleBinding</code> that lets the editor read
+        <code>KafkaCluster</code> and <code>KafkaRbac</code> CRs. Bootstrap
+        URL, mTLS material, and OIDC config land via env vars
+        (<code>KAFKA_EDITOR_BOOTSTRAP_SERVERS</code>,
+        <code>KAFKA_EDITOR_TLS_DIR</code>, <code>QUARKUS_OIDC_*</code>).
+      </p>
+
+      <h2 id="audit">Every write is audited.</h2>
+      <p>
+        Every authenticated POST/PUT/PATCH/DELETE emits one JSON line on
+        the <code>kafka-editor.audit</code> SLF4J channel via an
+        <code>AuditFilter</code> in the backend. Reads are audited
+        downstream by the proxy — see
+        <a href="/features/audit-logging/">audit logging</a> for the
+        unified event format.
+      </p>
+    </Prose>
+
+    <div class="my-10 max-w-prose">
+      <CodeBlock code={auditEvent} lang="json" filename="editor-audit.json" />
+    </div>
+
+    <Prose>
+      <h2 id="multi-cluster">Multi-cluster, the same way as the other services.</h2>
+      <p>
+        kafka-editor opts into multi-cluster HA via the same pattern as
+        <code>KafkaProxy</code> and <code>ApicurioRegistry</code>:
+        <code>spec.mcs.enabled + spec.targetClusters</code>. Same CR
+        applied to all clusters, operator filters by cluster ID, an
+        auto-created <code>ServiceExport</code> publishes the editor under
+        <code>kafka-ui.kafka.svc.clusterset.local</code> for in-mesh
+        callers. External clients pin to one cluster's LB / Ingress.
+      </p>
+    </Prose>
+
+    <div class="mx-auto max-w-prose">
+      <Callout title="vs. building it yourself">
+        <p>
+          The other open-source Kafka UIs either skip identity entirely
+          (shared admin) or require you to bring your own SSO and policy
+          layer in front. Neither is acceptable when the same Kafka cluster
+          is multi-tenant.
+        </p>
+        <p>
+          kafka-editor inherits the operator's identity model: same JWT,
+          same <code>KafkaRbac</code>, same audit stream. The price of
+          adding the UI is one CR.
+        </p>
+      </Callout>
+    </div>
+  </section>
+
+  <CtaSection />
+</Base>

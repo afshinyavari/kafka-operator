@@ -158,6 +158,17 @@ spec:
         switch to SSL with a shared CA. The operator provisions PEM material
         and projects it via PKCS12 init containers — no manual cert work.
       </p>
+
+      <h3 id="audit">Every decision is audited.</h3>
+      <p>
+        The same filter chain that authorises a request also emits a JSON
+        audit line on the SLF4J <code>kafka-audit</code> channel — principal,
+        groups, operation, resource, decision, latency, correlation id. The
+        Apicurio RBAC proxy uses the same record format for schema-registry
+        access, and kafka-editor closes the loop with per-write events on
+        <code>kafka-editor.audit</code>. See <a href="/features/audit-logging/">audit logging</a> for the unified
+        feed and sink options.
+      </p>
     </Prose>
   </section>
 

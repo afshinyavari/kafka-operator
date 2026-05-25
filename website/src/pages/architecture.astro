@@ -47,7 +47,7 @@ const crds = [
   { name: 'KafkaBackup', purpose: 'CronJob backup of records, offsets, and schemas to object storage.' },
   { name: 'KafkaRestore', purpose: 'Idempotent one-shot restore with PITR and topic remapping.' },
   { name: 'KafkaBackupValidation', purpose: 'Scheduled validation of backup manifests, partitions, and schemas.' },
-  { name: 'KafkaUI', purpose: 'React SPA (kafka-editor) + Quarkus backend; OIDC SSO; JWT propagation to the proxy via OAUTHBEARER.' },
+  { name: 'KafkaUI', purpose: 'Deploys kafka-editor: React 19 SPA + Quarkus 3.17 backend with topic CRUD, produce, consumer-group reset. OIDC SSO; JWT propagation to the proxy via OAUTHBEARER; per-write audit on the kafka-editor.audit SLF4J channel.' },
   { name: 'KafkaRebalance', purpose: 'Strimzi-style Cruise Control trigger; annotation-based approval.' },
 ];
 ---
@@ -155,6 +155,25 @@ const crds = [
 
   <section class="container-site py-16">
     <Prose>
+      <h2 id="audit-fabric">Audit fabric.</h2>
+      <p>
+        Authorization decisions are emitted as JSON on the SLF4J
+        <code>kafka-audit</code> channel from <strong>three in-process emitters</strong>:
+        the Kroxylicious proxy (every Kafka request), the Apicurio RBAC proxy
+        (every schema-registry request), and — for write actions — the
+        kafka-editor backend (on the parallel <code>kafka-editor.audit</code>
+        channel). There is no out-of-band audit gateway; every emitter sits
+        inside the component that just made the decision.
+      </p>
+      <p>
+        Stdout is always on. Set <code>spec.audit.kafkaTopic.enabled=true</code>
+        on the <code>KafkaCluster</code> CR and the operator upserts a
+        <code>KafkaTopic</code> (default <code>__audit</code>) and injects
+        the appender config onto the proxy and rbac-proxy Deployments. See
+        <a href="/features/audit-logging/">audit logging</a> and the synced
+        <a href="/docs/security/">security doc</a> for the full record shape.
+      </p>
+
       <h2 id="data-vs-control">Data plane vs. control plane.</h2>
       <p>
         The operator is the control plane. It watches CRDs, builds resources,

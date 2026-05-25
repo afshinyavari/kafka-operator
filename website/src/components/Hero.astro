@@ -20,6 +20,9 @@ spec:
   backup:
     schedule: "0 */6 * * *"
     destination: s3://kafka-backups/prod
+  audit:
+    kafkaTopic:
+      enabled: true        # also lands on stdout
 `;
 ---
 
@@ -46,7 +49,8 @@ spec:
       <p class="mt-6 max-w-xl text-lg text-fg-muted">
         {site.brand} runs Apache Kafka 4.x across 3+ Kubernetes clusters with one
         KRaft quorum — and ships the full platform: OIDC RBAC, schema governance,
-        cross-cluster mirroring, backup, rebalancing, and a UI. All declarative.
+        cross-cluster mirroring, backup, rebalancing, audit, and a web editor.
+        All declarative.
       </p>
 
       <div class="mt-8 flex flex-wrap items-center gap-3">
@@ -55,12 +59,12 @@ spec:
       </div>
 
       <div class="mt-10 grid grid-cols-2 gap-x-8 gap-y-3 text-sm text-fg-muted md:grid-cols-3">
-        <div class="flex items-center gap-2"><span class="text-brand">▸</span> 11 CRDs, one operator</div>
-        <div class="flex items-center gap-2"><span class="text-brand">▸</span> mTLS + OIDC by default</div>
         <div class="flex items-center gap-2"><span class="text-brand">▸</span> Multi-cluster KRaft</div>
+        <div class="flex items-center gap-2"><span class="text-brand">▸</span> mTLS + OIDC by default</div>
         <div class="flex items-center gap-2"><span class="text-brand">▸</span> Apicurio schema RBAC</div>
         <div class="flex items-center gap-2"><span class="text-brand">▸</span> Backup &amp; restore</div>
-        <div class="flex items-center gap-2"><span class="text-brand">▸</span> Cruise Control built-in</div>
+        <div class="flex items-center gap-2"><span class="text-brand">▸</span> Audit on by default</div>
+        <div class="flex items-center gap-2"><span class="text-brand">▸</span> Web editor included</div>
       </div>
     </div>
 
