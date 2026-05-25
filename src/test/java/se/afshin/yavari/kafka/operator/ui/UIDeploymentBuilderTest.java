@@ -46,7 +46,11 @@ class UIDeploymentBuilderTest {
                 "KAFKA_EDITOR_BOOTSTRAP_SERVERS",
                 "KAFKA_EDITOR_SECURITY_PROTOCOL",
                 "KAFKA_EDITOR_TLS_DIR",
+                "KAFKA_EDITOR_NAMESPACE",
                 "QUARKUS_HTTP_PORT");
+        // KAFKA_EDITOR_NAMESPACE is sourced via the downward API.
+        assertThat(env.get("KAFKA_EDITOR_NAMESPACE").getValueFrom().getFieldRef().getFieldPath())
+                .isEqualTo("metadata.namespace");
         assertThat(env.get("QUARKUS_OIDC_AUTH_SERVER_URL").getValue()).isEqualTo("http://issuer");
         assertThat(env.get("KAFKA_EDITOR_TLS_DIR").getValue()).isEqualTo("/etc/kafka-tls");
         assertThat(env.get("KAFKA_EDITOR_SECURITY_PROTOCOL").getValue()).isEqualTo("SASL_SSL");

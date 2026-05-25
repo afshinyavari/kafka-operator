@@ -163,6 +163,15 @@ public class UIDeploymentBuilder {
         envVars.add(new EnvVarBuilder()
                 .withName("KAFKA_EDITOR_TLS_DIR").withValue(tlsMount).build());
 
+        // Pod's own namespace via the downward API — RbacRulesService reads
+        // KafkaRbac CRs in this namespace to drive /api/me/rbac.
+        envVars.add(new EnvVarBuilder()
+                .withName("KAFKA_EDITOR_NAMESPACE")
+                .withNewValueFrom()
+                    .withNewFieldRef("v1", "metadata.namespace")
+                .endValueFrom()
+                .build());
+
         // Quarkus listens on 0.0.0.0:8080 by default; explicit for clarity.
         envVars.add(new EnvVarBuilder()
                 .withName("QUARKUS_HTTP_PORT").withValue(String.valueOf(containerPort)).build());
