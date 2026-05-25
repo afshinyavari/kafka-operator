@@ -2,7 +2,6 @@ package se.afshin.yavari.kafka.operator.backup;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.OwnerReference;
-import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.javaoperatorsdk.operator.api.reconciler.Cleaner;
@@ -20,6 +19,8 @@ import se.afshin.yavari.kafka.operator.crd.KafkaRestore;
 import se.afshin.yavari.kafka.operator.crd.KafkaRestoreSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaRestoreStatus;
 import se.afshin.yavari.kafka.operator.crd.RestoreSourceSpec;
+import se.afshin.yavari.kafka.operator.infra.OperatorAuditLog;
+import se.afshin.yavari.kafka.operator.infra.OwnerReferences;
 import se.afshin.yavari.kafka.operator.infra.ReconcileContext;
 
 import java.time.Duration;
@@ -89,21 +90,28 @@ public class KafkaRestoreReconciler implements Reconciler<KafkaRestore>, Cleaner
             return UpdateControl.patchStatus(cr);
         }
 
+        String resource = "KafkaRestore/" + ns + "/" + name;
         try {
             Job existing = client.batch().v1().jobs().inNamespace(ns).withName(name).get();
             if (existing == null) {
+                OperatorAuditLog.emit("restore.start", resource, "ALLOWED",
+                        String.valueOf(cr.getMetadata().getGeneration()));
                 return createRestoreJob(cr, status, name, ns);
             }
             if (BackupJobStatusReader.succeeded(existing)) {
                 status.setPhase(KafkaRestoreStatus.Phase.SUCCEEDED);
                 status.setMessage(null);
                 status.setCompletionTime(existing.getStatus().getCompletionTime());
+                OperatorAuditLog.emit("restore.complete", resource, "ALLOWED",
+                        String.valueOf(cr.getMetadata().getGeneration()));
                 cr.setStatus(status);
                 return UpdateControl.patchStatus(cr);
             }
             if (BackupJobStatusReader.failed(existing)) {
                 status.setPhase(KafkaRestoreStatus.Phase.FAILED);
                 status.setMessage("restore Job failed — inspect Job/" + name + " pod logs");
+                OperatorAuditLog.emit("restore.complete", resource, "DENIED",
+                        String.valueOf(cr.getMetadata().getGeneration()));
                 cr.setStatus(status);
                 return UpdateControl.patchStatus(cr);
             }
@@ -114,6 +122,8 @@ public class KafkaRestoreReconciler implements Reconciler<KafkaRestore>, Cleaner
             LOG.errorf("KafkaRestore %s/%s failed: %s", ns, name, e.getMessage());
             status.setPhase(KafkaRestoreStatus.Phase.FAILED);
             status.setMessage(e.getMessage());
+            OperatorAuditLog.emit("restore.complete", resource, "DENIED",
+                    String.valueOf(cr.getMetadata().getGeneration()));
             cr.setStatus(status);
             return UpdateControl.patchStatus(cr);
         }
@@ -227,13 +237,6 @@ public class KafkaRestoreReconciler implements Reconciler<KafkaRestore>, Cleaner
     }
 
     static OwnerReference ownerRef(KafkaRestore cr) {
-        return new OwnerReferenceBuilder()
-                .withApiVersion(cr.getApiVersion())
-                .withKind(cr.getKind())
-                .withName(cr.getMetadata().getName())
-                .withUid(cr.getMetadata().getUid())
-                .withController(true)
-                .withBlockOwnerDeletion(true)
-                .build();
+        return OwnerReferences.of(cr);
     }
 }

@@ -2,7 +2,6 @@ package se.afshin.yavari.kafka.operator.ui;
 
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
 import io.fabric8.kubernetes.api.model.OwnerReference;
-import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
 import io.fabric8.kubernetes.api.model.networking.v1.Ingress;
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -25,7 +24,9 @@ import se.afshin.yavari.kafka.operator.crd.McsConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpExternalAccessConfig;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpIngressBuilder;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpRouteBuilder;
+import se.afshin.yavari.kafka.operator.infra.McsPlacement;
 import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
+import se.afshin.yavari.kafka.operator.infra.OwnerReferences;
 import se.afshin.yavari.kafka.operator.infra.ServiceExportManager;
 import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolution;
 import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolver;
@@ -74,29 +75,27 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
         McsConfig mcsCfg = ui.getSpec().getMcs();
         boolean specMcsEnabled = mcsCfg != null && mcsCfg.isEnabled();
         List<String> targetClusters = ui.getSpec().getTargetClusters();
-
-        if (!specMcsEnabled && targetClusters != null && !targetClusters.isEmpty()) {
-            status.setPhase(KafkaUIStatus.Phase.FAILED);
-            status.setMessage("spec.targetClusters is set but spec.mcs.enabled is false");
-            ui.setStatus(status);
-            return UpdateControl.patchStatus(ui);
-        }
-
-        if (specMcsEnabled) {
-            if (targetClusters == null || targetClusters.isEmpty()) {
+        McsPlacement.Decision placement = McsPlacement.decide(mcsCfg, targetClusters, localClusterId);
+        switch (placement) {
+            case INVALID_TARGETS_WITHOUT_MCS:
+                status.setPhase(KafkaUIStatus.Phase.FAILED);
+                status.setMessage("spec.targetClusters is set but spec.mcs.enabled is false");
+                ui.setStatus(status);
+                return UpdateControl.patchStatus(ui);
+            case INVALID_MCS_WITHOUT_TARGETS:
                 status.setPhase(KafkaUIStatus.Phase.FAILED);
                 status.setMessage("spec.mcs.enabled requires spec.targetClusters to be non-empty");
                 ui.setStatus(status);
                 return UpdateControl.patchStatus(ui);
-            }
-            if (!targetClusters.contains(localClusterId)) {
+            case SKIP:
                 LOG.infof("KafkaUI %s/%s: cluster '%s' not in targetClusters %s — skipping",
                         namespace, name, localClusterId, targetClusters);
                 status.setPhase(KafkaUIStatus.Phase.SKIPPED);
                 status.setMessage("Cluster '" + localClusterId + "' is not a target for this UI");
                 ui.setStatus(status);
                 return UpdateControl.patchStatus(ui);
-            }
+            case PROCEED:
+                break;
         }
 
         String validationError = validate(ui);
@@ -107,14 +106,7 @@ public class KafkaUIReconciler implements Reconciler<KafkaUI>, Cleaner<KafkaUI> 
             return UpdateControl.patchStatus(ui);
         }
 
-        OwnerReference ownerRef = new OwnerReferenceBuilder()
-                .withApiVersion(ui.getApiVersion())
-                .withKind(ui.getKind())
-                .withName(name)
-                .withUid(ui.getMetadata().getUid())
-                .withController(true)
-                .withBlockOwnerDeletion(true)
-                .build();
+        OwnerReference ownerRef = OwnerReferences.of(ui);
 
         try {
             client.serviceAccounts().inNamespace(namespace)

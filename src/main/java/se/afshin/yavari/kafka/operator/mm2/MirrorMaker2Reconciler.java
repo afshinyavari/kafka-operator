@@ -26,6 +26,7 @@ import se.afshin.yavari.kafka.operator.crd.SchemaRegistryType;
 import se.afshin.yavari.kafka.operator.endpoint.KafkaEndpointResolver;
 import se.afshin.yavari.kafka.operator.endpoint.ResolvedKafkaEndpoint;
 import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
+import se.afshin.yavari.kafka.operator.infra.McsPlacement;
 import se.afshin.yavari.kafka.operator.infra.MetricsResources;
 import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
 import se.afshin.yavari.kafka.operator.infra.ReconcileContext;
@@ -74,6 +75,7 @@ public class MirrorMaker2Reconciler implements Reconciler<MirrorMaker2>, Cleaner
     @Inject CrossClusterRollCoordinator rollCoordinator;
     @Inject MetricsResources metricsResources;
     @Inject OptionalResourceApplier optionalApplier;
+    @Inject se.afshin.yavari.kafka.operator.infra.PdbBuilder pdbBuilder;
 
     @ConfigProperty(name = "kafka.cluster.id", defaultValue = "")
     String localClusterId;
@@ -96,10 +98,9 @@ public class MirrorMaker2Reconciler implements Reconciler<MirrorMaker2>, Cleaner
 
         // MCS placement gate
         McsConfig mcs = cr.getSpec().getMcs();
-        boolean mcsEnabled = mcs != null && mcs.isEnabled();
         List<String> targetClusters = cr.getSpec().getTargetClusters();
-        if (mcsEnabled && targetClusters != null && !targetClusters.isEmpty()
-                && !targetClusters.contains(localClusterId)) {
+        boolean mcsEnabled = mcs != null && mcs.isEnabled();
+        if (McsPlacement.decide(mcs, targetClusters, localClusterId) == McsPlacement.Decision.SKIP) {
             LOG.infof("MM2 %s/%s: cluster '%s' not in targetClusters %s — skipping",
                     namespace, name, localClusterId, targetClusters);
             status.setPhase(MirrorMaker2Status.Phase.SKIPPED);
@@ -188,6 +189,10 @@ public class MirrorMaker2Reconciler implements Reconciler<MirrorMaker2>, Cleaner
                 deleteMm2Metrics(name, namespace);
             }
 
+            pdbBuilder.apply(name, namespace,
+                    Mm2Labels.labels(name), Mm2Labels.labels(name),
+                    replicas, cr);
+
             if (mcsEnabled) {
                 serviceExportManager.apply(name, namespace);
             }
@@ -224,6 +229,7 @@ public class MirrorMaker2Reconciler implements Reconciler<MirrorMaker2>, Cleaner
             serviceExportManager.delete(name, namespace);
         }
         deleteMm2Metrics(name, namespace);
+        pdbBuilder.delete(name, namespace);
         LOG.infof("MirrorMaker2 %s/%s deleted", namespace, name);
         return DeleteControl.defaultDelete();
     }

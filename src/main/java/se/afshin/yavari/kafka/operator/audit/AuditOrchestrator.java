@@ -5,7 +5,6 @@ import io.fabric8.kubernetes.api.model.EnvVar;
 import io.fabric8.kubernetes.api.model.EnvVarBuilder;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.OwnerReference;
-import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.Volume;
 import io.fabric8.kubernetes.api.model.VolumeBuilder;
 import io.fabric8.kubernetes.api.model.VolumeMount;
@@ -21,6 +20,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaClusterAuditSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyTlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaTopic;
 import se.afshin.yavari.kafka.operator.crd.KafkaTopicSpec;
+import se.afshin.yavari.kafka.operator.infra.OwnerReferences;
 import se.afshin.yavari.kafka.operator.proxy.KafkaProxyOrchestrator;
 import se.afshin.yavari.kafka.operator.topic.BrokerBootstrapResolver;
 
@@ -200,13 +200,6 @@ public class AuditOrchestrator {
     }
 
     private static List<OwnerReference> clusterOwnerRef(KafkaCluster cr) {
-        return List.of(new OwnerReferenceBuilder()
-                .withApiVersion(cr.getApiVersion())
-                .withKind(cr.getKind())
-                .withName(cr.getMetadata().getName())
-                .withUid(cr.getMetadata().getUid())
-                .withController(true)
-                .withBlockOwnerDeletion(true)
-                .build());
+        return OwnerReferences.singleton(cr);
     }
 }

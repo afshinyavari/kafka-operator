@@ -123,6 +123,11 @@ for i in "${!CLUSTERS[@]}"; do
   KAFKA_CLUSTER_ID="${cluster_id}" KAFKA_NETWORKING_MCS_ENABLED="false" \
     envsubst < "${MANIFESTS_DIR}/operator.yaml" | \
     kubectl --context "${ctx}" apply --server-side -f -
+  # ServiceMonitor for the operator — only when Prometheus Operator CRDs are present.
+  if kubectl --context "${ctx}" get crd servicemonitors.monitoring.coreos.com &>/dev/null; then
+    kubectl --context "${ctx}" apply --server-side -f \
+      "${MANIFESTS_DIR}/operator-servicemonitor.yaml"
+  fi
 done
 ok "Operator deployed to all clusters"
 

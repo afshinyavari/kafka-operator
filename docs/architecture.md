@@ -306,8 +306,12 @@ Downgrade protection: `CrValidator` rejects a `targetMetadataVersion` lower than
 | `BrokerBootstrapResolver` | `topic` | Picks the alphabetically-first broker `KafkaNodePool` and builds its headless bootstrap address |
 | `TopicReconcileLeader` / `StaticPrimaryClusterLeader` | `topic` | Cross-cluster single-writer gate. v1 impl returns `localClusterId == spec.clusters[0].id`; v2 will swap in a Kafka consumer-group leader implementation |
 | `AdminClientTlsLoader` | `topic` | Reads a cert-manager TLS Secret (PEM) and returns Kafka client SSL properties using `ssl.keystore.type=PEM` (no PKCS12 conversion) |
-| `MetricsResources` | `infra` | Shared builder for the `<name>-metrics` ClusterIP Service + `monitoring.coreos.com/v1` ServiceMonitor used by every workload that exposes Prometheus metrics (node pools, proxy, Cruise Control, MM2). Also loads bundled JMX exporter configs from the classpath. |
+| `MetricsResources` | `infra` | Shared builder for the `<name>-metrics` ClusterIP Service + `monitoring.coreos.com/v1` ServiceMonitor used by every workload that exposes Prometheus metrics (node pools, proxy, Cruise Control, MM2, Apicurio). Also loads bundled JMX exporter configs from the classpath. |
 | `OptionalResourceApplier` | `infra` | Apply/delete wrapper for ServiceMonitor / TLSRoute / HTTPRoute / Ingress that silently no-ops when the CRD is absent on the cluster. |
+| `OwnerReferences` | `infra` | Builds the `controller=true / blockOwnerDeletion=true` OwnerReference every operator-built resource carries, given any `HasMetadata` CR. Centralises a ~8-line pattern previously repeated across builders. |
+| `McsPlacement` | `infra` | MCS placement gate shared by Connect / MM2 / KafkaUI reconcilers — maps `(spec.mcs, spec.targetClusters, localClusterId)` to one of `PROCEED`, `SKIP`, `INVALID_TARGETS_WITHOUT_MCS`, `INVALID_MCS_WITHOUT_TARGETS`. Reconcilers map those decisions onto their own status enums. |
+| `PdbBuilder` | `infra` | Server-side-applies a `maxUnavailable=1` PodDisruptionBudget gated on `replicas > 1`. Used by node pool, proxy, Connect, MM2, and Apicurio. |
+| `OperatorAuditLog` | `infra` | Writes one-line JSON audit events on the `kafka-audit` SLF4J channel — the same sink the Kroxylicious in-process AuditFilter and the Apicurio rbac-proxy emit to. Used by the backup/restore reconcilers; principal is `system:operator`. |
 
 ---
 

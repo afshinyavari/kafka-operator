@@ -1024,6 +1024,7 @@ data-plane workload owned by the cluster:
 | Kafka brokers / controllers | `<pool>-metrics` | `jmx` → 9101 | `jmx_prometheus_javaagent` reading the user-supplied `configMapRef` |
 | Kroxylicious proxy | `kafka-proxy-metrics` | `metrics` → 9190 | Kroxylicious native `management.endpoints.prometheus` (no JMX) |
 | Cruise Control | `cruise-control-metrics` | `metrics` → 9101 | `jmx_prometheus_javaagent` with an operator-bundled JMX config |
+| Apicurio registry | `apicurio-metrics` | `http` → 8080 | Quarkus `/metrics` endpoint on the registry pod (no JMX) |
 
 `MirrorMaker2` and `KafkaConnect` are separate CRDs gated on their own `spec.metricsConfig`
 (see api-reference). When set the operator creates `<mm2-name>-metrics` on port 9101
@@ -1049,6 +1050,42 @@ GET http://{operator-pod}:8080/healthz
 ```
 
 Returns HTTP 200 when the operator is healthy (Quarkus SmallRye Health format).
+
+### Operator self-scraping
+
+`kind/manifests/operator.yaml` ships a `kafka-operator-metrics` ClusterIP Service on
+port 8080. A matching `ServiceMonitor` lives in `kind/manifests/operator-servicemonitor.yaml`
+and is applied separately by the setup scripts only when the Prometheus Operator CRDs
+are installed — applying it unconditionally fails on kind clusters that don't run
+prometheus-operator. The scrape path is `/metrics`.
+
+### Pod health probes
+
+The reconcilers wire liveness and readiness probes on every workload they build:
+
+| Workload | Readiness | Liveness |
+|----------|-----------|----------|
+| Kroxylicious proxy | TCP `spec.proxy.clientPort` (default 9094) | TCP same port |
+| Kafka Connect | HTTP `/` on REST port | HTTP `/` on REST port |
+| MirrorMaker2 | TCP `9101` (when metrics enabled — dedicated mode has no REST listener) | TCP `9101` (same) |
+| Apicurio registry | HTTP `/health/ready` on 8080 | HTTP `/health/live` on 8080 |
+| Cruise Control | HTTP `/kafkacruisecontrol/state` on 9090 | TCP `9090` (the REST server responding is enough) |
+| kafka-editor | HTTP `/q/health/ready` on 8080 | HTTP `/q/health/live` on 8080 |
+
+### PodDisruptionBudgets
+
+Every multi-replica workload gets a `maxUnavailable=1` PDB owned by the parent CR:
+
+| Workload | PDB name |
+|----------|----------|
+| Kafka node pool | `<pool>-pdb` |
+| Kroxylicious proxy | `kafka-proxy-pdb` |
+| Kafka Connect | `<name>-pdb` |
+| MirrorMaker2 | `<name>-pdb` |
+| Apicurio registry | `apicurio-registry-pdb` |
+
+Single-replica deployments don't get a PDB (a `maxUnavailable=1` PDB on a single replica
+is a no-op that clutters `kubectl get pdb`).
 
 ---
 

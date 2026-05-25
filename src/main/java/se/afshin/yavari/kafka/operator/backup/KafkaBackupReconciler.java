@@ -2,7 +2,6 @@ package se.afshin.yavari.kafka.operator.backup;
 
 import io.fabric8.kubernetes.api.model.ConfigMap;
 import io.fabric8.kubernetes.api.model.OwnerReference;
-import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.CronJob;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.javaoperatorsdk.operator.api.reconciler.Cleaner;
@@ -18,6 +17,8 @@ import se.afshin.yavari.kafka.operator.crd.BackupStorageSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaBackup;
 import se.afshin.yavari.kafka.operator.crd.KafkaBackupStatus;
 import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
+import se.afshin.yavari.kafka.operator.infra.OperatorAuditLog;
+import se.afshin.yavari.kafka.operator.infra.OwnerReferences;
 import se.afshin.yavari.kafka.operator.infra.ReconcileContext;
 import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 
@@ -56,7 +57,9 @@ public class KafkaBackupReconciler implements Reconciler<KafkaBackup>, Cleaner<K
     private UpdateControl<KafkaBackup> reconcileInner(KafkaBackup cr) {
         String name = cr.getMetadata().getName();
         String ns = cr.getMetadata().getNamespace();
+        String resource = "KafkaBackup/" + ns + "/" + name;
         LOG.infof("Reconciling KafkaBackup %s/%s", ns, name);
+        OperatorAuditLog.emit("backup.reconcile", resource, "START", String.valueOf(cr.getMetadata().getGeneration()));
 
         KafkaBackupStatus status = cr.getStatus() != null ? cr.getStatus() : new KafkaBackupStatus();
         status.setPhase(KafkaBackupStatus.Phase.RECONCILING);
@@ -114,10 +117,14 @@ public class KafkaBackupReconciler implements Reconciler<KafkaBackup>, Cleaner<K
             status.setPhase(cr.getSpec().isSuspend()
                     ? KafkaBackupStatus.Phase.SUSPENDED : KafkaBackupStatus.Phase.SCHEDULED);
             status.setMessage(null);
+            OperatorAuditLog.emit("backup.reconcile", resource, "ALLOWED",
+                    String.valueOf(cr.getMetadata().getGeneration()));
         } catch (Exception e) {
             LOG.errorf("KafkaBackup %s/%s failed: %s", ns, name, e.getMessage());
             status.setPhase(KafkaBackupStatus.Phase.FAILED);
             status.setMessage(e.getMessage());
+            OperatorAuditLog.emit("backup.reconcile", resource, "DENIED",
+                    String.valueOf(cr.getMetadata().getGeneration()));
         }
 
         cr.setStatus(status);
@@ -128,8 +135,10 @@ public class KafkaBackupReconciler implements Reconciler<KafkaBackup>, Cleaner<K
     public DeleteControl cleanup(KafkaBackup cr, Context<KafkaBackup> ctx) {
         // ConfigMap + CronJob (and its Jobs/Pods) cascade via ownerReferences. Backups
         // already written to object storage are intentionally left untouched.
-        LOG.infof("KafkaBackup %s/%s deleted", cr.getMetadata().getNamespace(),
-                cr.getMetadata().getName());
+        String ns = cr.getMetadata().getNamespace();
+        String name = cr.getMetadata().getName();
+        OperatorAuditLog.emit("backup.delete", "KafkaBackup/" + ns + "/" + name, "ALLOWED", null);
+        LOG.infof("KafkaBackup %s/%s deleted", ns, name);
         return DeleteControl.defaultDelete();
     }
 
@@ -163,13 +172,6 @@ public class KafkaBackupReconciler implements Reconciler<KafkaBackup>, Cleaner<K
     }
 
     static OwnerReference ownerRef(KafkaBackup cr) {
-        return new OwnerReferenceBuilder()
-                .withApiVersion(cr.getApiVersion())
-                .withKind(cr.getKind())
-                .withName(cr.getMetadata().getName())
-                .withUid(cr.getMetadata().getUid())
-                .withController(true)
-                .withBlockOwnerDeletion(true)
-                .build();
+        return OwnerReferences.of(cr);
     }
 }

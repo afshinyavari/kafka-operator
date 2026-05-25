@@ -139,7 +139,17 @@ public class ApicurioDeploymentBuilder {
                     .endHttpGet()
                     .withInitialDelaySeconds(10)
                     .withPeriodSeconds(10)
+                    .withFailureThreshold(6)
                 .endReadinessProbe()
+                .withNewLivenessProbe()
+                    .withNewHttpGet()
+                        .withPath("/health/live")
+                        .withNewPort(REGISTRY_PORT)
+                    .endHttpGet()
+                    .withInitialDelaySeconds(30)
+                    .withPeriodSeconds(20)
+                    .withFailureThreshold(3)
+                .endLivenessProbe()
                 .withSecurityContext(SecurityContextDefaults.containerDefaults())
                 .build();
 

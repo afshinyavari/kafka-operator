@@ -85,6 +85,7 @@ public class KafkaProxyOrchestrator {
     @Inject ServiceExportManager serviceExportManager;
     @Inject OptionalResourceApplier optionalApplier;
     @Inject MetricsResources metricsResources;
+    @Inject se.afshin.yavari.kafka.operator.infra.PdbBuilder pdbBuilder;
 
     /** Reconciles the proxy described by {@code cr.spec.proxy}. Returns the new sub-status. */
     public KafkaProxyStatus reconcile(KafkaCluster cr, String namespace, String localClusterId) {
@@ -220,6 +221,10 @@ public class KafkaProxyOrchestrator {
                 deleteProxyMetrics(name, namespace);
             }
 
+            pdbBuilder.apply(name, namespace,
+                    ProxyDeploymentBuilder.labels(name), ProxyDeploymentBuilder.labels(name),
+                    syn.getSpec().getReplicas(), cr);
+
             if (mcsEnabled) {
                 serviceExportManager.apply(name, namespace);
             }
@@ -267,6 +272,7 @@ public class KafkaProxyOrchestrator {
         client.apps().deployments().inNamespace(namespace).withName(name).delete();
         client.services().inNamespace(namespace).withName(name).delete();
         deleteProxyMetrics(name, namespace);
+        pdbBuilder.delete(name, namespace);
         boolean mcsEnabled = cr.getSpec().getClusters() != null
                 && cr.getSpec().getClusters().size() > 1;
         if (mcsEnabled) {

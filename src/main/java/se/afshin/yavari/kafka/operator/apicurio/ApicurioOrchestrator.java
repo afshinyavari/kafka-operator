@@ -5,7 +5,6 @@ import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.GenericKubernetesResource;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.OwnerReference;
-import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.Service;
 import io.fabric8.kubernetes.api.model.Volume;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
@@ -28,6 +27,7 @@ import se.afshin.yavari.kafka.operator.externalaccess.HttpIngressBuilder;
 import se.afshin.yavari.kafka.operator.externalaccess.HttpRouteBuilder;
 import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
 import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
+import se.afshin.yavari.kafka.operator.infra.OwnerReferences;
 import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 import se.afshin.yavari.kafka.operator.infra.ServiceExportManager;
 import se.afshin.yavari.kafka.operator.proxy.ExternalAccessResolution;
@@ -36,6 +36,7 @@ import se.afshin.yavari.kafka.operator.rolling.CrossClusterRollCoordinator;
 import se.afshin.yavari.kafka.operator.rolling.RollTracker;
 
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
@@ -80,6 +81,8 @@ public class ApicurioOrchestrator {
     @Inject SecretRevisionTracker secretRevisionTracker;
     @Inject ServiceExportManager serviceExportManager;
     @Inject OptionalResourceApplier optionalApplier;
+    @Inject se.afshin.yavari.kafka.operator.infra.MetricsResources metricsResources;
+    @Inject se.afshin.yavari.kafka.operator.infra.PdbBuilder pdbBuilder;
     @Inject CrossClusterRollCoordinator rollCoordinator;
     @Inject RollTracker rollTracker;
 
@@ -242,6 +245,13 @@ public class ApicurioOrchestrator {
                 status.setMessage("Registry ready; waiting for LoadBalancer ingress address");
             }
 
+            applyOrDeleteMetrics(cr, namespace);
+
+            pdbBuilder.apply(APICURIO_NAME + "-registry", namespace,
+                    ApicurioDeploymentBuilder.labels(APICURIO_NAME),
+                    ApicurioDeploymentBuilder.labels(APICURIO_NAME),
+                    spec.getReplicas(), cr);
+
             int ready = readyReplicas(APICURIO_NAME + "-registry", namespace);
             if (ready >= spec.getReplicas()) {
                 status.setPhase(ApicurioRegistryStatus.Phase.READY);
@@ -270,6 +280,12 @@ public class ApicurioOrchestrator {
         client.services().inNamespace(namespace).withName(proxySvcName).delete();
         optionalApplier.deleteIngress(proxySvcName, namespace);
         optionalApplier.deleteHttpRoute(proxySvcName, namespace);
+        client.services().inNamespace(namespace)
+              .withName(name + se.afshin.yavari.kafka.operator.infra.MetricsResources.METRICS_SUFFIX)
+              .delete();
+        optionalApplier.deleteServiceMonitor(
+                name + se.afshin.yavari.kafka.operator.infra.MetricsResources.METRICS_SUFFIX, namespace);
+        pdbBuilder.delete(name + "-registry", namespace);
         boolean mcsEnabled = cr.getSpec().getClusters() != null
                 && cr.getSpec().getClusters().size() > 1;
         if (mcsEnabled) {
@@ -328,14 +344,33 @@ public class ApicurioOrchestrator {
     }
 
     private List<OwnerReference> clusterOwnerRef(KafkaCluster cr) {
-        return List.of(new OwnerReferenceBuilder()
-                .withApiVersion(cr.getApiVersion())
-                .withKind(cr.getKind())
-                .withName(cr.getMetadata().getName())
-                .withUid(cr.getMetadata().getUid())
-                .withController(true)
-                .withBlockOwnerDeletion(true)
-                .build());
+        return OwnerReferences.singleton(cr);
+    }
+
+    /** Apply or remove the Apicurio-metrics Service + ServiceMonitor based on
+     *  {@code KafkaCluster.spec.metricsConfig}. Apicurio exposes {@code /metrics} on the
+     *  registry HTTP port (8080), no separate JMX exporter required. */
+    private void applyOrDeleteMetrics(KafkaCluster cr, String namespace) {
+        String baseName = APICURIO_NAME;
+        Map<String, String> labels = ApicurioDeploymentBuilder.labels(APICURIO_NAME);
+        if (cr.getSpec().getMetricsConfig() == null) {
+            client.services().inNamespace(namespace)
+                  .withName(baseName + se.afshin.yavari.kafka.operator.infra.MetricsResources.METRICS_SUFFIX)
+                  .delete();
+            optionalApplier.deleteServiceMonitor(
+                    baseName + se.afshin.yavari.kafka.operator.infra.MetricsResources.METRICS_SUFFIX, namespace);
+            return;
+        }
+        List<OwnerReference> owner = clusterOwnerRef(cr);
+        io.fabric8.kubernetes.api.model.Service svc = metricsResources.metricsService(
+                baseName, namespace, labels, labels, "http",
+                ApicurioDeploymentBuilder.REGISTRY_PORT, owner);
+        client.services().inNamespace(namespace).resource(svc).serverSideApply();
+        io.fabric8.kubernetes.api.model.GenericKubernetesResource sm = metricsResources.serviceMonitor(
+                baseName, namespace, labels, labels, "http",
+                se.afshin.yavari.kafka.operator.infra.MetricsResources.DEFAULT_INTERVAL,
+                "/metrics", owner);
+        optionalApplier.applyServiceMonitor(sm, namespace);
     }
 
     private void attachOwnerRef(Deployment dep, KafkaCluster cr) {
