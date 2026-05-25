@@ -1,5 +1,7 @@
 package se.afshin.yavari.kafka.editor.admin.api;
 
+import io.quarkus.security.Authenticated;
+
 import java.util.ArrayList;
 import java.util.List;
 
@@ -34,6 +36,7 @@ import se.afshin.yavari.kafka.editor.api.ConnectionConfig;
 import org.jboss.resteasy.reactive.RestStreamElementType;
 
 /** Message browsing, live tail, search, produce and replay endpoints. */
+@Authenticated
 @Path("/api/admin/messages")
 public class MessageResource {
 

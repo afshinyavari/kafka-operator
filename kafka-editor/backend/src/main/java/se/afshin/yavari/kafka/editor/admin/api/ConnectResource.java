@@ -1,5 +1,7 @@
 package se.afshin.yavari.kafka.editor.admin.api;
 
+import io.quarkus.security.Authenticated;
+
 import com.fasterxml.jackson.databind.JsonNode;
 
 import io.smallrye.common.annotation.Blocking;
@@ -26,6 +28,7 @@ import se.afshin.yavari.kafka.editor.admin.service.ConnectProxyService;
  * Kafka Connect endpoints. With no Connect URL configured, every call returns
  * {@code capability: not_configured} (HTTP 200) instead of failing.
  */
+@Authenticated
 @Path("/api/admin/connect")
 public class ConnectResource {
 

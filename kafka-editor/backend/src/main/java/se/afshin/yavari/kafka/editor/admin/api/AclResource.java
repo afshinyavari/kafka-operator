@@ -1,5 +1,7 @@
 package se.afshin.yavari.kafka.editor.admin.api;
 
+import io.quarkus.security.Authenticated;
+
 import java.util.List;
 
 import io.smallrye.common.annotation.Blocking;
@@ -26,6 +28,7 @@ import se.afshin.yavari.kafka.editor.api.ConnectionConfig;
  * Native Kafka ACL endpoints. A broker without an authorizer yields a
  * {@code capability: unsupported} response (HTTP 200) rather than an error.
  */
+@Authenticated
 @Path("/api/admin/acls")
 public class AclResource {
 

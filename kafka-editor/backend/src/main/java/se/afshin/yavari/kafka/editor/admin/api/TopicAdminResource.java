@@ -1,5 +1,7 @@
 package se.afshin.yavari.kafka.editor.admin.api;
 
+import io.quarkus.security.Authenticated;
+
 import java.util.List;
 
 import io.smallrye.common.annotation.Blocking;
@@ -28,6 +30,7 @@ import se.afshin.yavari.kafka.editor.admin.service.TopicAdminService;
 import se.afshin.yavari.kafka.editor.api.ConnectionConfig;
 
 /** Topic browsing, lifecycle and metrics endpoints. */
+@Authenticated
 @Path("/api/admin/topics")
 public class TopicAdminResource {
 

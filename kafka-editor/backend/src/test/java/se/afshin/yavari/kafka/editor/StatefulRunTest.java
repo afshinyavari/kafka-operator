@@ -8,9 +8,11 @@ import static org.hamcrest.Matchers.nullValue;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.security.TestSecurity;
 
 /** End-to-end test of a stateful topology (group-by-key → count). */
 @QuarkusTest
+@TestSecurity(user = "test")
 class StatefulRunTest {
 
     private static final String TOPOLOGY = """

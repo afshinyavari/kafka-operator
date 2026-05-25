@@ -1,5 +1,7 @@
 package se.afshin.yavari.kafka.editor.admin.api;
 
+import io.quarkus.security.Authenticated;
+
 import java.util.List;
 
 import io.smallrye.common.annotation.Blocking;
@@ -25,6 +27,7 @@ import se.afshin.yavari.kafka.editor.admin.service.GroupService;
 import se.afshin.yavari.kafka.editor.api.ConnectionConfig;
 
 /** Consumer-group endpoints: list, lag, reset-offsets, delete. */
+@Authenticated
 @Path("/api/admin/groups")
 public class GroupResource {
 

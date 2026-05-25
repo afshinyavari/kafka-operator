@@ -1,5 +1,7 @@
 package se.afshin.yavari.kafka.editor.admin.api;
 
+import io.quarkus.security.Authenticated;
+
 import io.smallrye.common.annotation.Blocking;
 
 import jakarta.inject.Inject;
@@ -15,6 +17,7 @@ import se.afshin.yavari.kafka.editor.admin.dto.ClusterOverview;
 import se.afshin.yavari.kafka.editor.admin.service.ClusterService;
 
 /** Cluster overview for the Cluster view's dashboard. */
+@Authenticated
 @Path("/api/admin/cluster")
 public class ClusterResource {
 

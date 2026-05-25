@@ -1,5 +1,7 @@
 package se.afshin.yavari.kafka.editor.api;
 
+import io.quarkus.security.Authenticated;
+
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -24,6 +26,7 @@ import jakarta.ws.rs.core.Response;
  * arbitrary, user-configured registry URL without CORS — search and read, plus
  * artifact create / update / delete.
  */
+@Authenticated
 @Path("/api/registry")
 public class RegistryResource {
 

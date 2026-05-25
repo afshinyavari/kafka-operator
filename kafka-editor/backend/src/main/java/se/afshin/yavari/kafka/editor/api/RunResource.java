@@ -1,5 +1,7 @@
 package se.afshin.yavari.kafka.editor.api;
 
+import io.quarkus.security.Authenticated;
+
 import java.time.Duration;
 
 import io.smallrye.mutiny.Multi;
@@ -21,6 +23,7 @@ import se.afshin.yavari.kafka.editor.run.RunService;
 import org.jboss.resteasy.reactive.RestStreamElementType;
 
 /** REST API for running topologies and streaming their metrics. */
+@Authenticated
 @Path("/api")
 public class RunResource {
 

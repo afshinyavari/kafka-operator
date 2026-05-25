@@ -7,9 +7,11 @@ import static org.hamcrest.Matchers.nullValue;
 import org.junit.jupiter.api.Test;
 
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.security.TestSecurity;
 
 /** End-to-end test of POST /api/run in test mode. */
 @QuarkusTest
+@TestSecurity(user = "test")
 class RunResourceTest {
 
     /** A Source -> Filter (value >= 5) -> Sink topology. */
