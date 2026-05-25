@@ -6,6 +6,7 @@ import se.afshin.yavari.kafka.operator.crd.MirrorMaker2;
 import se.afshin.yavari.kafka.operator.crd.MirrorMaker2Spec;
 import se.afshin.yavari.kafka.operator.crd.Mm2FlowConfig;
 import se.afshin.yavari.kafka.operator.crd.Mm2SchemaSyncConfig;
+import se.afshin.yavari.kafka.operator.endpoint.ResolvedKafkaEndpoint;
 
 import java.util.List;
 
@@ -27,10 +28,10 @@ class Mm2ConfigBuilderTest {
         MirrorMaker2Spec spec = new MirrorMaker2Spec();
         spec.setFlow(new Mm2FlowConfig());
         spec.getFlow().setReplicationFactor(3);
-        ResolvedEndpoint src = new ResolvedEndpoint(
+        ResolvedKafkaEndpoint src = new ResolvedKafkaEndpoint(
                 "kafka-proxy.kafka.svc.cluster.local:9094",
                 "kafka-operator-client-tls", null, null, null, false);
-        ResolvedEndpoint tgt = new ResolvedEndpoint(
+        ResolvedKafkaEndpoint tgt = new ResolvedKafkaEndpoint(
                 "kafka-proxy.dr.svc.cluster.local:9094",
                 "kafka-operator-client-tls", null, null, null, false);
 
@@ -63,12 +64,12 @@ class Mm2ConfigBuilderTest {
     void externalSourceSaslSslEmitsSaslConfig() {
         MirrorMaker2Spec spec = new MirrorMaker2Spec();
         spec.setFlow(new Mm2FlowConfig());
-        ResolvedEndpoint src = new ResolvedEndpoint(
+        ResolvedKafkaEndpoint src = new ResolvedKafkaEndpoint(
                 "broker.external.example.com:9093",
                 "external-tls",
-                new ResolvedEndpoint.Mm2Sasl("SCRAM-SHA-512", "ext-creds"),
+                new ResolvedKafkaEndpoint.Sasl("SCRAM-SHA-512", "ext-creds"),
                 null, null, false);
-        ResolvedEndpoint tgt = new ResolvedEndpoint(
+        ResolvedKafkaEndpoint tgt = new ResolvedKafkaEndpoint(
                 "kafka-proxy.kafka.svc.cluster.local:9094",
                 "kafka-operator-client-tls", null, null, null, false);
 
@@ -88,12 +89,12 @@ class Mm2ConfigBuilderTest {
         sync.setApplyToTopics(List.of("events\\..*"));
         spec.setSchemaSync(sync);
 
-        ResolvedEndpoint src = new ResolvedEndpoint(
+        ResolvedKafkaEndpoint src = new ResolvedKafkaEndpoint(
                 "kafka-proxy.src.svc.cluster.local:9094",
                 "tls-src", null,
                 "http://apicurio-rbac-proxy.src.svc.cluster.local:8080",
                 null, false);
-        ResolvedEndpoint tgt = new ResolvedEndpoint(
+        ResolvedKafkaEndpoint tgt = new ResolvedKafkaEndpoint(
                 "kafka-proxy.dst.svc.cluster.local:9094",
                 "tls-dst", null,
                 "http://apicurio-rbac-proxy.dst.svc.cluster.local:8080",
@@ -122,9 +123,9 @@ class Mm2ConfigBuilderTest {
         spec.setSchemaSync(sync);
 
         // External source registry needs no auth; managed target sits behind the RBAC proxy.
-        ResolvedEndpoint src = new ResolvedEndpoint(
+        ResolvedKafkaEndpoint src = new ResolvedKafkaEndpoint(
                 "broker:9092", null, null, "http://reg.src:8080", null, false);
-        ResolvedEndpoint tgt = new ResolvedEndpoint(
+        ResolvedKafkaEndpoint tgt = new ResolvedKafkaEndpoint(
                 "kafka-proxy.kafka.svc.cluster.local:9094", "tls", null,
                 "http://apicurio-rbac-proxy.kafka.svc.cluster.local:8082",
                 "mm2-schema-registry-oauth", false);
@@ -141,9 +142,9 @@ class Mm2ConfigBuilderTest {
     void schemaSyncDisabledDoesNotEmitSmtEvenWhenRegistriesPresent() {
         MirrorMaker2Spec spec = new MirrorMaker2Spec();
         spec.setFlow(new Mm2FlowConfig());
-        ResolvedEndpoint src = new ResolvedEndpoint(
+        ResolvedKafkaEndpoint src = new ResolvedKafkaEndpoint(
                 "broker:9092", null, null, "http://reg.src", null, false);
-        ResolvedEndpoint tgt = new ResolvedEndpoint(
+        ResolvedKafkaEndpoint tgt = new ResolvedKafkaEndpoint(
                 "broker:9092", null, null, "http://reg.dst", null, false);
 
         String props = builder.build(cr(spec), src, tgt);
@@ -156,7 +157,7 @@ class Mm2ConfigBuilderTest {
         Mm2FlowConfig flow = new Mm2FlowConfig();
         flow.setFlowName("custom-flow");
         spec.setFlow(flow);
-        ResolvedEndpoint ep = new ResolvedEndpoint("b:9092", null, null, null, null, false);
+        ResolvedKafkaEndpoint ep = new ResolvedKafkaEndpoint("b:9092", null, null, null, null, false);
 
         String props = builder.build(cr(spec), ep, ep);
 
@@ -171,7 +172,7 @@ class Mm2ConfigBuilderTest {
         Mm2FlowConfig flow = new Mm2FlowConfig();
         flow.setEmitHeartbeats(false);
         spec.setFlow(flow);
-        ResolvedEndpoint ep = new ResolvedEndpoint("b:9092", null, null, null, null, false);
+        ResolvedKafkaEndpoint ep = new ResolvedKafkaEndpoint("b:9092", null, null, null, null, false);
 
         String props = builder.build(cr(spec), ep, ep);
 
@@ -188,7 +189,7 @@ class Mm2ConfigBuilderTest {
                 "source->target.refresh.topics.interval.seconds", "30",
                 "custom.key", "custom-value"));
         spec.setFlow(flow);
-        ResolvedEndpoint ep = new ResolvedEndpoint("b:9092", null, null, null, null, false);
+        ResolvedKafkaEndpoint ep = new ResolvedKafkaEndpoint("b:9092", null, null, null, null, false);
 
         String props = builder.build(cr(spec), ep, ep);
 

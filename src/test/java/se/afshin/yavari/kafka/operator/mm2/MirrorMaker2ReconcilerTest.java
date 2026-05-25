@@ -5,9 +5,9 @@ import org.junit.jupiter.api.Test;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterRef;
 import se.afshin.yavari.kafka.operator.crd.MirrorMaker2;
 import se.afshin.yavari.kafka.operator.crd.MirrorMaker2Spec;
-import se.afshin.yavari.kafka.operator.crd.Mm2Endpoint;
-import se.afshin.yavari.kafka.operator.crd.Mm2ExternalEndpoint;
-import se.afshin.yavari.kafka.operator.crd.Mm2SchemaRegistryRef;
+import se.afshin.yavari.kafka.operator.crd.KafkaEndpoint;
+import se.afshin.yavari.kafka.operator.crd.KafkaEndpointExternal;
+import se.afshin.yavari.kafka.operator.crd.KafkaEndpointSchemaRegistryRef;
 import se.afshin.yavari.kafka.operator.crd.SchemaRegistryType;
 
 import java.lang.reflect.Method;
@@ -19,7 +19,7 @@ class MirrorMaker2ReconcilerTest {
 
     private final MirrorMaker2Reconciler reconciler = new MirrorMaker2Reconciler();
 
-    private MirrorMaker2 cr(Mm2Endpoint source, Mm2Endpoint target) {
+    private MirrorMaker2 cr(KafkaEndpoint source, KafkaEndpoint target) {
         MirrorMaker2 cr = new MirrorMaker2();
         cr.setMetadata(new ObjectMetaBuilder().withName("mm2").withNamespace("kafka").build());
         MirrorMaker2Spec spec = new MirrorMaker2Spec();
@@ -29,25 +29,25 @@ class MirrorMaker2ReconcilerTest {
         return cr;
     }
 
-    private Mm2Endpoint managed(String name) {
-        Mm2Endpoint ep = new Mm2Endpoint();
+    private KafkaEndpoint managed(String name) {
+        KafkaEndpoint ep = new KafkaEndpoint();
         KafkaClusterRef r = new KafkaClusterRef();
         r.setName(name);
         ep.setKafkaClusterRef(r);
         return ep;
     }
 
-    private Mm2Endpoint external(String bootstrap) {
-        Mm2Endpoint ep = new Mm2Endpoint();
-        Mm2ExternalEndpoint x = new Mm2ExternalEndpoint();
+    private KafkaEndpoint external(String bootstrap) {
+        KafkaEndpoint ep = new KafkaEndpoint();
+        KafkaEndpointExternal x = new KafkaEndpointExternal();
         x.setBootstrap(bootstrap);
         ep.setExternal(x);
         return ep;
     }
 
-    private Mm2Endpoint externalWithConfluent(String bootstrap) {
-        Mm2Endpoint ep = external(bootstrap);
-        Mm2SchemaRegistryRef sr = new Mm2SchemaRegistryRef();
+    private KafkaEndpoint externalWithConfluent(String bootstrap) {
+        KafkaEndpoint ep = external(bootstrap);
+        KafkaEndpointSchemaRegistryRef sr = new KafkaEndpointSchemaRegistryRef();
         sr.setUrl("https://reg");
         sr.setType(SchemaRegistryType.CONFLUENT);
         ep.getExternal().setSchemaRegistry(sr);

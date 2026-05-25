@@ -755,6 +755,123 @@ then set `target.schemaRegistryAuthSecretRef: mm2-schema-registry-oauth` on the 
 | Schemas appear on target but consumers fail | Target registry assigns different globalIds (expected — the SMT rewrites the envelope). If a consumer caches the source globalId out-of-band, it will miss. | Stop bypassing the envelope. The SMT is the only safe way to mirror when both ends use Apicurio. |
 | Reference resolution loops or hits `maxDepth` | Schema graph cycle in source registry (data bug) | Fix the source registry; the cycle guard prevents runaway DFS. |
 
+## Kafka Connect (KafkaConnect + KafkaConnector)
+
+The `KafkaConnect` CRD provisions a distributed-mode Connect worker cluster; `KafkaConnector` CRs describe individual connectors that run on it. See [api-reference.md#kafkaconnect](api-reference.md#kafkaconnect) for the full CRD reference.
+
+### Deploying a Connect cluster
+
+```yaml
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaConnect
+metadata:
+  name: my-connect
+  namespace: kafka
+spec:
+  image: my-org/connect-debezium:v1.0   # custom image with plugins baked into /opt/kafka/connect-plugins/baked
+  replicas: 3
+  kafkaClusterRef:
+    kafkaClusterRef:
+      name: my-kafka
+  metricsConfig: {}
+  worker:
+    internalReplicationFactor: 3
+```
+
+The reconciler emits a Deployment, a `<name>-connect` ClusterIP Service exposing port 8083, three internal `KafkaTopic` CRs (`connect-configs.my-connect`, `connect-offsets.my-connect`, `connect-status.my-connect`), and (when `metricsConfig` is set) a `<name>-metrics` Service + ServiceMonitor on port 9101.
+
+The REST endpoint URL is published as `status.url` — `http://<name>-connect.<ns>.svc.cluster.local:8083` — and consumed by sibling `KafkaConnector` reconcilers and kafka-editor.
+
+### Plugin delivery
+
+Four channels, composable:
+
+- **Custom image** (recommended for production) — bake JARs into `/opt/kafka/connect-plugins/baked` in a derived image and point `spec.image` at it. The operator-shipped `connect:dev` is just kafka-ubi + that landing zone; nothing else.
+- **PVC** — `spec.pluginSources.pluginsVolumeClaim: <pvc-name>`. The user populates the PVC.
+- **ConfigMap** — `spec.pluginSources.pluginConfigMaps: [debezium-postgres, ...]`. Each mounts at `/opt/kafka/connect-plugins/cm-<name>/`. ~1 MiB cap.
+- **Secret** — `spec.pluginSources.pluginSecrets: [signed-bundle, ...]`. Same shape as ConfigMap; rotations roll the worker pods automatically.
+
+A missing PVC/ConfigMap/Secret surfaces as `phase=FAILED` with a precise message like `spec.pluginSources.pluginConfigMaps[2]='debezium' not found in namespace kafka`.
+
+### Deploying a connector
+
+```yaml
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaConnector
+metadata:
+  name: orders-pg-source
+  namespace: kafka
+spec:
+  connectClusterRef:
+    name: my-connect
+  connectorClass: io.debezium.connector.postgresql.PostgresConnector
+  tasksMax: 1
+  state: running
+  config:
+    database.hostname: pg.svc.cluster.local
+    database.port: "5432"
+    database.dbname: orders
+    topic.prefix: orders
+  configFrom:
+    secretRef: orders-pg-credentials
+    prefix: "database."
+  autoRestart:
+    enabled: true
+    maxRetries: 3
+```
+
+`configFrom` reads the named Secret and merges its keys (with the optional `prefix`) into the desired config in the operator before PUT. Secret rotation triggers re-PUT automatically. Inline `config` keys cannot duplicate `name` / `connector.class` / `tasks.max` — CEL rejects.
+
+### Observing connector status
+
+```bash
+kubectl get kcon orders-pg-source
+# NAME              PHASE   CONNECTOR  WORKER       TASKS
+# orders-pg-source  Ready   RUNNING    10.0.0.5:8083  1/1
+
+kubectl get kcon orders-pg-source -o yaml | yq '.status'
+```
+
+`status.phase` mirrors Strimzi: `Ready` / `Reconciling` / `Failed` / `Paused` / `Stopped`. Tasks include the truncated stack trace for failed tasks (~2 KiB cap). `status.observedConfigHash` is the drift-detection cache.
+
+### Pause, resume, stop
+
+```bash
+kubectl patch kcon orders-pg-source --type=merge -p '{"spec":{"state":"paused"}}'
+kubectl patch kcon orders-pg-source --type=merge -p '{"spec":{"state":"running"}}'
+```
+
+`stopped` releases task slots on the worker (Connect 3.5+). `paused` keeps slots assigned but quiesced.
+
+### External drift recovery
+
+The operator owns the connector config. If someone PUTs a different config directly against the REST API, the next reconcile (default 15s) reverts to spec. The hash cache (`status.observedConfigHash`) skips routine PUTs when nothing has changed.
+
+Known gap: out-of-band changes to *only* a sensitive value (password, token, etc.) cannot be detected from REST — Connect masks them. The spec remains the source of truth; the operator re-PUTs on operator pod restart.
+
+### Restarting a failed connector
+
+```bash
+# Manual one-shot:
+curl -X POST 'http://my-connect-connect.kafka.svc.cluster.local:8083/connectors/orders-pg-source/restart?includeTasks=true&onlyFailed=true'
+
+# Or set spec.autoRestart.enabled=true to have the operator do this automatically
+# (up to spec.autoRestart.maxRetries times; budget resets on operator pod restart).
+```
+
+### groupId collision
+
+Two `KafkaConnect` CRs targeting the same Kafka cluster with the same effective `group.id` (default `connect-<metadata.name>`, or an explicit `spec.groupId`) would silently form one Connect worker group across two Deployments. The operator detects this and the second CR stays `phase=FAILED` with a message naming the conflicting CR. Set a unique `spec.groupId` on one of them.
+
+### Upgrading the worker image
+
+```bash
+make reload-connect-image   # rebuilds connect:dev, kind load, kubectl rollout restart on every KafkaConnect Deployment
+```
+
+The Deployment's `config-hash` annotation flips on properties/Secret/plugin changes but not on image changes — the explicit rollout restart bridges that gap.
+
+
 ### Decommissioning
 
 Delete the CR. Owner-refs cascade the Deployment, ConfigMap, and the three internal KafkaTopic CRs. ServiceExport (MCS mode) is cleaned up by `cleanup()`.
@@ -908,12 +1025,12 @@ data-plane workload owned by the cluster:
 | Kroxylicious proxy | `kafka-proxy-metrics` | `metrics` → 9190 | Kroxylicious native `management.endpoints.prometheus` (no JMX) |
 | Cruise Control | `cruise-control-metrics` | `metrics` → 9101 | `jmx_prometheus_javaagent` with an operator-bundled JMX config |
 
-`MirrorMaker2` is a separate CRD and is gated on its own `MirrorMaker2.spec.metricsConfig`
+`MirrorMaker2` and `KafkaConnect` are separate CRDs gated on their own `spec.metricsConfig`
 (see api-reference). When set the operator creates `<mm2-name>-metrics` on port 9101
 (JMX exporter, operator-bundled config).
 
 `configMapRef` is consulted **only** for the broker JMX exporter; for the proxy, Cruise
-Control, and MirrorMaker2 the operator ships a fixed exporter config — presence of the
+Control, MirrorMaker2, and KafkaConnect the operator ships a fixed exporter config — presence of the
 `metricsConfig` field alone enables them.
 
 `ServiceMonitor` is applied via `OptionalResourceApplier`, which silently no-ops when the

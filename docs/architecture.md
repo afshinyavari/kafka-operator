@@ -751,6 +751,7 @@ MCS gives single-K8s-cluster fault tolerance for the same flow.
 ### Where this lives
 
 - `src/main/java/se/afshin/yavari/kafka/operator/mm2/` — reconciler + builders
+- `src/main/java/se/afshin/yavari/kafka/operator/endpoint/` — shared `KafkaEndpointResolver` + `ResolvedKafkaEndpoint` (also consumed by KafkaConnect)
 - `src/main/java/se/afshin/yavari/kafka/operator/crd/MirrorMaker2*.java` — CRD classes
 - `schema-sync-smt/` — Connect SMT JAR (shaded with Jackson); also carries
   `OAuthTokenProvider` and the `Mm2MirrorProbe` e2e helper
@@ -760,6 +761,92 @@ MCS gives single-K8s-cluster fault tolerance for the same flow.
   (external source → managed target) exercising the SMT's OAuth write path
 - See [api-reference.md#mirrormaker2](api-reference.md#mirrormaker2) for the
   full CRD reference.
+
+## Kafka Connect (KafkaConnect + KafkaConnector)
+
+The operator provides general-purpose distributed-mode Kafka Connect as two
+sibling CRDs. `KafkaConnect` provisions the worker cluster; `KafkaConnector`
+manages an individual connector running on a parent `KafkaConnect`. The model
+is Strimzi-style — one CR per connector — but the worker is **declarative-first**:
+the operator is the source of truth, and `KafkaConnectorReconciler` reconciles
+out-of-band edits made directly against the REST API back to spec.
+
+```
+KafkaConnect CR ─────► Deployment ──► <name>-connect Service (REST :8083)
+                  │                          ▲
+                  │                          │ REST PUT/GET/DELETE
+                  │                          │
+                  ├──► ConfigMap (connect-distributed.properties + plugin.path)
+                  │
+                  └──► 3 KafkaTopic CRs (configs/offsets/status)
+
+KafkaConnector CR ─► reads parent status.url ─► REST sync (config, state, status)
+```
+
+### Worker cluster (KafkaConnect)
+
+`KafkaConnectReconciler` mirrors the MM2 reconciler structure (thin orchestrator
++ builders per CLAUDE.md rule). Endpoint resolution shares
+`KafkaEndpointResolver` with MM2; the worker attaches to a single Kafka cluster
+through its proxy when the ref is managed, or directly when external. The
+`ConnectGroupIdGuard` refuses to apply when another KafkaConnect CR shares the
+same effective `group.id` against the same Kafka cluster — silently forming one
+Connect group across two Deployments is almost always a misconfiguration.
+
+Plugin delivery is composable across three explicit channels plus the
+operator-shipped `/opt/kafka/connect-plugins/baked` dir that every image
+carries:
+
+| Channel | Mount | Use case |
+|---|---|---|
+| Custom image | `/opt/kafka/connect-plugins/baked` | Production — JARs pinned in an OCI digest, multi-cluster friendly |
+| PVC | `/opt/kafka/connect-plugins/pvc/` | Dev / shared connector libs |
+| ConfigMap | `/opt/kafka/connect-plugins/cm-<name>/` | Small SMT JARs |
+| Secret | `/opt/kafka/connect-plugins/secret-<name>/` | Small + sensitive (e.g. signed plugin bundles) |
+
+`ConnectPluginResolver` confirms every referenced PVC/ConfigMap/Secret exists
+before reconcile completes — missing references surface as `FAILED` with a
+precise message like `pluginConfigMaps[2]='debezium' not found`. Plugin Secret
+revisions feed into the config-hash annotation, so rotating a plugin Secret
+rolls the worker pods automatically.
+
+### Per-connector control (KafkaConnector)
+
+`KafkaConnectorReconciler` is a pure external-system reconciler — there is no
+K8s workload to deploy, just REST calls against the parent KafkaConnect.
+`ConnectEndpointResolver` reads `parent.status.url` and gates on
+`parent.status.phase == READY` before issuing any REST traffic. `ConnectRestClient`
+wraps `java.net.http.HttpClient` with typed DTOs (not raw `JsonNode`s) so the
+reconciler can pattern-match on `ConnectRestException.httpStatus()` for the
+reschedule cadence (409 → 5s, 5xx → 15s, 400 → 60s).
+
+The interesting piece is `ConnectorDriftDetector`. Connect masks sensitive
+values in `GET /config` as `"********"`, which would defeat a naïve
+`Map.equals` (always-PUT or never-detect). The detector combines a cached
+desired-config-hash short-circuit (stored on `status.observedConfigHash`) with
+a structural diff that treats `"********"` as "assume equal" for sensitive
+keys and string-compares `${file:...}` placeholders verbatim. The known v1
+gap is documented: out-of-band changes to *only* a sensitive value can't be
+detected from REST; the spec remains the source of truth and re-PUTs on
+operator restart.
+
+`configFrom.secretRef` lets users keep credentials out of the CR YAML. The
+reconciler reads the Secret at reconcile time and merges its key/value pairs
+into the rendered config map *in the operator* (no Connect-side
+`FileConfigProvider` required). Secret rotation triggers re-PUT via
+`SecretRevisionTracker` folding the Secret's resourceVersion into the
+config-hash.
+
+### Where this lives
+
+- `src/main/java/se/afshin/yavari/kafka/operator/connect/` — both reconcilers + builders + REST client + drift detector + status mapper
+- `src/main/java/se/afshin/yavari/kafka/operator/crd/KafkaConnect*.java`,
+  `KafkaConnector*.java` — CRD classes (sharing `KafkaEndpoint` with MM2)
+- `connect-image/Dockerfile` — kafka-ubi:4.0.0 + the `/opt/kafka/connect-plugins/baked` landing zone
+- `src/main/resources/metrics/connect-jmx-config.yaml` — bundled JMX exporter config (same as MM2)
+- `kind/kafka-connect-smoke-test.sh` — smoke e2e (CRD + reconciler + REST loop + pause/resume + groupId collision)
+- See [api-reference.md#kafkaconnect](api-reference.md#kafkaconnect) and
+  [api-reference.md#kafkaconnector](api-reference.md#kafkaconnector) for the full CRD references.
 
 ## Backup / Restore (KafkaBackup, KafkaRestore, KafkaBackupValidation)
 
@@ -814,6 +901,7 @@ Each workload exposes metrics differently:
 | Kroxylicious proxy | Native — `management.endpoints.prometheus` in the proxy config | 9190 |
 | Cruise Control | `jmx_prometheus_javaagent` + operator-bundled JMX config | 9101 |
 | MirrorMaker2 (Connect) | `jmx_prometheus_javaagent` + operator-bundled JMX config | 9101 |
+| KafkaConnect (workers) | `jmx_prometheus_javaagent` + operator-bundled JMX config | 9101 |
 
 For the brokers, the user supplies the JMX exporter rules because they typically want
 to tune the metric set. For CC and MM2 the MBean set is fixed, so the operator ships a

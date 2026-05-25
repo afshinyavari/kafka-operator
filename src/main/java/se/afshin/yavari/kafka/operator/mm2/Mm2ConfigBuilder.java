@@ -5,6 +5,7 @@ import se.afshin.yavari.kafka.operator.crd.MirrorMaker2;
 import se.afshin.yavari.kafka.operator.crd.MirrorMaker2Spec;
 import se.afshin.yavari.kafka.operator.crd.Mm2FlowConfig;
 import se.afshin.yavari.kafka.operator.crd.Mm2SchemaSyncConfig;
+import se.afshin.yavari.kafka.operator.endpoint.ResolvedKafkaEndpoint;
 
 import java.util.LinkedHashMap;
 import java.util.Map;
@@ -39,7 +40,7 @@ public class Mm2ConfigBuilder {
     /** Schema registry HTTP auth Secrets (token or username/password). */
     public static final String REGISTRY_AUTH_BASE = "/etc/mm2/registry-auth";
 
-    public String build(MirrorMaker2 cr, ResolvedEndpoint source, ResolvedEndpoint target) {
+    public String build(MirrorMaker2 cr, ResolvedKafkaEndpoint source, ResolvedKafkaEndpoint target) {
         MirrorMaker2Spec spec = cr.getSpec();
         Mm2FlowConfig flow = spec.getFlow() != null ? spec.getFlow() : new Mm2FlowConfig();
         String flowName = cr.resolvedFlowName();
@@ -120,7 +121,7 @@ public class Mm2ConfigBuilder {
                 .collect(Collectors.joining("\n")) + "\n";
     }
 
-    private void applySecurity(Map<String, String> p, String alias, ResolvedEndpoint ep) {
+    private void applySecurity(Map<String, String> p, String alias, ResolvedKafkaEndpoint ep) {
         String securityProtocol;
         if (ep.hasTls() && ep.hasSasl()) {
             securityProtocol = "SASL_SSL";

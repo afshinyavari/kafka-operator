@@ -175,6 +175,31 @@ there is no loop and no extra RBAC surface (the proxy principal is already
 in `super.users`). The producer is non-blocking; sink failures fall back to
 the always-on stdout sink and log a rate-limited WARN once per minute.
 
+## Kafka Connect REST endpoint
+
+The `KafkaConnect` CRD ships an unauthenticated plaintext HTTP listener on
+port 8083 (the standard Connect REST port). The `<name>-connect` Service is
+ClusterIP only — never exposed externally. The trust boundary here is
+NetworkPolicy: any in-cluster pod that can reach the Service can call the REST
+API and create / modify / delete connectors. **Confine reach with a
+NetworkPolicy** allowing only the operator pod and (optionally) kafka-editor's
+backend pod when its Connect passthrough is in use.
+
+The operator owns the connector configs through `KafkaConnector` CRs; out-of-band
+PUTs through the REST API are reverted by the next reconcile (default 15s). That
+gives **eventual consistency** with spec, not blanket protection against in-cluster
+mutation — a hostile pod with NetworkPolicy reach can still disrupt connectors
+between reconciles.
+
+The plain Connect worker authenticates to the attached Kafka cluster through
+the existing Kroxylicious proxy + mTLS, so connector-driven Kafka actions are
+subject to the cluster's `KafkaRbac` policy in exactly the same way MM2 is.
+Plugins (downloaded JARs, baked-image classes) run *inside* the worker process
+and effectively share the worker's Kafka identity — treat plugin provenance the
+same way you would any code dependency.
+
+REST TLS + Basic auth on the Connect listener is a v2 follow-up.
+
 ## Threats considered but not (yet) defended
 
 - **Compromised operator pod**: today the operator has full Kafka admin via
@@ -182,6 +207,8 @@ the always-on stdout sink and log a rate-limited WARN once per minute.
   pod compromise gives both. Mitigations to consider: a separate AdminClient
   identity per CR, runtime-detection via the audit log, an admission webhook
   enforcing CR mutation policy.
+- **Kafka Connect REST listener is plaintext-in-cluster**: documented above.
+  Network-policy confinement is the v1 mitigation.
 - **CR mutation by a namespace member with `update` on KafkaRbac**: trusted
   by design (see Trust Boundary). Mitigate with K8s `Role` design — don't
   grant CR update to humans.

@@ -8,6 +8,7 @@ import io.fabric8.kubernetes.api.model.apps.Deployment;
 import org.junit.jupiter.api.Test;
 import se.afshin.yavari.kafka.operator.crd.MirrorMaker2;
 import se.afshin.yavari.kafka.operator.crd.MirrorMaker2Spec;
+import se.afshin.yavari.kafka.operator.endpoint.ResolvedKafkaEndpoint;
 
 import java.util.List;
 
@@ -33,7 +34,7 @@ class Mm2DeploymentBuilderTest {
 
     @Test
     void noTlsNoSaslMinimal() {
-        ResolvedEndpoint ep = new ResolvedEndpoint("b:9092", null, null, null, null, false);
+        ResolvedKafkaEndpoint ep = new ResolvedKafkaEndpoint("b:9092", null, null, null, null, false);
         Deployment dep = builder.build(cr(), ep, ep, 1, "hash1", false, owner());
 
         assertThat(dep.getMetadata().getName()).isEqualTo("my-mm2");
@@ -53,8 +54,8 @@ class Mm2DeploymentBuilderTest {
 
     @Test
     void tlsAddsPerSideInitContainersAndMounts() {
-        ResolvedEndpoint src = new ResolvedEndpoint("b:9094", "src-tls", null, null, null, false);
-        ResolvedEndpoint tgt = new ResolvedEndpoint("c:9094", "tgt-tls", null, null, null, false);
+        ResolvedKafkaEndpoint src = new ResolvedKafkaEndpoint("b:9094", "src-tls", null, null, null, false);
+        ResolvedKafkaEndpoint tgt = new ResolvedKafkaEndpoint("c:9094", "tgt-tls", null, null, null, false);
         Deployment dep = builder.build(cr(), src, tgt, 3, "h", false, owner());
 
         var pod = dep.getSpec().getTemplate().getSpec();
@@ -68,9 +69,9 @@ class Mm2DeploymentBuilderTest {
 
     @Test
     void saslAddsSecretMounts() {
-        ResolvedEndpoint src = new ResolvedEndpoint("b:9093", null,
-                new ResolvedEndpoint.Mm2Sasl("PLAIN", "src-creds"), null, null, false);
-        ResolvedEndpoint tgt = new ResolvedEndpoint("c:9094", "tgt-tls", null, null, null, false);
+        ResolvedKafkaEndpoint src = new ResolvedKafkaEndpoint("b:9093", null,
+                new ResolvedKafkaEndpoint.Sasl("PLAIN", "src-creds"), null, null, false);
+        ResolvedKafkaEndpoint tgt = new ResolvedKafkaEndpoint("c:9094", "tgt-tls", null, null, null, false);
         Deployment dep = builder.build(cr(), src, tgt, 1, "h", false, owner());
 
         var worker = dep.getSpec().getTemplate().getSpec().getContainers().get(0);
@@ -80,9 +81,9 @@ class Mm2DeploymentBuilderTest {
 
     @Test
     void schemaRegistryAuthAddsMount() {
-        ResolvedEndpoint src = new ResolvedEndpoint("b:9094", "src-tls", null,
+        ResolvedKafkaEndpoint src = new ResolvedKafkaEndpoint("b:9094", "src-tls", null,
                 "http://reg.src", "src-reg-auth", false);
-        ResolvedEndpoint tgt = new ResolvedEndpoint("c:9094", "tgt-tls", null,
+        ResolvedKafkaEndpoint tgt = new ResolvedKafkaEndpoint("c:9094", "tgt-tls", null,
                 "http://reg.dst", "dst-reg-auth", false);
         Deployment dep = builder.build(cr(), src, tgt, 1, "h", false, owner());
 
@@ -93,14 +94,14 @@ class Mm2DeploymentBuilderTest {
 
     @Test
     void replicasArePropagated() {
-        ResolvedEndpoint ep = new ResolvedEndpoint("b:9092", null, null, null, null, false);
+        ResolvedKafkaEndpoint ep = new ResolvedKafkaEndpoint("b:9092", null, null, null, null, false);
         Deployment dep = builder.build(cr(), ep, ep, 3, "h", false, owner());
         assertThat(dep.getSpec().getReplicas()).isEqualTo(3);
     }
 
     @Test
     void metricsEnabledAttachesJavaagentPortAndMount() {
-        ResolvedEndpoint ep = new ResolvedEndpoint("b:9092", null, null, null, null, false);
+        ResolvedKafkaEndpoint ep = new ResolvedKafkaEndpoint("b:9092", null, null, null, null, false);
         Deployment dep = builder.build(cr(), ep, ep, 1, "h", true, owner());
         Container worker = dep.getSpec().getTemplate().getSpec().getContainers().get(0);
 
@@ -120,7 +121,7 @@ class Mm2DeploymentBuilderTest {
 
     @Test
     void metricsDisabledHasNoJavaagentNoPortNoMount() {
-        ResolvedEndpoint ep = new ResolvedEndpoint("b:9092", null, null, null, null, false);
+        ResolvedKafkaEndpoint ep = new ResolvedKafkaEndpoint("b:9092", null, null, null, null, false);
         Deployment dep = builder.build(cr(), ep, ep, 1, "h", false, owner());
         Container worker = dep.getSpec().getTemplate().getSpec().getContainers().get(0);
 

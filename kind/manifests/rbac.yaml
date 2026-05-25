@@ -40,6 +40,12 @@ rules:
       - mirrormaker2s
       - mirrormaker2s/status
       - mirrormaker2s/finalizers
+      - kafkaconnects
+      - kafkaconnects/status
+      - kafkaconnects/finalizers
+      - kafkaconnectors
+      - kafkaconnectors/status
+      - kafkaconnectors/finalizers
       - kafkabackups
       - kafkabackups/status
       - kafkabackups/finalizers

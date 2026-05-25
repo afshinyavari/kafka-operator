@@ -3,6 +3,7 @@ package se.afshin.yavari.kafka.operator.mm2;
 import jakarta.enterprise.context.ApplicationScoped;
 import se.afshin.yavari.kafka.operator.crd.MirrorMaker2;
 import se.afshin.yavari.kafka.operator.crd.MirrorMaker2Status;
+import se.afshin.yavari.kafka.operator.endpoint.ResolvedKafkaEndpoint;
 
 import java.util.List;
 
@@ -20,7 +21,7 @@ import java.util.List;
 @ApplicationScoped
 public class Mm2StatusReader {
 
-    public List<MirrorMaker2Status.ConnectorStatus> read(MirrorMaker2 cr, ResolvedEndpoint target) {
+    public List<MirrorMaker2Status.ConnectorStatus> read(MirrorMaker2 cr, ResolvedKafkaEndpoint target) {
         return List.of();
     }
 }

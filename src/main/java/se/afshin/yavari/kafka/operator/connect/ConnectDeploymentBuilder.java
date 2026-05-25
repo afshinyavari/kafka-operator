@@ -1,11 +1,14 @@
-package se.afshin.yavari.kafka.operator.mm2;
+package se.afshin.yavari.kafka.operator.connect;
 
 import io.fabric8.kubernetes.api.model.Container;
 import io.fabric8.kubernetes.api.model.ContainerBuilder;
 import io.fabric8.kubernetes.api.model.EnvVar;
 import io.fabric8.kubernetes.api.model.EnvVarBuilder;
+import io.fabric8.kubernetes.api.model.HTTPGetAction;
 import io.fabric8.kubernetes.api.model.IntOrString;
 import io.fabric8.kubernetes.api.model.OwnerReference;
+import io.fabric8.kubernetes.api.model.Probe;
+import io.fabric8.kubernetes.api.model.ProbeBuilder;
 import io.fabric8.kubernetes.api.model.Quantity;
 import io.fabric8.kubernetes.api.model.ResourceRequirementsBuilder;
 import io.fabric8.kubernetes.api.model.TopologySpreadConstraint;
@@ -17,57 +20,53 @@ import io.fabric8.kubernetes.api.model.VolumeMountBuilder;
 import io.fabric8.kubernetes.api.model.apps.Deployment;
 import io.fabric8.kubernetes.api.model.apps.DeploymentBuilder;
 import jakarta.enterprise.context.ApplicationScoped;
-import se.afshin.yavari.kafka.operator.crd.MirrorMaker2;
-import se.afshin.yavari.kafka.operator.crd.MirrorMaker2Spec;
+import se.afshin.yavari.kafka.operator.crd.KafkaConnect;
+import se.afshin.yavari.kafka.operator.crd.KafkaConnectSpec;
+import se.afshin.yavari.kafka.operator.crd.KafkaUIProbeConfig;
 import se.afshin.yavari.kafka.operator.endpoint.ResolvedKafkaEndpoint;
 import se.afshin.yavari.kafka.operator.infra.PemToPkcs12InitContainer;
 import se.afshin.yavari.kafka.operator.infra.SecurityContextDefaults;
 
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
 /**
- * Builds the MM2 worker Deployment: one container running
- * {@code bin/connect-mirror-maker.sh /etc/mm2/mm2.properties}, with init containers
- * that materialise each side's PEM TLS Secret as a PKCS12 keystore on a shared emptyDir.
+ * Builds the Connect worker Deployment: one container running
+ * {@code bin/connect-distributed.sh /etc/connect/connect-distributed.properties}, with
+ * an init container that materialises the attached cluster's PEM TLS Secret into a
+ * PKCS12 keystore + truststore on a shared emptyDir.
  *
- * <p>Mounts (see {@link Mm2ConfigBuilder} for the matching paths):
- * <ul>
- *   <li>{@code /etc/mm2/mm2.properties} — from the ConfigMap.
- *   <li>{@code /etc/mm2/pkcs12/{source,target}/{keystore,truststore}.p12} — emptyDir
- *       populated by the per-side init containers.
- *   <li>{@code /etc/mm2/sasl/{source,target}/} — SASL Secret mounts (optional).
- *   <li>{@code /etc/mm2/registry-auth/{source,target}/} — schema-registry auth Secret
- *       mounts (optional).
- * </ul>
+ * <p>Plugin volumes (PVC + ConfigMaps + Secrets) come from {@link ConnectPluginResolver}
+ * and are mounted under {@code /opt/kafka/connect-plugins/...}. The composed
+ * {@code plugin.path} is already in the properties file.
  *
  * <p>Replicas spread across MCS clusters via topology spread on the
  * {@code topology.kubernetes.io/zone} key — workers form a single Connect group via
  * the internal topics, and Kafka's group coordinator distributes tasks.
  */
 @ApplicationScoped
-public class Mm2DeploymentBuilder {
+public class ConnectDeploymentBuilder {
 
     public static final String CONFIG_HASH_ANNOTATION = "kafka.yavari.afshin.se/config-hash";
-    private static final String CONFIG_VOLUME = "mm2-config";
-    private static final String CONFIG_MOUNT = "/etc/mm2";
+    private static final String CONFIG_VOLUME = "connect-config";
+    private static final String CONFIG_MOUNT = "/etc/connect";
     private static final String JAVA_OPTS = "-XX:MaxRAMPercentage=70.0 -XX:InitialRAMPercentage=70.0";
 
-    /** Port the bundled jmx_prometheus_javaagent serves MM2/Connect metrics on. Only exposed
-     *  as a container port when metrics are enabled. Matches the broker convention. */
+    /** JMX exporter port — matches the broker / MM2 convention. */
     public static final int METRICS_PORT = 9101;
-    /** Where the bundled JMX exporter config (subPath {@code jmx-config.yaml}) is mounted. */
     private static final String JMX_CONFIG_MOUNT = CONFIG_MOUNT + "/jmx-config.yaml";
 
-    public Deployment build(MirrorMaker2 cr,
-                            ResolvedKafkaEndpoint source, ResolvedKafkaEndpoint target,
+    public Deployment build(KafkaConnect cr,
+                            ResolvedKafkaEndpoint endpoint,
+                            ResolvedPluginSources plugins,
                             int replicas, String configHash, boolean metricsEnabled,
                             OwnerReference ownerRef) {
-        MirrorMaker2Spec spec = cr.getSpec();
+        KafkaConnectSpec spec = cr.getSpec();
         String name = cr.getMetadata().getName();
         String namespace = cr.getMetadata().getNamespace();
-        Map<String, String> labels = Mm2Labels.labels(name);
+        Map<String, String> labels = ConnectLabels.labels(name);
 
         List<Volume> volumes = new ArrayList<>();
         volumes.add(new VolumeBuilder()
@@ -78,73 +77,56 @@ public class Mm2DeploymentBuilder {
         List<VolumeMount> workerMounts = new ArrayList<>();
         workerMounts.add(new VolumeMountBuilder()
                 .withName(CONFIG_VOLUME)
-                .withMountPath(CONFIG_MOUNT + "/mm2.properties")
-                .withSubPath(Mm2ConfigMapBuilder.PROPERTIES_KEY)
+                .withMountPath(CONFIG_MOUNT + "/" + ConnectConfigMapBuilder.PROPERTIES_KEY)
+                .withSubPath(ConnectConfigMapBuilder.PROPERTIES_KEY)
                 .withReadOnly(true).build());
 
         List<Container> initContainers = new ArrayList<>();
-        // Per-side TLS PKCS12 conversion. The init containers reuse the operator's shared
-        // PemToPkcs12InitContainer helper.
-        String pkcs12VolBase = "mm2-pkcs12";
-        if (source.hasTls()) {
-            String tlsVol = "tls-source";
-            String pkcs12Vol = pkcs12VolBase + "-source";
-            volumes.add(secretVol(tlsVol, source.tlsSecretRef()));
-            volumes.add(emptyDirVol(pkcs12Vol));
+        if (endpoint.hasTls()) {
+            String tlsVol = "tls";
+            String pkcs12Vol = "connect-pkcs12";
+            volumes.add(new VolumeBuilder()
+                    .withName(tlsVol)
+                    .withNewSecret().withSecretName(endpoint.tlsSecretRef()).endSecret()
+                    .build());
+            volumes.add(new VolumeBuilder()
+                    .withName(pkcs12Vol)
+                    .withNewEmptyDir().endEmptyDir()
+                    .build());
             initContainers.add(PemToPkcs12InitContainer.build(
-                    "pem-to-pkcs12-source", spec.getImage(),
-                    tlsVol, "/etc/mm2/tls/source",
-                    pkcs12Vol, Mm2ConfigBuilder.PKCS12_BASE + "/source",
-                    Mm2ConfigBuilder.PKCS12_PASSWORD));
+                    "pem-to-pkcs12", spec.getImage(),
+                    tlsVol, "/etc/connect/tls",
+                    pkcs12Vol, ConnectConfigBuilder.PKCS12_BASE,
+                    ConnectConfigBuilder.PKCS12_PASSWORD));
             workerMounts.add(new VolumeMountBuilder()
                     .withName(pkcs12Vol)
-                    .withMountPath(Mm2ConfigBuilder.PKCS12_BASE + "/source")
+                    .withMountPath(ConnectConfigBuilder.PKCS12_BASE)
                     .withReadOnly(true).build());
         }
-        if (target.hasTls()) {
-            String tlsVol = "tls-target";
-            String pkcs12Vol = pkcs12VolBase + "-target";
-            volumes.add(secretVol(tlsVol, target.tlsSecretRef()));
-            volumes.add(emptyDirVol(pkcs12Vol));
-            initContainers.add(PemToPkcs12InitContainer.build(
-                    "pem-to-pkcs12-target", spec.getImage(),
-                    tlsVol, "/etc/mm2/tls/target",
-                    pkcs12Vol, Mm2ConfigBuilder.PKCS12_BASE + "/target",
-                    Mm2ConfigBuilder.PKCS12_PASSWORD));
+        if (endpoint.hasSasl()) {
+            String secretName = endpoint.sasl().secretRef();
+            volumes.add(new VolumeBuilder()
+                    .withName("sasl")
+                    .withNewSecret().withSecretName(secretName).endSecret()
+                    .build());
             workerMounts.add(new VolumeMountBuilder()
-                    .withName(pkcs12Vol)
-                    .withMountPath(Mm2ConfigBuilder.PKCS12_BASE + "/target")
+                    .withName("sasl")
+                    .withMountPath(ConnectConfigBuilder.SASL_BASE)
                     .withReadOnly(true).build());
         }
-        if (source.hasSasl()) {
-            mountSecret(volumes, workerMounts, "sasl-source",
-                    source.sasl().secretRef(), Mm2ConfigBuilder.SASL_BASE + "/source");
-        }
-        if (target.hasSasl()) {
-            mountSecret(volumes, workerMounts, "sasl-target",
-                    target.sasl().secretRef(), Mm2ConfigBuilder.SASL_BASE + "/target");
-        }
-        if (source.schemaRegistryAuthSecretRef() != null) {
-            mountSecret(volumes, workerMounts, "reg-auth-source",
-                    source.schemaRegistryAuthSecretRef(), Mm2ConfigBuilder.REGISTRY_AUTH_BASE + "/source");
-        }
-        if (target.schemaRegistryAuthSecretRef() != null) {
-            mountSecret(volumes, workerMounts, "reg-auth-target",
-                    target.schemaRegistryAuthSecretRef(), Mm2ConfigBuilder.REGISTRY_AUTH_BASE + "/target");
-        }
+
+        // Plugin volumes + mounts come pre-built from the resolver.
+        volumes.addAll(plugins.volumes());
+        workerMounts.addAll(plugins.volumeMounts());
 
         List<EnvVar> env = new ArrayList<>();
         env.add(new EnvVarBuilder()
-                .withName("KAFKA_HEAP_OPTS")
-                .withValue(JAVA_OPTS)
-                .build());
+                .withName("KAFKA_HEAP_OPTS").withValue(JAVA_OPTS).build());
         if (metricsEnabled) {
-            // connect-mirror-maker.sh honors KAFKA_OPTS — attach the JMX exporter agent.
-            // The JMX config rides on the mm2-config ConfigMap (jmx-config.yaml subPath).
             workerMounts.add(new VolumeMountBuilder()
                     .withName(CONFIG_VOLUME)
                     .withMountPath(JMX_CONFIG_MOUNT)
-                    .withSubPath(Mm2ConfigMapBuilder.JMX_CONFIG_KEY)
+                    .withSubPath(ConnectConfigMapBuilder.JMX_CONFIG_KEY)
                     .withReadOnly(true).build());
             env.add(new EnvVarBuilder()
                     .withName("KAFKA_OPTS")
@@ -154,18 +136,24 @@ public class Mm2DeploymentBuilder {
         }
 
         ContainerBuilder workerBuilder = new ContainerBuilder()
-                .withName("mm2")
+                .withName("connect")
                 .withImage(spec.getImage())
                 .withImagePullPolicy(spec.getImagePullPolicy())
-                .withCommand("/opt/kafka/bin/connect-mirror-maker.sh")
-                .withArgs(CONFIG_MOUNT + "/mm2.properties")
+                .withCommand("/opt/kafka/bin/connect-distributed.sh")
+                .withArgs(CONFIG_MOUNT + "/" + ConnectConfigMapBuilder.PROPERTIES_KEY)
                 .withEnv(env)
                 .withVolumeMounts(workerMounts)
                 .withResources(new ResourceRequirementsBuilder()
                         .withRequests(quantities(spec.getResources().getRequests()))
                         .withLimits(quantities(spec.getResources().getLimits()))
                         .build())
-                .withSecurityContext(SecurityContextDefaults.containerDefaults());
+                .withSecurityContext(SecurityContextDefaults.containerDefaults())
+                .addNewPort()
+                    .withName(ConnectRestServiceBuilder.PORT_NAME)
+                    .withContainerPort(spec.getRestPort())
+                .endPort()
+                .withReadinessProbe(httpProbe(spec.getProbes().getReadiness(), spec.getRestPort()))
+                .withLivenessProbe(httpProbe(spec.getProbes().getLiveness(), spec.getRestPort()));
         if (metricsEnabled) {
             workerBuilder.addNewPort()
                     .withName("metrics")
@@ -180,6 +168,11 @@ public class Mm2DeploymentBuilder {
                 .withWhenUnsatisfiable("ScheduleAnyway")
                 .withNewLabelSelector().withMatchLabels(labels).endLabelSelector()
                 .build());
+
+        Map<String, String> annotations = new LinkedHashMap<>();
+        if (configHash != null && !configHash.isBlank()) {
+            annotations.put(CONFIG_HASH_ANNOTATION, configHash);
+        }
 
         return new DeploymentBuilder()
                 .withNewMetadata()
@@ -196,9 +189,7 @@ public class Mm2DeploymentBuilder {
                     .withNewTemplate()
                         .withNewMetadata()
                             .withLabels(labels)
-                            .withAnnotations(configHash != null && !configHash.isBlank()
-                                    ? Map.of(CONFIG_HASH_ANNOTATION, configHash)
-                                    : Map.of())
+                            .withAnnotations(annotations)
                         .endMetadata()
                         .withNewSpec()
                             .withInitContainers(initContainers)
@@ -212,35 +203,21 @@ public class Mm2DeploymentBuilder {
                 .build();
     }
 
-    private static Volume secretVol(String name, String secretName) {
-        return new VolumeBuilder()
-                .withName(name)
-                .withNewSecret().withSecretName(secretName).endSecret()
+    private static Probe httpProbe(KafkaUIProbeConfig cfg, int port) {
+        HTTPGetAction action = new HTTPGetAction();
+        action.setPath(cfg.getPath());
+        action.setPort(new IntOrString(port));
+        return new ProbeBuilder()
+                .withHttpGet(action)
+                .withInitialDelaySeconds(cfg.getInitialDelaySeconds())
+                .withPeriodSeconds(cfg.getPeriodSeconds())
                 .build();
-    }
-
-    private static Volume emptyDirVol(String name) {
-        return new VolumeBuilder()
-                .withName(name)
-                .withNewEmptyDir().endEmptyDir()
-                .build();
-    }
-
-    private static void mountSecret(List<Volume> volumes, List<VolumeMount> mounts,
-                                     String volName, String secretName, String mountPath) {
-        volumes.add(secretVol(volName, secretName));
-        mounts.add(new VolumeMountBuilder()
-                .withName(volName)
-                .withMountPath(mountPath)
-                .withReadOnly(true).build());
     }
 
     private static Map<String, Quantity> quantities(Map<String, String> in) {
         if (in == null) return Map.of();
-        Map<String, Quantity> out = new java.util.LinkedHashMap<>();
+        Map<String, Quantity> out = new LinkedHashMap<>();
         in.forEach((k, v) -> out.put(k, Quantity.parse(v)));
         return out;
     }
-
-    static IntOrString port(int p) { return new IntOrString(p); }
 }
