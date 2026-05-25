@@ -88,7 +88,7 @@ The in-process emitter writes one JSON line per Kafka request (Kroxylicious) or 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `kafkaTopic` | AuditKafkaTopicSpec | no | — | Opts into the Kafka-topic sink. When unset, stdout is the only sink. |
-| `includeOps` | []string | no | `[]` | Allowlist of operation names to emit (`PRODUCE`, `FETCH`, `CREATE_TOPICS`, `READ`, `WRITE`, `DELETE`, ...). Empty/omitted = emit every operation. Use this to drop the high-volume verbs (typically `FETCH`) so the `__audit` topic stays useful. |
+| `includeOps` | []string | no | `[]` | Allowlist of operation names to emit (`WRITE`, `READ`, `DESCRIBE`, `CREATE_TOPICS`, `DELETE`, ...). Empty/omitted = emit every operation. Use this to drop the high-volume verbs (typically `READ`) so the `__audit` topic stays useful. |
 
 #### spec.audit.kafkaTopic — AuditKafkaTopicSpec
 
@@ -615,7 +615,7 @@ For mTLS client-certificate CN authorization. No schema-registry rules — those
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
 | `topics` | []string | `[]` | Topic names this principal may access. `*` matches all topics. |
-| `operations` | []string | `[]` | Allowed operations. Semantic aliases: `PRODUCE` (→ `WRITE` + `DESCRIBE`), `FETCH` (→ `READ` + `DESCRIBE`). Raw operations: `READ`, `WRITE`, `DESCRIBE`, `CREATE`, `DELETE`, `ALTER`, `DESCRIBE_CONFIGS`, `ALTER_CONFIGS`. |
+| `operations` | []string | `[]` | Allowed Kafka ACL operations: `READ`, `WRITE`, `DESCRIBE`, `CREATE`, `DELETE`, `ALTER`, `DESCRIBE_CONFIGS`, `ALTER_CONFIGS` (or `*`). Mirroring Apache Kafka, `READ`/`WRITE`/`DELETE`/`ALTER` implicitly grant `DESCRIBE`, and `ALTER_CONFIGS` implicitly grants `DESCRIBE_CONFIGS` — so a producer rule can list just `[WRITE]` and `METADATA` still works. |
 
 ### KafkaQuotaConfig
 
@@ -657,7 +657,7 @@ spec:
     - name: orders-team
       kafka:
         topics: [orders, orders-dlq]
-        operations: [PRODUCE, FETCH]
+        operations: [WRITE, READ]
       schemaRegistry:
         artifacts: [orders, orders-value]
         actions: [READ, WRITE]
@@ -675,11 +675,11 @@ spec:
     - name: app1            # cert CN
       kafka:
         topics: [orders]
-        operations: [PRODUCE]
+        operations: [WRITE]
     - name: read-only-app
       kafka:
         topics: ["*"]
-        operations: [FETCH]
+        operations: [READ]
 ```
 
 #### Combined — groups for OIDC clients, users for mTLS service accounts
@@ -690,12 +690,12 @@ spec:
     - name: invoices-team
       kafka:
         topics: [invoices]
-        operations: [PRODUCE, FETCH]
+        operations: [WRITE, READ]
   users:
     - name: invoices-batch
       kafka:
         topics: [invoices]
-        operations: [WRITE, DESCRIBE]
+        operations: [WRITE]
 ```
 
 ---

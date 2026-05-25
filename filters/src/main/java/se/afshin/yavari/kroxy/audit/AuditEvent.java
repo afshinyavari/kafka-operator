@@ -9,8 +9,9 @@ import java.time.Instant;
  *
  * <p>{@code principal} is {@code user:<CN-or-sub>} for an authenticated caller
  * or {@code group:<g>} when the request only carries a group claim.
- * {@code op} is the verb the component understands — {@code PRODUCE},
- * {@code FETCH}, {@code CREATE_TOPICS} for Kafka; {@code READ}, {@code WRITE},
+ * {@code op} is the Kafka ACL operation — {@code WRITE} (Produce requests),
+ * {@code READ} (Fetch responses), {@code DESCRIBE} (Metadata responses with an
+ * error), {@code CREATE_TOPICS} for Kafka; {@code READ}, {@code WRITE},
  * {@code DELETE} for the rbac-proxy. {@code decision} is {@code allow},
  * {@code deny}, or {@code error}.
  */

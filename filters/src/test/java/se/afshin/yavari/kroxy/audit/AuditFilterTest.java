@@ -34,6 +34,6 @@ class AuditFilterTest {
     void constructor_acceptsNullIncludeOps() {
         // Null collapses to "emit everything" — the filter's emit() guard short-circuits.
         new AuditFilter(new StdoutAuditEmitter(), null);
-        new AuditFilter(new StdoutAuditEmitter(), Set.of("PRODUCE"));
+        new AuditFilter(new StdoutAuditEmitter(), Set.of("WRITE"));
     }
 }

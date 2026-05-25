@@ -15,7 +15,7 @@ class KafkaAuditEmitterTest {
 
     private static AuditEvent sampleEvent() {
         return new AuditEvent(Instant.parse("2026-05-25T12:00:00Z"),
-                "user:alice", "PRODUCE", "orders", "allow", 5, "corr-1");
+                "user:alice", "WRITE", "orders", "allow", 5, "corr-1");
     }
 
     @Test

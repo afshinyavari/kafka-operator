@@ -14,10 +14,9 @@ import java.util.TreeSet;
  * Reads the {@code KafkaRbac} CR for a given cluster and resolves what the
  * caller's groups can see. Read-only — final enforcement is the proxy's job.
  *
- * <p>Per the existing {@code GroupAwareAuthorizer} contract, the "read"
- * direction maps to {@code FETCH} (Kafka) and {@code READ} (schema registry);
- * we treat {@code FETCH} or {@code READ} or any wildcard as "this group can
- * view this resource."
+ * <p>Any Kafka topic-level grant ({@code READ}, {@code WRITE}, {@code DESCRIBE},
+ * {@code ALL}, or {@code *}) makes the topic visible in the editor's listing —
+ * the proxy still enforces fine-grained access for actual reads and writes.
  */
 @ApplicationScoped
 public class RbacRulesService {
@@ -96,12 +95,12 @@ public class RbacRulesService {
         return out;
     }
 
-    /** Aliases matching the operator's {@code GroupAwareAuthorizer.matchesOp}. */
+    /** Any topic-level grant makes the topic visible in the editor's listing. */
     private static boolean grantsRead(List<String> ops) {
         for (String op : ops) {
             if (op == null) continue;
             switch (op.toUpperCase()) {
-                case "FETCH", "READ", "DESCRIBE", "PRODUCE", "WRITE", "ALL", "*" -> {
+                case "READ", "WRITE", "DESCRIBE", "ALL", "*" -> {
                     return true;
                 }
                 default -> {}

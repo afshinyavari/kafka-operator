@@ -10,7 +10,7 @@ When the cluster opts in to the Kafka-topic sink (`spec.audit.kafkaTopic.enabled
 {
   "ts": "2026-05-25T12:00:00.123Z",
   "principal": "user:alice",
-  "op": "PRODUCE",
+  "op": "WRITE",
   "resource": "orders",
   "decision": "allow",
   "latencyMs": 12,
@@ -22,7 +22,7 @@ When the cluster opts in to the Kafka-topic sink (`spec.audit.kafkaTopic.enabled
 |-------|------|-------|
 | `ts` | ISO-8601 UTC | Emit time on the proxy/Apicurio pod. |
 | `principal` | string | `user:<CN-or-sub>` for an authenticated caller, `group:<g>` when only a group claim is present, `anonymous` otherwise. |
-| `op` | string | Verb the component understands. Kafka: `PRODUCE`, `FETCH`. Apicurio rbac-proxy: `READ`, `WRITE`, `DELETE`. |
+| `op` | string | Kafka ACL operation. Kroxylicious emits `WRITE` (Produce requests), `READ` (Fetch responses), and `DESCRIBE` (Metadata responses with an error). The Apicurio rbac-proxy emits `READ`, `WRITE`, `DELETE`. |
 | `resource` | string | Topic name for Kafka, artifact id (or `*`) for the rbac-proxy. One event per topic on multi-topic Produce/Fetch requests. |
 | `decision` | enum | `allow`, `deny`, `error`. `error` is reserved for upstream 5xx responses on the rbac-proxy. Kafka requests always set `allow` or `deny`. |
 | `latencyMs` | number | End-to-end request time as observed inside the proxy. |
@@ -48,10 +48,9 @@ spec:
       partitions: 3            # default
       replicationFactor: 3     # default
     includeOps:
-      - PRODUCE
-      - CREATE_TOPICS
       - WRITE
-      - DELETE                 # drop high-volume FETCH/READ noise
+      - CREATE_TOPICS
+      - DELETE                 # drop high-volume READ noise
 ```
 
 When this turns on, the operator:
@@ -75,7 +74,7 @@ kubectl exec -n kafka deploy/cruise-control -- \
 
 ## Operational concerns
 
-- **Cardinality**: `FETCH` is the hot verb. If you only need to audit writes, set `spec.audit.includeOps` to `[PRODUCE, CREATE_TOPICS, ALTER_TOPICS, WRITE, DELETE]`.
+- **Cardinality**: `READ` is the hot verb. If you only need to audit writes, set `spec.audit.includeOps` to `[WRITE, CREATE_TOPICS, ALTER_TOPICS, DELETE]`.
 - **Schema evolution**: v1 fields are stable. Future versions may add fields without removing existing ones; consumers should ignore unknown keys.
 - **Failure mode**: a misconfigured Kafka sink (wrong bootstrap, ACL not yet propagated, topic not yet created) never breaks request handling — events fall back to stdout and the proxy logs a single WARN per minute identifying the cause.
 - **Correlation**: the Kroxylicious correlationId is the Kafka request correlation id, which the same client sees in its own logs. The Apicurio rbac-proxy carries an MDC `correlationId` only when an upstream component sets it.

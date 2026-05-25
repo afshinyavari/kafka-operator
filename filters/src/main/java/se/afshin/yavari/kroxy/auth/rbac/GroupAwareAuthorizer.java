@@ -94,9 +94,19 @@ class GroupAwareAuthorizer implements Authorizer {
 
     private static boolean matchesOp(List<String> allowed, String operation) {
         if (allowed.contains("*") || allowed.contains(operation)) return true;
-        // Semantic aliases: PRODUCE → {WRITE, DESCRIBE}; FETCH → {READ, DESCRIBE}
-        if (allowed.contains("PRODUCE") && (operation.equals("WRITE") || operation.equals("DESCRIBE"))) return true;
-        if (allowed.contains("FETCH") && (operation.equals("READ") || operation.equals("DESCRIBE"))) return true;
+        // Mirror Kafka StandardAuthorizer implicit-DESCRIBE semantics: granting
+        // READ/WRITE/DELETE/ALTER implies DESCRIBE, and ALTER_CONFIGS implies
+        // DESCRIBE_CONFIGS. Without this, a producer with only WRITE would have
+        // its METADATA request (authorized as DESCRIBE) denied.
+        if (operation.equals("DESCRIBE")
+                && (allowed.contains("READ") || allowed.contains("WRITE")
+                || allowed.contains("DELETE") || allowed.contains("ALTER")
+                || allowed.contains("ALTER_CONFIGS") || allowed.contains("DESCRIBE_CONFIGS"))) {
+            return true;
+        }
+        if (operation.equals("DESCRIBE_CONFIGS") && allowed.contains("ALTER_CONFIGS")) {
+            return true;
+        }
         return false;
     }
 
