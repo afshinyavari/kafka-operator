@@ -64,6 +64,13 @@
       <artifactId>quarkus-oidc</artifactId>
     </dependency>
 
+    <!-- Kubernetes client for RbacRulesService — reads KafkaRbac CRs to filter
+         what the SPA shows. Final enforcement is the proxy's job. -->
+    <dependency>
+      <groupId>io.quarkus</groupId>
+      <artifactId>quarkus-kubernetes-client</artifactId>
+    </dependency>
+
     <!-- Kafka Streams runtime. Used directly (not the quarkus-kafka-streams
          extension) because the backend runs topologies dynamically. -->
     <dependency>
@@ -105,6 +112,11 @@
       <groupId>org.assertj</groupId>
       <artifactId>assertj-core</artifactId>
       <version>3.25.3</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>io.fabric8</groupId>
+      <artifactId>kubernetes-server-mock</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
