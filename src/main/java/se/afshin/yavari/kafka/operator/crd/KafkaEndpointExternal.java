@@ -3,10 +3,10 @@ package se.afshin.yavari.kafka.operator.crd;
 import io.fabric8.generator.annotation.Required;
 import io.fabric8.generator.annotation.ValidationRule;
 
-/** External (non-operator-managed) Kafka endpoint description. Used when one end of an
- *  MM2 flow is outside this operator's control plane — e.g. Confluent Cloud, MSK, an
- *  on-prem cluster, or another operator instance. */
-public class Mm2ExternalEndpoint {
+/** External (non-operator-managed) Kafka endpoint description. Used when an endpoint
+ *  is outside this operator's control plane — e.g. Confluent Cloud, MSK, an on-prem
+ *  cluster, or another operator instance. */
+public class KafkaEndpointExternal {
 
     /** Kafka bootstrap servers (host:port[,host:port,...]). */
     @Required
@@ -19,11 +19,10 @@ public class Mm2ExternalEndpoint {
     private String tlsSecretRef;
 
     /** Optional SASL credentials. */
-    private Mm2SaslConfig sasl;
+    private KafkaEndpointSasl sasl;
 
-    /** Optional schema registry on this endpoint. When unset, schema-sync is disabled
-     *  even if spec.schemaSync.enabled is true (caller logs a warning). */
-    private Mm2SchemaRegistryRef schemaRegistry;
+    /** Optional schema registry on this endpoint. */
+    private KafkaEndpointSchemaRegistryRef schemaRegistry;
 
     public String getBootstrap() { return bootstrap; }
     public void setBootstrap(String bootstrap) { this.bootstrap = bootstrap; }
@@ -31,9 +30,9 @@ public class Mm2ExternalEndpoint {
     public String getTlsSecretRef() { return tlsSecretRef; }
     public void setTlsSecretRef(String tlsSecretRef) { this.tlsSecretRef = tlsSecretRef; }
 
-    public Mm2SaslConfig getSasl() { return sasl; }
-    public void setSasl(Mm2SaslConfig sasl) { this.sasl = sasl; }
+    public KafkaEndpointSasl getSasl() { return sasl; }
+    public void setSasl(KafkaEndpointSasl sasl) { this.sasl = sasl; }
 
-    public Mm2SchemaRegistryRef getSchemaRegistry() { return schemaRegistry; }
-    public void setSchemaRegistry(Mm2SchemaRegistryRef schemaRegistry) { this.schemaRegistry = schemaRegistry; }
+    public KafkaEndpointSchemaRegistryRef getSchemaRegistry() { return schemaRegistry; }
+    public void setSchemaRegistry(KafkaEndpointSchemaRegistryRef schemaRegistry) { this.schemaRegistry = schemaRegistry; }
 }

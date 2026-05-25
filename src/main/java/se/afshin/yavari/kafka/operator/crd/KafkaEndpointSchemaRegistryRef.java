@@ -5,7 +5,7 @@ import io.fabric8.generator.annotation.ValidationRule;
 
 /** Reference to a schema registry on an external endpoint. For managed endpoints,
  *  the schema registry is derived from the referenced KafkaCluster's spec.apicurio. */
-public class Mm2SchemaRegistryRef {
+public class KafkaEndpointSchemaRegistryRef {
 
     @Required
     @ValidationRule(value = "self.size() > 0", message = "url must not be blank")

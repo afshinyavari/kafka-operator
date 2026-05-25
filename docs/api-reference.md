@@ -1054,8 +1054,8 @@ The SMT **writes** mirrored schemas into the target registry. A managed cluster'
 | `image` | string | no | `mm2:dev` | MM2 worker image. The default `mm2:dev` image is built from `mm2-image/Dockerfile` (apache/kafka:4.0.0 + the schema-sync-smt JAR). |
 | `imagePullPolicy` | string | no | `IfNotPresent` | Standard k8s pull policy. |
 | `replicas` | integer | no | _derived_ | Worker count. When unset: 3 when the target is a multi-cluster managed KafkaCluster (MCS), otherwise 1. |
-| `source` | [Mm2Endpoint](#mm2endpoint) | **yes** | — | The source end of the replication flow. |
-| `target` | [Mm2Endpoint](#mm2endpoint) | **yes** | — | The target end of the replication flow. |
+| `source` | [KafkaEndpoint](#kafkaendpoint) | **yes** | — | The source end of the replication flow. |
+| `target` | [KafkaEndpoint](#kafkaendpoint) | **yes** | — | The target end of the replication flow. |
 | `flow` | [Mm2FlowConfig](#mm2flowconfig) | no | — | Replication tuning (topic regexes, RF, tasks). |
 | `schemaSync` | [Mm2SchemaSyncConfig](#mm2schemasyncconfig) | no | — | Schema-mirroring SMT config. When unset or `enabled=false`, MM2 mirrors topic data only. |
 | `mcs.enabled` | bool | no | `false` | When true, the reconciler only runs on K8s clusters listed in `targetClusters`. |
@@ -1064,28 +1064,28 @@ The SMT **writes** mirrored schemas into the target registry. A managed cluster'
 | `metricsConfig` | [MetricsConfig](#specmetricsconfig--metricsconfig) | no | — | When set, exposes the MM2 Connect-worker JMX metrics via `jmx_prometheus_javaagent` and creates a `<name>-metrics` ClusterIP Service + ServiceMonitor on port 9101. The operator bundles a fixed JMX exporter config for Connect/MM2 — the `configMapRef` field is **not consulted** here; presence of `metricsConfig` alone enables metrics. |
 | `resources` / `probes` | — | no | — | Same shapes as the KafkaUI resource/probes fields. **Set `resources` explicitly** — a real MM2 worker (3 connectors + clients + SMT) needs ~1.5Gi memory; the small default OOM-kills it. |
 
-### Mm2Endpoint
+### KafkaEndpoint
 
-Discriminated union — exactly one of `kafkaClusterRef` or `external` must be set (CEL-validated).
+Shared discriminated union describing one Kafka attachment, reused by MirrorMaker2 (per side) and KafkaConnect (the single attached cluster). Exactly one of `kafkaClusterRef` or `external` must be set (CEL-validated).
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `kafkaClusterRef.name` | string | Name of a `KafkaCluster` CR in the same namespace (cross-namespace not supported in v1). |
-| `kafkaClusterRef.namespace` | string | Optional override (must match the MM2 CR's namespace in v1). |
+| `kafkaClusterRef.namespace` | string | Optional override (must match the consuming CR's namespace in v1). |
 | `external.bootstrap` | string | `host:port[,host:port,...]` for the external Kafka. |
 | `external.tlsSecretRef` | string | PEM-shaped Secret (`tls.crt`/`tls.key`/`ca.crt`) for TLS or mTLS. |
-| `external.sasl` | [Mm2SaslConfig](#mm2saslconfig) | Optional SASL credentials. |
-| `external.schemaRegistry` | [Mm2SchemaRegistryRef](#mm2schemaregistryref) | Optional schema registry on this end. |
+| `external.sasl` | [KafkaEndpointSasl](#kafkaendpointsasl) | Optional SASL credentials. |
+| `external.schemaRegistry` | [KafkaEndpointSchemaRegistryRef](#kafkaendpointschemaregistryref) | Optional schema registry on this end. |
 | `schemaRegistryAuthSecretRef` | string | OAuth2 client-credentials Secret authenticating the schema-sync SMT to this endpoint's registry. Required when the registry is behind an authenticating proxy (a managed cluster's `apicurio-rbac-proxy`). See [Schema-registry authentication](#schema-registry-authentication). |
 
-### Mm2SaslConfig
+### KafkaEndpointSasl
 
 | Field | Type | Description |
 |-------|------|-------------|
 | `mechanism` | string | One of `PLAIN`, `SCRAM-SHA-256`, `SCRAM-SHA-512`, `OAUTHBEARER`. |
 | `secretRef` | string | Secret with `username` + `password` (or OAUTHBEARER token). |
 
-### Mm2SchemaRegistryRef
+### KafkaEndpointSchemaRegistryRef
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -1094,6 +1094,7 @@ Discriminated union — exactly one of `kafkaClusterRef` or `external` must be s
 | `authSecretRef` | string | Optional Secret with `username`/`password` or `token`. |
 
 ### Mm2FlowConfig
+<a id="mm2flowconfig"></a>
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -1107,6 +1108,7 @@ Discriminated union — exactly one of `kafkaClusterRef` or `external` must be s
 | `additionalProperties` | map | `{}` | Passthrough escape hatch — keys are appended verbatim. |
 
 ### Mm2SchemaSyncConfig
+<a id="mm2schemasyncconfig"></a>
 
 | Field | Type | Default | Description |
 |-------|------|---------|-------------|
@@ -1212,10 +1214,178 @@ When the target is external, these are skipped — the worker auto-creates on fi
 ### Known limitations (v1)
 
 - **Confluent Schema Registry not supported.** `schemaRegistry.type=CONFLUENT` is reserved but rejected at reconcile time. Confluent's wire format uses a 4-byte schema ID, not Apicurio's 8-byte globalId.
-- **No distributed Connect cluster mode.** Forward-compatible — a `spec.connectClusterRef` field will be added when the `KafkaConnect` CRD lands.
+- **No distributed Connect cluster mode for MM2.** The MM2 worker still runs in dedicated mode. The separate [KafkaConnect](#kafkaconnect) CRD provides general-purpose distributed Connect; MM2 will gain a `spec.connectClusterRef` mode that targets a KafkaConnect cluster in a future release.
 - **Per-connector status is a placeholder.** `status.connectors[]` is empty in v1; full status requires reading the `mm2-status.{flow}` topic via AdminClient. Phase = READY when all worker replicas are ready.
 - **Worker client cert** reuses the operator's `kafka-operator-client-tls`. A future hardening pass will issue per-MM2-CR client certs via the per-pool cert pipeline.
 - **Cross-namespace `kafkaClusterRef`** is rejected; managed source/target must live in the same namespace as the MM2 CR.
+
+---
+
+## KafkaConnect
+
+General-purpose distributed-mode Kafka Connect — a worker cluster that hosts user-defined connectors. The operator provisions the Deployment + REST Service + internal-topic CRs + ConfigMap and treats the **operator** as the source of truth for connector configuration. Individual connectors are managed through sibling [KafkaConnector](#kafkaconnector) CRs whose reconciler pushes configs to the Connect REST API and reconciles external drift back to spec.
+
+`spec.kafkaClusterRef` reuses the shared [KafkaEndpoint](#kafkaendpoint) union, so the Connect cluster can attach to either an operator-managed `KafkaCluster` (via its Kroxylicious proxy + mTLS) or an external bootstrap. The reconciler creates three KafkaTopic CRs (`connect-configs.{name}`, `connect-offsets.{name}`, `connect-status.{name}`) on the attached managed cluster, owner-ref'd to the KafkaConnect CR. When the attachment is external, these are skipped and Connect auto-creates on first start.
+
+A managed attachment is reached through the proxy, which enforces RBAC. The Connect worker authenticates as the `proxyMtls.proxyPrincipal` identity, so that cluster's `KafkaRbac` must grant that principal broad Kafka access — `users: [{ name: <proxyPrincipal>, kafka: { topics: ["*"], operations: ["*"] } }]`. Connect manages internal topics, reads source topics, writes sink topics, and (for `__consumer_offsets`) needs the same `READ` allowlist that consumers need.
+
+### spec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `image` | string | no | `connect:dev` | Connect worker image. Default is built from `connect-image/Dockerfile` (kafka-ubi + `/opt/kafka/connect-plugins/baked` landing zone). Supply a derived image with plugins baked under that path for production. |
+| `imagePullPolicy` | string | no | `IfNotPresent` | Standard k8s pull policy. |
+| `replicas` | integer | no | _derived_ | Worker count. When unset: 3 when the attached cluster is multi-cluster managed (MCS), otherwise 1. |
+| `kafkaClusterRef` | [KafkaEndpoint](#kafkaendpoint) | **yes** | — | The Kafka cluster the workers attach to (also stores internal topics). |
+| `groupId` | string | no | `connect-<metadata.name>` | Connect `group.id`. The reconciler refuses to start two KafkaConnect CRs that share an effective `groupId` against the same Kafka cluster (silently forming one worker group is almost always a misconfiguration). |
+| `restPort` | integer | no | `8083` | Container port + Service port for the Connect REST API. |
+| `pluginSources` | [KafkaConnectPluginSources](#kafkaconnectpluginsources) | no | empty | PVC + ConfigMap + Secret channels for plugin JARs. All composable; an empty block means only the operator-shipped `/baked` dir is on `plugin.path`. |
+| `worker` | [KafkaConnectWorkerConfig](#kafkaconnectworkerconfig) | no | — | Converter classes, internal-topic RF, additional-properties escape hatch. |
+| `mcs.enabled` | bool | no | `false` | When true, only reconcile on K8s clusters listed in `targetClusters`. |
+| `targetClusters` | string[] | no | `[]` | K8s cluster IDs (MCS placement gate). |
+| `clusterRollOrder` | string[] | no | — | Ordered cluster IDs for sequenced rolls on config/image change. |
+| `metricsConfig` | [MetricsConfig](#specmetricsconfig--metricsconfig) | no | — | When set, attaches the bundled JMX exporter and creates `<name>-metrics` Service + ServiceMonitor on port 9101. `configMapRef` is **not consulted** — the operator bundles a fixed JMX config (`connect-jmx-config.yaml`). |
+| `resources` / `probes` | — | no | — | Same shape as KafkaUI. Set `resources` for production — a worker hosting active connectors typically wants 1Gi+. |
+
+### KafkaConnectPluginSources
+
+Three composable channels for plugin delivery. A custom `spec.image` baking JARs into `/opt/kafka/connect-plugins/baked` is the fourth, implicit channel.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `pluginsVolumeClaim` | string | Name of an existing PVC in the same namespace. Mounted read-only at `/opt/kafka/connect-plugins/pvc/`. The user owns populating the PVC (Job, kubectl cp, CSI driver). |
+| `pluginConfigMaps` | string[] | ConfigMap names. Each mounts read-only at `/opt/kafka/connect-plugins/cm-<name>/`. ~1 MiB cap per ConfigMap — suitable for small SMT JARs. |
+| `pluginSecrets` | string[] | Secret names. Each mounts read-only at `/opt/kafka/connect-plugins/secret-<name>/`. Plugin Secret rotations roll the workers automatically (folded into the configHash). |
+
+Missing references fail reconcile with a precise message like `spec.pluginSources.pluginConfigMaps[2]='debezium' not found in namespace kafka`.
+
+### KafkaConnectWorkerConfig
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `internalReplicationFactor` | integer | `3` | RF for the three internal topics. Set to 1 in single-cluster dev. |
+| `keyConverter` / `valueConverter` | string | `JsonConverter` | Connect converter classes. |
+| `keyConverterSchemasEnable` / `valueConverterSchemasEnable` | bool | `false` | Inline-schema toggle on the converters. |
+| `additionalProperties` | map | `{}` | Free-form Connect worker properties. Cluster identity (`bootstrap.servers`, `group.id`, the three `*.storage.topic` keys) cannot be overridden — those are operator-owned. |
+
+### REST endpoint discovery
+
+The operator creates a `<name>-connect` ClusterIP Service on `spec.restPort` selecting the worker pods. The `status.url` field carries the resolved URL:
+
+```
+http://<name>-connect.<namespace>.svc.cluster.local:8083
+```
+
+KafkaConnector reconcilers and other clients (kafka-editor's Connect proxy) read `status.url` rather than reconstructing it.
+
+### status
+
+| Field | Description |
+|-------|-------------|
+| `phase` | `RECONCILING` / `READY` / `PENDING` / `FAILED` / `SKIPPED`. |
+| `message` | Human-readable detail. |
+| `observedGeneration` | `metadata.generation` last reconciled. |
+| `readyReplicas` | Worker Deployment ready replicas. |
+| `bootstrap` | Resolved Kafka bootstrap (proxy address for managed refs). |
+| `url` | In-cluster REST URL — printer column. |
+| `tlsSecretRef` / `authSecretRef` | Surfaced for KafkaConnector consumers. v1 is plaintext-in-cluster so both are null. |
+| `pluginPath` | Final composed `plugin.path` for debugging. |
+| `conditions[]` | Standard Kubernetes Condition list. |
+
+### Internal topics
+
+Three KafkaTopic CRs are created on the attached managed cluster, owner-ref'd to the KafkaConnect CR (cascade on delete):
+
+| Topic | Partitions | RF | `cleanup.policy` |
+|---|---|---|---|
+| `connect-configs.{name}` | 1 | from `worker.internalReplicationFactor` | `compact` |
+| `connect-offsets.{name}` | 25 | from `worker.internalReplicationFactor` | `compact` |
+| `connect-status.{name}` | 5 | from `worker.internalReplicationFactor` | `compact` |
+
+### Known limitations (v1)
+
+- **REST endpoint is plaintext.** v1 ships an HTTP REST listener on port 8083 — no TLS, no Basic auth. Kept inside the cluster network policy boundary. TLS/auth on the REST endpoint is a v2 follow-up.
+- **No initContainer-URL plugin downloads.** Plugins arrive via PVC, custom image, ConfigMap, or Secret. URL-fetching initContainers are deferred.
+- **Cross-namespace `kafkaClusterRef`** is rejected; the attached managed cluster must live in the same namespace as the KafkaConnect CR.
+- **No SMT JAR baking by default.** The operator-shipped `connect:dev` image is a minimal kafka-ubi layer. Users package SMTs into a derived image or via the ConfigMap/Secret channels.
+
+---
+
+## KafkaConnector
+
+One connector running on a parent [KafkaConnect](#kafkaconnect) worker cluster. The reconciler pushes the resolved config to the Connect REST API on each reconcile and reverts external drift (someone curl-PUT-ing the REST API directly) back to spec.
+
+`spec.connectClusterRef.name` names the parent KafkaConnect CR in the same namespace. The reconciler reads `parent.status.url` for the REST endpoint and gates on `parent.status.phase=READY` before issuing any REST calls.
+
+### spec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `connectClusterRef.name` | string | **yes** | — | Name of the parent `KafkaConnect` CR. Cross-namespace not supported in v1. |
+| `connectorName` | string | no | `metadata.name` | Override the connector identity sent to Connect REST. Reserved for cases where K8s naming is too strict. |
+| `connectorClass` | string | **yes** | — | Fully-qualified connector class (e.g. `io.debezium.connector.postgresql.PostgresConnector`). The plugin must be on the parent worker's `plugin.path`. |
+| `tasksMax` | integer | no | `1` | Connect `tasks.max`. |
+| `config` | map | no | `{}` | Free-form Connect connector config. CEL rejects `name` / `connector.class` / `tasks.max` keys — use the typed fields. |
+| `configFrom` | [KafkaConnectorConfigFromSource](#kafkaconnectorconfigfromsource) | no | — | Optional Secret to merge into the rendered config. Secret keys win over inline `config` keys with the same name. |
+| `state` | enum | no | `running` | Desired runtime state — `running`, `paused`, or `stopped` (Connect 3.5+ for `stopped`). Lowercase, Strimzi-style. |
+| `autoRestart.enabled` | bool | no | `false` | When true and the connector or a task is `FAILED`, the operator issues `POST /restart?onlyFailed=true` up to `autoRestart.maxRetries` times. Reset on operator pod restart. |
+| `autoRestart.maxRetries` | integer | no | `3` | Auto-restart budget. |
+
+### KafkaConnectorConfigFromSource
+
+The reconciler reads the Secret at reconcile time, merges its key/value pairs into the rendered config map **in the operator** (no Connect-side config providers required), then PUTs the fully-resolved config to REST. Secret rotation triggers re-PUT automatically via `SecretRevisionTracker`. All Secret-sourced keys are treated as sensitive regardless of name suffix.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `secretRef` | string | Secret name in the same namespace. |
+| `prefix` | string | Optional prefix applied to every Secret key (e.g. `database.` so Secret key `password` becomes connector key `database.password`). |
+
+### Drift handling
+
+Connect masks sensitive values (`*.password`, `*.token`, `*.apikey`, etc.) in `GET /connectors/<name>/config` as `"********"`, which would defeat a naïve `Map.equals` comparison. The reconciler combines:
+
+1. **Cached hash short-circuit** — `status.observedConfigHash` stores the sha256 of the last-successfully-PUT desired config (plus the `configFrom` Secret's resourceVersion). If the desired hash equals the observed hash, the reconciler skips the PUT regardless of what REST returns.
+2. **Structural diff** — when the hash differs, non-sensitive keys are compared directly; sensitive keys are assumed equal if Connect returns `"********"` (placeholder strings like `${file:/x:pw}` round-trip and compare literally).
+3. **Extra keys in actual** → drift (the operator owns the config).
+
+**Known gap**: out-of-band changes to **only** a sensitive value cannot be detected from REST (Connect masks identically before and after). The spec remains the source of truth; the operator re-PUTs on every operator pod restart (in-memory state gone, status hash forced clear at startup).
+
+### status
+
+| Field | Description |
+|-------|-------------|
+| `phase` | `Ready` / `Reconciling` / `Failed` / `Paused` / `Stopped` / `Unknown`. Mixed-case mirrors Strimzi. |
+| `observedGeneration` | `metadata.generation` last reconciled. |
+| `conditions[]` | Standard Kubernetes Conditions (`Available`, `Progressing`, `Degraded`). |
+| `connectorState` | Raw Connect `connector.state` (`RUNNING`/`PAUSED`/`STOPPED`/`FAILED`/`UNASSIGNED`). |
+| `workerId` | Connect-assigned worker id. |
+| `tasks[]` | Per-task state + worker + truncated stack trace on failure (capped at ~2 KiB). |
+| `tasksRunning` | Display string `running/total` (printer column). |
+| `tasksTotal` | Integer task count. |
+| `observedConfigHash` | Cached hash for drift short-circuit. |
+| `lastReconcileTime` | ISO instant. |
+| `message` | Latest error or transition note. |
+
+### Reconcile cadence
+
+| State | Reschedule |
+|---|---|
+| Steady `Ready` | `kafka.connector.poll.interval.seconds` (default `15`) |
+| `Reconciling` (workers assigning) | 5s |
+| REST 409 (rebalance) | 5s |
+| REST 5xx / network | 15s |
+| `Failed` with auto-restart budget | 30s |
+| `Failed` terminal | 60s |
+
+### Finalizer
+
+On CR delete the reconciler calls `DELETE /connectors/<name>` on the parent's REST API. If the parent KafkaConnect is gone or unreachable, the finalizer is released anyway (with a warning log) — we don't strand the CR.
+
+### Known limitations (v1)
+
+- **Cross-namespace `connectClusterRef`** is rejected.
+- **Out-of-band changes to sensitive values** cannot be detected from REST until the spec changes or the operator restarts.
+- **REST authentication** — the parent's REST endpoint is plaintext-in-cluster; the reconciler does not negotiate TLS or auth. v2 follow-up.
 
 ---
 

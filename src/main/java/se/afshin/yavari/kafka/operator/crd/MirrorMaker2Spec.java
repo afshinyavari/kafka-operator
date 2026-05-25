@@ -25,10 +25,10 @@ public class MirrorMaker2Spec {
     private Integer replicas;
 
     @Required
-    private Mm2Endpoint source;
+    private KafkaEndpoint source;
 
     @Required
-    private Mm2Endpoint target;
+    private KafkaEndpoint target;
 
     private Mm2FlowConfig flow = new Mm2FlowConfig();
 
@@ -67,11 +67,11 @@ public class MirrorMaker2Spec {
     public Integer getReplicas() { return replicas; }
     public void setReplicas(Integer replicas) { this.replicas = replicas; }
 
-    public Mm2Endpoint getSource() { return source; }
-    public void setSource(Mm2Endpoint source) { this.source = source; }
+    public KafkaEndpoint getSource() { return source; }
+    public void setSource(KafkaEndpoint source) { this.source = source; }
 
-    public Mm2Endpoint getTarget() { return target; }
-    public void setTarget(Mm2Endpoint target) { this.target = target; }
+    public KafkaEndpoint getTarget() { return target; }
+    public void setTarget(KafkaEndpoint target) { this.target = target; }
 
     public Mm2FlowConfig getFlow() { return flow; }
     public void setFlow(Mm2FlowConfig flow) { this.flow = flow; }

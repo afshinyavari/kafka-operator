@@ -1,0 +1,18 @@
+# Smoke KafkaConnector for `make e2e`. Uses the FileStreamSource connector that
+# ships with Apache Kafka itself — no plugin install required. Reads from a path
+# inside the worker container (the file may or may not exist; we only assert the
+# operator pushes the config to REST and surfaces task state).
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaConnector
+metadata:
+  name: kc-smoke-source
+  namespace: kafka
+spec:
+  connectClusterRef:
+    name: kc-smoke
+  connectorClass: org.apache.kafka.connect.file.FileStreamSourceConnector
+  tasksMax: 1
+  state: running
+  config:
+    file: /opt/kafka/LICENSE
+    topic: kc-smoke-source-out

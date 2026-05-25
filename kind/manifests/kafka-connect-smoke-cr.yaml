@@ -1,0 +1,17 @@
+# Smoke KafkaConnect CR for `make e2e`. Attaches to the managed `my-kafka` cluster
+# via its proxy; the worker comes up against real internal topics.
+apiVersion: kafka.yavari.afshin.se/v1alpha1
+kind: KafkaConnect
+metadata:
+  name: kc-smoke
+  namespace: kafka
+spec:
+  image: connect:dev
+  replicas: 1
+  kafkaClusterRef:
+    kafkaClusterRef:
+      name: my-kafka
+  worker:
+    # 3-broker MCS cluster — match RF to broker count to avoid auto-create races.
+    internalReplicationFactor: 3
+  metricsConfig: {}

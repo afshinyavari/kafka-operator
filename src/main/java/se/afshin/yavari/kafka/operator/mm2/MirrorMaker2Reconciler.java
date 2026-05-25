@@ -17,12 +17,14 @@ import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.jboss.logging.Logger;
 import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
+import se.afshin.yavari.kafka.operator.crd.KafkaEndpoint;
 import se.afshin.yavari.kafka.operator.crd.KafkaTopic;
 import se.afshin.yavari.kafka.operator.crd.McsConfig;
 import se.afshin.yavari.kafka.operator.crd.MirrorMaker2;
 import se.afshin.yavari.kafka.operator.crd.MirrorMaker2Status;
-import se.afshin.yavari.kafka.operator.crd.Mm2Endpoint;
 import se.afshin.yavari.kafka.operator.crd.SchemaRegistryType;
+import se.afshin.yavari.kafka.operator.endpoint.KafkaEndpointResolver;
+import se.afshin.yavari.kafka.operator.endpoint.ResolvedKafkaEndpoint;
 import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
 import se.afshin.yavari.kafka.operator.infra.MetricsResources;
 import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
@@ -45,7 +47,7 @@ import java.util.Map;
  *   <li>MCS placement gate — skip if {@code spec.mcs.enabled} and the local cluster
  *       isn't in {@code spec.targetClusters}.
  *   <li>Validate spec (at-least-one-managed-end, no Confluent in v1, both ends populated).
- *   <li>Resolve source + target endpoints via {@link Mm2EndpointResolver}.
+ *   <li>Resolve source + target endpoints via {@link KafkaEndpointResolver}.
  *   <li>Render the MM2 properties file via {@link Mm2ConfigBuilder}.
  *   <li>Apply 3 KafkaTopic CRs (internal topics) on the target managed cluster.
  *   <li>Apply the ConfigMap (with configHash) and Deployment.
@@ -62,7 +64,7 @@ public class MirrorMaker2Reconciler implements Reconciler<MirrorMaker2>, Cleaner
     private static final Logger LOG = Logger.getLogger(MirrorMaker2Reconciler.class);
 
     @Inject KubernetesClient client;
-    @Inject Mm2EndpointResolver endpointResolver;
+    @Inject KafkaEndpointResolver endpointResolver;
     @Inject Mm2ConfigBuilder configBuilder;
     @Inject Mm2ConfigMapBuilder configMapBuilder;
     @Inject Mm2DeploymentBuilder deploymentBuilder;
@@ -124,8 +126,8 @@ public class MirrorMaker2Reconciler implements Reconciler<MirrorMaker2>, Cleaner
                 .build();
 
         try {
-            ResolvedEndpoint source = endpointResolver.resolve(cr.getSpec().getSource(), namespace);
-            ResolvedEndpoint target = endpointResolver.resolve(cr.getSpec().getTarget(), namespace);
+            ResolvedKafkaEndpoint source = endpointResolver.resolve(cr.getSpec().getSource(), namespace);
+            ResolvedKafkaEndpoint target = endpointResolver.resolve(cr.getSpec().getTarget(), namespace);
             status.setSourceBootstrap(source.bootstrap());
             status.setTargetBootstrap(target.bootstrap());
 
@@ -247,7 +249,7 @@ public class MirrorMaker2Reconciler implements Reconciler<MirrorMaker2>, Cleaner
 
     /** Default replicas: 3 when the target is a multi-cluster managed KafkaCluster,
      *  otherwise 1. User-supplied value wins. */
-    int effectiveReplicas(MirrorMaker2 cr, ResolvedEndpoint target) {
+    int effectiveReplicas(MirrorMaker2 cr, ResolvedKafkaEndpoint target) {
         if (cr.getSpec().getReplicas() != null && cr.getSpec().getReplicas() > 0) {
             return cr.getSpec().getReplicas();
         }
@@ -277,7 +279,7 @@ public class MirrorMaker2Reconciler implements Reconciler<MirrorMaker2>, Cleaner
         return null;
     }
 
-    private String rejectConfluent(Mm2Endpoint ep) {
+    private String rejectConfluent(KafkaEndpoint ep) {
         if (ep == null || !ep.hasExternal()) return null;
         var sr = ep.getExternal().getSchemaRegistry();
         if (sr != null && sr.getType() == SchemaRegistryType.CONFLUENT) {
@@ -286,7 +288,7 @@ public class MirrorMaker2Reconciler implements Reconciler<MirrorMaker2>, Cleaner
         return null;
     }
 
-    private List<String> secretRefs(ResolvedEndpoint source, ResolvedEndpoint target) {
+    private List<String> secretRefs(ResolvedKafkaEndpoint source, ResolvedKafkaEndpoint target) {
         List<String> refs = new ArrayList<>();
         if (source.tlsSecretRef() != null) refs.add(source.tlsSecretRef());
         if (target.tlsSecretRef() != null) refs.add(target.tlsSecretRef());

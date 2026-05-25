@@ -1,4 +1,4 @@
-package se.afshin.yavari.kafka.operator.mm2;
+package se.afshin.yavari.kafka.operator.endpoint;
 
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.client.KubernetesClient;
@@ -13,11 +13,11 @@ import se.afshin.yavari.kafka.operator.crd.KafkaClusterApicurioSpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterProxySpec;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterRef;
 import se.afshin.yavari.kafka.operator.crd.KafkaClusterSpec;
+import se.afshin.yavari.kafka.operator.crd.KafkaEndpoint;
+import se.afshin.yavari.kafka.operator.crd.KafkaEndpointExternal;
+import se.afshin.yavari.kafka.operator.crd.KafkaEndpointSasl;
+import se.afshin.yavari.kafka.operator.crd.KafkaEndpointSchemaRegistryRef;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyMtlsConfig;
-import se.afshin.yavari.kafka.operator.crd.Mm2Endpoint;
-import se.afshin.yavari.kafka.operator.crd.Mm2ExternalEndpoint;
-import se.afshin.yavari.kafka.operator.crd.Mm2SaslConfig;
-import se.afshin.yavari.kafka.operator.crd.Mm2SchemaRegistryRef;
 import se.afshin.yavari.kafka.operator.crd.SchemaRegistryType;
 
 import java.lang.reflect.Field;
@@ -29,16 +29,16 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 @SuppressWarnings({"unchecked", "rawtypes"})
-class Mm2EndpointResolverTest {
+class KafkaEndpointResolverTest {
 
     private KubernetesClient client;
-    private Mm2EndpointResolver resolver;
+    private KafkaEndpointResolver resolver;
 
     @BeforeEach
     void setup() throws Exception {
         client = mock(KubernetesClient.class);
-        resolver = new Mm2EndpointResolver();
-        Field f = Mm2EndpointResolver.class.getDeclaredField("client");
+        resolver = new KafkaEndpointResolver();
+        Field f = KafkaEndpointResolver.class.getDeclaredField("client");
         f.setAccessible(true);
         f.set(resolver, client);
     }
@@ -77,10 +77,10 @@ class Mm2EndpointResolverTest {
 
         KafkaClusterRef ref = new KafkaClusterRef();
         ref.setName("my-cluster");
-        Mm2Endpoint ep = new Mm2Endpoint();
+        KafkaEndpoint ep = new KafkaEndpoint();
         ep.setKafkaClusterRef(ref);
 
-        ResolvedEndpoint r = resolver.resolve(ep, "kafka");
+        ResolvedKafkaEndpoint r = resolver.resolve(ep, "kafka");
 
         assertThat(r.bootstrap()).isEqualTo("kafka-proxy.kafka.svc.cluster.local:9094");
         assertThat(r.tlsSecretRef()).isEqualTo("kafka-operator-client-tls");
@@ -94,10 +94,10 @@ class Mm2EndpointResolverTest {
 
         KafkaClusterRef ref = new KafkaClusterRef();
         ref.setName("plain");
-        Mm2Endpoint ep = new Mm2Endpoint();
+        KafkaEndpoint ep = new KafkaEndpoint();
         ep.setKafkaClusterRef(ref);
 
-        ResolvedEndpoint r = resolver.resolve(ep, "kafka");
+        ResolvedKafkaEndpoint r = resolver.resolve(ep, "kafka");
         assertThat(r.hasTls()).isFalse();
         assertThat(r.hasSchemaRegistry()).isFalse();
     }
@@ -114,7 +114,7 @@ class Mm2EndpointResolverTest {
 
         KafkaClusterRef ref = new KafkaClusterRef();
         ref.setName("ghost");
-        Mm2Endpoint ep = new Mm2Endpoint();
+        KafkaEndpoint ep = new KafkaEndpoint();
         ep.setKafkaClusterRef(ref);
 
         assertThatThrownBy(() -> resolver.resolve(ep, "kafka"))
@@ -128,11 +128,11 @@ class Mm2EndpointResolverTest {
 
         KafkaClusterRef ref = new KafkaClusterRef();
         ref.setName("my-cluster");
-        Mm2Endpoint ep = new Mm2Endpoint();
+        KafkaEndpoint ep = new KafkaEndpoint();
         ep.setKafkaClusterRef(ref);
         ep.setSchemaRegistryAuthSecretRef("mm2-schema-registry-oauth");
 
-        ResolvedEndpoint r = resolver.resolve(ep, "kafka");
+        ResolvedKafkaEndpoint r = resolver.resolve(ep, "kafka");
 
         assertThat(r.schemaRegistryUrl()).contains("apicurio-rbac-proxy.kafka.svc.cluster.local");
         assertThat(r.schemaRegistryAuthSecretRef()).isEqualTo("mm2-schema-registry-oauth");
@@ -140,21 +140,21 @@ class Mm2EndpointResolverTest {
 
     @Test
     void externalPassthrough() {
-        Mm2Endpoint ep = new Mm2Endpoint();
-        Mm2ExternalEndpoint ext = new Mm2ExternalEndpoint();
+        KafkaEndpoint ep = new KafkaEndpoint();
+        KafkaEndpointExternal ext = new KafkaEndpointExternal();
         ext.setBootstrap("broker.example.com:9093");
         ext.setTlsSecretRef("ext-tls");
-        Mm2SaslConfig sasl = new Mm2SaslConfig();
+        KafkaEndpointSasl sasl = new KafkaEndpointSasl();
         sasl.setMechanism("SCRAM-SHA-512");
         sasl.setSecretRef("ext-creds");
         ext.setSasl(sasl);
-        Mm2SchemaRegistryRef sr = new Mm2SchemaRegistryRef();
+        KafkaEndpointSchemaRegistryRef sr = new KafkaEndpointSchemaRegistryRef();
         sr.setUrl("https://reg.external");
         sr.setAuthSecretRef("reg-auth");
         ext.setSchemaRegistry(sr);
         ep.setExternal(ext);
 
-        ResolvedEndpoint r = resolver.resolve(ep, "kafka");
+        ResolvedKafkaEndpoint r = resolver.resolve(ep, "kafka");
 
         assertThat(r.bootstrap()).isEqualTo("broker.example.com:9093");
         assertThat(r.tlsSecretRef()).isEqualTo("ext-tls");
@@ -166,10 +166,10 @@ class Mm2EndpointResolverTest {
 
     @Test
     void externalConfluentRejected() {
-        Mm2Endpoint ep = new Mm2Endpoint();
-        Mm2ExternalEndpoint ext = new Mm2ExternalEndpoint();
+        KafkaEndpoint ep = new KafkaEndpoint();
+        KafkaEndpointExternal ext = new KafkaEndpointExternal();
         ext.setBootstrap("b:9093");
-        Mm2SchemaRegistryRef sr = new Mm2SchemaRegistryRef();
+        KafkaEndpointSchemaRegistryRef sr = new KafkaEndpointSchemaRegistryRef();
         sr.setUrl("https://reg");
         sr.setType(SchemaRegistryType.CONFLUENT);
         ext.setSchemaRegistry(sr);

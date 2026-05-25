@@ -9,6 +9,7 @@ KROXY_IMAGE        := kroxy-filters:dev
 APICURIO_PROXY_IMG := apicurio-rbac-proxy:dev
 KAFKA_EDITOR_IMG   := kafka-editor:dev
 MM2_IMG            := mm2:dev
+CONNECT_IMG        := connect:dev
 KAFKA_BACKUP_IMG   := kafka-backup:dev
 CC_VERSION         := 2.5.146
 CC_IMAGE           := cruise-control-ubi:$(CC_VERSION)
@@ -21,6 +22,7 @@ MANIFESTS_DIR      := manifests
         kafka-ui-setup ui-test \
         kafka-editor-image reload-kafka-editor-image \
         mm2-image reload-mm2-image \
+        connect-image reload-connect-image kafka-connect-smoke-test \
         kafka-backup-image reload-kafka-backup-image kafka-backup-test \
         cruise-control-image reload-cruise-control-image cruise-control-test \
         keycloak-setup proxy-setup rbac-test apicurio-setup apicurio-rbac-test \
@@ -161,6 +163,16 @@ reload-mm2-image: mm2-image  ## Rebuild + reload mm2 image into all Kind cluster
 	  kubectl --context kind-$$cluster -n $(NAMESPACE) rollout restart deployment mirrormaker2 2>/dev/null || true; \
 	done
 
+connect-image:  ## Build the Kafka Connect worker image (kafka-ubi base + baked plugin dir)
+	docker build --build-arg KAFKA_BASE=$(KAFKA_IMAGE) -t $(CONNECT_IMG) $(OPERATOR_DIR)/connect-image
+
+reload-connect-image: connect-image  ## Rebuild + reload connect image into all Kind clusters
+	@for cluster in $(CLUSTERS); do \
+	  kind load docker-image $(CONNECT_IMG) --name $$cluster; \
+	  kubectl --context kind-$$cluster -n $(NAMESPACE) get deployments -l app=kafka-connect -o name 2>/dev/null \
+	    | xargs -r -I{} kubectl --context kind-$$cluster -n $(NAMESPACE) rollout restart {} 2>/dev/null || true; \
+	done
+
 kafka-backup-image:  ## Build the kafka-backup image (osodevops tool compiled from source on UBI)
 	docker build -t $(KAFKA_BACKUP_IMG) $(OPERATOR_DIR)/kafka-backup-image
 
@@ -262,6 +274,9 @@ broker-kill-test:  ## Kill a broker; producers/consumers keep going; broker rejo
 mm2-smoke-test:  ## MM2 CRD + reconciler smoke (managed→external dummy bootstrap)
 	@chmod +x mm2-smoke-test.sh && ./mm2-smoke-test.sh
 
+kafka-connect-smoke-test:  ## KafkaConnect + KafkaConnector CRD + reconciler smoke
+	@chmod +x kafka-connect-smoke-test.sh && ./kafka-connect-smoke-test.sh
+
 kafka-backup-test:  ## KafkaBackup/KafkaRestore/KafkaBackupValidation reconciler smoke
 	@chmod +x kafka-backup-test.sh && ./kafka-backup-test.sh
 
@@ -290,7 +305,7 @@ mm2-mirror-test:  ## MM2 data + Apicurio schema mirror e2e (external source → 
 # `make mcs-proxy-test` manually only on a topology without externalAccess.
 SMOKE_E2E := quorum kafkatopic-test rbac-test apicurio-rbac-test \
              xml-filter-test json-schema-test kafka-ui-setup ui-test \
-             mm2-smoke-test kafka-backup-test cruise-control-test
+             mm2-smoke-test kafka-connect-smoke-test kafka-backup-test cruise-control-test
 EXTENDED_E2E := proxy-external-lb-test durability-test \
                 rolling-restart-test broker-kill-test mm2-mirror-test
 

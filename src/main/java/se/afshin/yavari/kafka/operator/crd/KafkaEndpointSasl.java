@@ -4,8 +4,8 @@ import io.fabric8.generator.annotation.Required;
 import io.fabric8.generator.annotation.ValidationRule;
 
 /** SASL credentials for an external endpoint. The referenced Secret must contain
- *  keys "username" and "password". */
-public class Mm2SaslConfig {
+ *  keys "username" and "password" (or "token" for OAUTHBEARER). */
+public class KafkaEndpointSasl {
 
     /** SASL mechanism (PLAIN, SCRAM-SHA-256, SCRAM-SHA-512, OAUTHBEARER). */
     @Required

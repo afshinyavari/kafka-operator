@@ -3,21 +3,24 @@ package se.afshin.yavari.kafka.operator.crd;
 import com.fasterxml.jackson.annotation.JsonIgnore;
 import io.fabric8.generator.annotation.ValidationRule;
 
-/** Discriminated union for one side of an MM2 flow: exactly one of kafkaClusterRef
- *  (operator-managed KafkaCluster CR) or external (raw bootstrap + credentials). */
+/** Discriminated union describing one Kafka attachment: exactly one of kafkaClusterRef
+ *  (operator-managed KafkaCluster CR) or external (raw bootstrap + credentials).
+ *
+ *  <p>Reused by both MirrorMaker2 (per-side source/target) and KafkaConnect
+ *  (the single cluster the worker attaches to). */
 @ValidationRule(
         value = "(has(self.kafkaClusterRef) && !has(self.external)) || (!has(self.kafkaClusterRef) && has(self.external))",
         message = "exactly one of kafkaClusterRef or external must be set"
 )
-public class Mm2Endpoint {
+public class KafkaEndpoint {
 
     /** Reference to a managed KafkaCluster CR. The operator resolves this to the
-     *  cluster's proxy bootstrap (not the broker headless service) so MM2 traffic
-     *  flows through the existing Kroxylicious proxy. */
+     *  cluster's proxy bootstrap (not the broker headless service) so traffic flows
+     *  through the existing Kroxylicious proxy. */
     private KafkaClusterRef kafkaClusterRef;
 
     /** Raw external endpoint (bootstrap + credentials). */
-    private Mm2ExternalEndpoint external;
+    private KafkaEndpointExternal external;
 
     /** Name of a Secret holding OAuth2 client-credentials for authenticating to this
      *  endpoint's schema registry. Required when the registry sits behind an OIDC-gated
@@ -30,8 +33,8 @@ public class Mm2Endpoint {
     public KafkaClusterRef getKafkaClusterRef() { return kafkaClusterRef; }
     public void setKafkaClusterRef(KafkaClusterRef kafkaClusterRef) { this.kafkaClusterRef = kafkaClusterRef; }
 
-    public Mm2ExternalEndpoint getExternal() { return external; }
-    public void setExternal(Mm2ExternalEndpoint external) { this.external = external; }
+    public KafkaEndpointExternal getExternal() { return external; }
+    public void setExternal(KafkaEndpointExternal external) { this.external = external; }
 
     public String getSchemaRegistryAuthSecretRef() { return schemaRegistryAuthSecretRef; }
     public void setSchemaRegistryAuthSecretRef(String schemaRegistryAuthSecretRef) {
