@@ -6,4 +6,5 @@
   - always run e2e tests, the fast version
   - I will manually run e2e full/extended tests, or explicitly tell you to run them
 4. Update docs, architecture, api-reference, readme, operations after every feature
-5. Always ask before commit to git
+5. Every new feature should be implemented in a feature branch
+6. commit, push and create a PR after tests have passed 
