@@ -12,6 +12,7 @@ import { ConnectorsView } from './connect/ConnectorsView'
 import { ClusterManagerModal } from './ClusterManagerModal'
 import { useActiveCluster } from './clusterStore'
 import { useViewStore } from '../state/viewStore'
+import { useOperatorMode } from '../operator/useOperatorConfig'
 import { EmptyState } from '../components/EmptyState'
 
 /**
@@ -28,8 +29,21 @@ export function ClusterView() {
   const [browsingMessages, setBrowsingMessages] = useState(false)
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null)
   const active = useActiveCluster()
+  const operatorMode = useOperatorMode()
 
   if (!active) {
+    // In operator mode the cluster is auto-bootstrapped from /api/config —
+    // the empty state is a transient flash while that request is in flight.
+    if (operatorMode) {
+      return (
+        <div className="flex flex-1 flex-col">
+          <EmptyState
+            title="Connecting to the managed cluster…"
+            hint="The kafka-operator is provisioning this UI's cluster connection."
+          />
+        </div>
+      )
+    }
     return (
       <div className="flex flex-1 flex-col">
         <EmptyState

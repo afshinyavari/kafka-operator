@@ -2,13 +2,31 @@ import { useState } from 'react'
 import { Server } from 'lucide-react'
 import { useClusterStore } from './clusterStore'
 import { ClusterManagerModal } from './ClusterManagerModal'
+import { useOperatorMode } from '../operator/useOperatorConfig'
 
-/** Active-cluster selector + "Manage clusters", shown in the header. */
+/** Active-cluster selector + "Manage clusters", shown in the header.
+ *  In operator mode the cluster is operator-managed (one entry, fixed name),
+ *  so the selector becomes a read-only label and "Manage clusters" is hidden. */
 export function ClusterTopBar() {
   const clusters = useClusterStore((s) => s.clusters)
   const activeId = useClusterStore((s) => s.activeId)
   const setActiveCluster = useClusterStore((s) => s.setActiveCluster)
   const [showManager, setShowManager] = useState(false)
+  const operatorMode = useOperatorMode()
+
+  if (operatorMode) {
+    const active =
+      clusters.find((c) => c.id === activeId) ?? clusters[0] ?? null
+    return (
+      <span
+        className="flex items-center gap-1.5 rounded border border-slate-300 bg-slate-50 px-2 py-1 text-xs text-slate-700"
+        title="Cluster managed by the kafka-operator"
+      >
+        <Server className="h-3.5 w-3.5" />
+        {active?.name ?? 'Managed cluster'}
+      </span>
+    )
+  }
 
   return (
     <>
