@@ -1,0 +1,39 @@
+appId: dev.kafkaeditor.app
+productName: Kafka Editor
+copyright: Copyright © 2026 Kafka Editor
+
+directories:
+  output: release
+  buildResources: build
+
+asar: true
+compression: maximum
+
+# Files that go inside app.asar.
+files:
+  - electron-dist/**/*
+  - dist/**/*
+  - package.json
+  - "!**/*.map"
+
+# The JRE and the Quarkus backend are spawned by Electron's main process, so
+# they must live as real files outside the asar — that's exactly what
+# extraResources gives us. They land in process.resourcesPath/{jre,backend}.
+extraResources:
+  - from: resources/jre
+    to: jre
+  - from: resources/backend
+    to: backend
+
+linux:
+  category: Development
+  icon: build/icon.png
+  maintainer: Kafka Editor <noreply@kafkaeditor.dev>
+  # AppImage runs anywhere but mounts via FUSE squashfs, so its cold launch
+  # is slow (~60–80 s) while reading the bundled JRE through the FUSE driver.
+  # .deb installs to /opt on disk and launches in ~2 s, so it's the preferred
+  # format on Debian/Ubuntu.
+  target:
+    - AppImage
+    - deb
+  artifactName: "kafka-editor-${version}-${arch}.${ext}"

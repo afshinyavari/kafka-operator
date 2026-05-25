@@ -1,0 +1,60 @@
+{
+  "name": "kafka-editor",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Visual editor for Kafka Streams topologies",
+  "homepage": "https://github.com/afshin/kafka-editor",
+  "author": {
+    "name": "Kafka Editor",
+    "email": "noreply@kafkaeditor.dev"
+  },
+  "type": "module",
+  "main": "electron-dist/main.js",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "lint": "eslint .",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "build:spa:electron": "tsc -b && ELECTRON=true vite build",
+    "build:electron": "tsc -p electron/tsconfig.json && node scripts/finalize-electron-build.mjs",
+    "build:backend": "mvn -f backend/pom.xml -DskipTests package",
+    "build:jre": "node scripts/build-jre.mjs",
+    "assemble": "node scripts/assemble.mjs",
+    "build:all": "npm run build:spa:electron && npm run build:electron && npm run build:backend && npm run build:jre && npm run assemble",
+    "electron:dev": "npm run build:electron && electron .",
+    "predist": "npm run build:all",
+    "dist": "electron-builder --linux",
+    "predist:dir": "npm run build:all",
+    "dist:dir": "electron-builder --dir"
+  },
+  "dependencies": {
+    "@xyflow/react": "^12.10.2",
+    "lucide-react": "^1.16.0",
+    "nanoid": "^5.1.11",
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "zustand": "^5.0.13"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^24.12.3",
+    "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.1",
+    "electron": "^42.2.0",
+    "electron-builder": "^26.8.1",
+    "eslint": "^10.3.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "eslint-plugin-react-refresh": "^0.5.2",
+    "globals": "^17.6.0",
+    "playwright": "^1.60.0",
+    "tailwindcss": "^4.3.0",
+    "typescript": "~6.0.2",
+    "typescript-eslint": "^8.59.2",
+    "vite": "^8.0.12",
+    "vitest": "^4.1.7"
+  }
+}

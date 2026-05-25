@@ -8,6 +8,7 @@ KAFKA_VERSION      := 4.0.0
 KROXY_IMAGE        := kroxy-filters:dev
 APICURIO_PROXY_IMG := apicurio-rbac-proxy:dev
 KAFKA_UI_IMG       := kafka-ui:dev
+KAFKA_EDITOR_IMG   := kafka-editor:dev
 MM2_IMG            := mm2:dev
 KAFKA_BACKUP_IMG   := kafka-backup:dev
 CC_VERSION         := 2.5.146
@@ -19,6 +20,7 @@ MANIFESTS_DIR      := manifests
         logs-a logs-b logs-c build image \
         kroxy-image reload-kroxy-image apicurio-proxy-image reload-apicurio-proxy-image \
         kafka-ui-image reload-kafka-ui-image kafka-ui-setup ui-test \
+        kafka-editor-image reload-kafka-editor-image \
         mm2-image reload-mm2-image \
         kafka-backup-image reload-kafka-backup-image kafka-backup-test \
         cruise-control-image reload-cruise-control-image cruise-control-test \
@@ -143,6 +145,20 @@ kafka-ui-image:  ## Build the kafka-ui Docker image
 reload-kafka-ui-image: kafka-ui-image  ## Rebuild + reload kafka-ui image into all Kind clusters (HA #20)
 	@for cluster in $(CLUSTERS); do \
 	  kind load docker-image $(KAFKA_UI_IMG) --name $$cluster; \
+	  kubectl --context kind-$$cluster -n $(NAMESPACE) rollout restart deployment kafka-ui 2>/dev/null || true; \
+	done
+
+kafka-editor-image:  ## Build the kafka-editor Docker image (React SPA bundled into Quarkus backend, UBI runtime)
+	cd $(OPERATOR_DIR)/kafka-editor && npm ci && npm run build
+	rm -rf $(OPERATOR_DIR)/kafka-editor/backend/src/main/resources/META-INF/resources
+	mkdir -p $(OPERATOR_DIR)/kafka-editor/backend/src/main/resources/META-INF/resources
+	cp -r $(OPERATOR_DIR)/kafka-editor/dist/. $(OPERATOR_DIR)/kafka-editor/backend/src/main/resources/META-INF/resources/
+	cd $(OPERATOR_DIR)/kafka-editor/backend && mvn package -DskipTests -q
+	docker build -t $(KAFKA_EDITOR_IMG) $(OPERATOR_DIR)/kafka-editor
+
+reload-kafka-editor-image: kafka-editor-image  ## Rebuild + reload kafka-editor image into all Kind clusters
+	@for cluster in $(CLUSTERS); do \
+	  kind load docker-image $(KAFKA_EDITOR_IMG) --name $$cluster; \
 	  kubectl --context kind-$$cluster -n $(NAMESPACE) rollout restart deployment kafka-ui 2>/dev/null || true; \
 	done
 
