@@ -6,7 +6,7 @@ export const site = {
   description:
     'A Kubernetes operator that runs Apache Kafka 4.x in KRaft mode across 3+ clusters with built-in OIDC RBAC, schema governance, mirror-maker, backup, rebalancing, unified audit logging, and a write-capable web editor. The full Kafka platform — declarative, multi-cluster, one YAML.',
   url: 'https://example.com',
-  githubUrl: 'https://github.com/afshin-yavari/kafka-operator',
+  githubUrl: 'https://github.com/afshinyavari/kafka-operator',
   contactEmail: 'afshin@yavari.se',
   twitter: '@yavari',
   license: 'Apache-2.0',
@@ -33,7 +33,6 @@ export const site = {
     'kafka audit log',
     'kafka migration',
     'kafka streams designer',
-    'modern kafka ui',
     'kafka editor',
     'kafka web ui',
   ],
@@ -41,7 +40,7 @@ export const site = {
 
 export const nav = [
   { href: '/why/', label: 'Why' },
-  { href: '/features/multi-cluster-kraft/', label: 'Features' },
+  { href: '/features/', label: 'Features' },
   { href: '/architecture/', label: 'Architecture' },
   { href: '/roadmap/', label: 'Roadmap' },
   { href: '/docs/', label: 'Docs' },

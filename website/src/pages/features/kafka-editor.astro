@@ -16,7 +16,7 @@ const faqSchema = {
   mainEntity: [
     { '@type': 'Question', name: 'Can the editor actually write to topics?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. kafka-editor performs topic CRUD, produces test records, and resets consumer groups. Every write is gated by the same KafkaRbac the proxy enforces — the editor never has more authority than the user logged into it.' } },
     { '@type': 'Question', name: 'How does the editor know who the user is?', acceptedAnswer: { '@type': 'Answer', text: 'OIDC code+PKCE against Keycloak (or any OIDC provider). The Quarkus backend receives the JWT, propagates it to the proxy via SASL/OAUTHBEARER using a JwtCallbackHandler, and shares a single client mTLS cert across all editor pods. The proxy is still the authoritative policy enforcement point.' } },
-    { '@type': 'Question', name: 'Is this the visual designer from the roadmap?', acceptedAnswer: { '@type': 'Answer', text: 'No. kafka-editor is shipped and covers the read-and-edit surface: clusters, topics, messages, consumer groups, schemas. The visual designer on the roadmap is a separate Electron-packaged tool that adds drag-on-canvas Kafka Streams topology authoring and visual schema design on top of kafka-editor.' } },
+    { '@type': 'Question', name: 'Does it include the Streams topology designer?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. The same SPA has two top-level modes: an Editor mode with a drag-on-canvas Kafka Streams topology designer (Stream / Table sources, Filter / Map / Join nodes, Generate Code) and a Cluster mode for browsing topics, messages, consumer groups, and schemas. Both ship in the same KafkaUI Deployment.' } },
     { '@type': 'Question', name: 'Is the editor optional?', acceptedAnswer: { '@type': 'Answer', text: 'Yes. The KafkaUI CRD is independent of KafkaCluster — apply it only on clusters where you want a UI. The operator deploys ServiceAccount + Role/RoleBinding + Deployment + Service, optionally an Ingress.' } },
   ],
 };
@@ -53,9 +53,25 @@ const auditEvent = `{
   <FeatureHero
     eyebrow="Kafka editor"
     title="A modern Kafka UI, shipped by the operator."
-    lede="kafka-editor is a React 19 + Vite SPA bundled into a Quarkus 3.17 backend. The operator deploys it via the KafkaUI CRD with OIDC SSO, JWT propagation to the proxy, RBAC inherited from KafkaRbac, and a structured per-write audit log."
+    lede="kafka-editor is a React 19 + Vite SPA bundled into a Quarkus 3.17 backend with two modes: a Kafka Streams topology designer and a cluster browser/editor. The operator deploys it via the KafkaUI CRD with OIDC SSO, JWT propagation to the proxy, RBAC inherited from KafkaRbac, and a structured per-write audit log."
     meta={['React 19 + Vite', 'Quarkus 3.17', 'OIDC SSO', 'JWT-aware RBAC']}
   />
+
+  <section class="container-site -mt-4 pb-8">
+    <figure class="mx-auto max-w-5xl overflow-hidden rounded-2xl border border-border bg-bg-raised shadow-lg">
+      <img
+        src="/screenshots/editor/01-editor-topology.png"
+        alt="kafka-editor opened on the Streams topology canvas — nodes panel on the left, empty canvas in the middle, inspector on the right."
+        loading="eager"
+        width="1440"
+        height="900"
+        class="block w-full"
+      />
+      <figcaption class="border-t border-border bg-bg-inset px-5 py-3 text-xs text-fg-muted">
+        Editor mode — drag-on-canvas Kafka Streams topology with a node palette, inspector, and live problems pane.
+      </figcaption>
+    </figure>
+  </section>
 
   <section class="container-site py-16">
     <Prose>
@@ -106,6 +122,37 @@ const auditEvent = `{
         <code>KAFKA_EDITOR_TLS_DIR</code>, <code>QUARKUS_OIDC_*</code>).
       </p>
 
+      <h2 id="tour">A walkthrough of the cluster view.</h2>
+      <p>
+        Five views you actually use day to day: cluster overview, topics
+        list, topic detail with partition health, the message browser, and
+        consumer-group state.
+      </p>
+    </Prose>
+
+    <div class="mx-auto mt-8 max-w-6xl grid grid-cols-1 gap-5 md:grid-cols-2">
+      {[
+        { src: '/screenshots/editor/02-cluster-overview.png', caption: 'Cluster overview — cluster ID, broker count, topics, partitions, plus a per-broker list with rack and role.' },
+        { src: '/screenshots/editor/03-topics.png', caption: 'Topics list — name, partitions, replication factor, internal-topic filter, create button.' },
+        { src: '/screenshots/editor/04-topic-detail.png', caption: 'Topic detail — message count, size, partition skew, per-partition leader/ISR health, configure / add partitions / delete actions.' },
+        { src: '/screenshots/editor/06-message-browser.png', caption: 'Message browser — offset, timestamp, key, value, schema-aware decoding, live-tail toggle, produce button.' },
+        { src: '/screenshots/editor/05-consumer-groups.png', caption: 'Consumer groups — state, member count, coordinator broker. Click through to per-partition offsets and lag.' },
+      ].map((shot) => (
+        <figure class="overflow-hidden rounded-xl border border-border bg-bg-raised">
+          <img
+            src={shot.src}
+            alt={shot.caption}
+            loading="lazy"
+            width="1440"
+            height="900"
+            class="block w-full"
+          />
+          <figcaption class="border-t border-border bg-bg-inset px-4 py-2.5 text-xs text-fg-muted">{shot.caption}</figcaption>
+        </figure>
+      ))}
+    </div>
+
+    <Prose>
       <h2 id="audit">Every write is audited.</h2>
       <p>
         Every authenticated POST/PUT/PATCH/DELETE emits one JSON line on

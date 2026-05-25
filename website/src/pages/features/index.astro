@@ -1,0 +1,32 @@
+---
+import Base from '../../layouts/Base.astro';
+import FeatureHero from '../../components/FeatureHero.astro';
+import FeatureGrid from '../../components/FeatureGrid.astro';
+import CtaSection from '../../components/CtaSection.astro';
+import { site } from '../../site.config';
+
+const title = 'Features';
+const description = `Every shipped capability of ${site.brand}: multi-cluster KRaft, Kroxylicious proxy with RBAC, schema governance, MM2 with schema-id rewrite, backup & restore, Cruise Control, safe rolling updates, observability, unified audit logging, and the kafka-editor web console.`;
+
+const breadcrumbs = {
+  '@context': 'https://schema.org',
+  '@type': 'BreadcrumbList',
+  itemListElement: [
+    { '@type': 'ListItem', position: 1, name: 'Home', item: `${site.url}/` },
+    { '@type': 'ListItem', position: 2, name: 'Features', item: `${site.url}/features/` },
+  ],
+};
+---
+
+<Base title={title} description={description} schema={breadcrumbs}>
+  <FeatureHero
+    eyebrow="Features"
+    title="Everything in the box."
+    lede="Ten shipped pillars, eleven CRDs, one operator. Pick a card to dive into the design and the YAML. Strimzi is the right shape for a single Kubernetes cluster — this is what you get when you want the platform, not just the operator."
+    meta={['10 pillars', '11 CRDs', 'all Apache 2.0', 'all shipped']}
+  />
+
+  <FeatureGrid />
+
+  <CtaSection />
+</Base>

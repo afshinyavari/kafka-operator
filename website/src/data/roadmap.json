@@ -16,14 +16,5 @@
     "summary": "Offload cold log segments to S3 / Azure / GCS via Aiven's tiered storage plugin, with the cold tier readable as an Apache Iceberg table. Query historical Kafka with DuckDB, Trino, or Spark — no ETL pipeline.",
     "detail": "Brokers stay lean: hot data stays on the local volume, cold data lives in object storage. The same segments are also exposed as an Apache Iceberg table, so your data lake reads Kafka directly. Retention becomes effectively infinite at object-store prices, and the canonical archive is in a format every modern analytics engine already speaks. Configured under <code>KafkaCluster.spec.storage.tiered</code>; object-store credentials via Secret reference.",
     "keywords": ["kafka tiered storage", "kafka iceberg", "aiven tiered storage", "kafka data lake", "kafka s3 tier", "kafka infinite retention"]
-  },
-  {
-    "slug": "visual-designer",
-    "eyebrow": "Tooling",
-    "title": "Streams topology designer",
-    "tagline": "Drag Kafka Streams topologies on a canvas. Author schemas visually. Built on top of kafka-editor.",
-    "summary": "A standalone React + Electron tool that extends the shipped kafka-editor SPA with a drag-on-canvas Kafka Streams topology editor, type-aware payload exploration via the schema registry, and visual schema authoring with reference resolution.",
-    "detail": "kafka-editor already covers topic CRUD, produce, consumer-group reset, and schema-aware message browsing — see <a class=\"text-brand-bright underline\" href=\"/features/kafka-editor/\">the editor feature page</a>. The visual designer is the next layer: a drag-on-canvas topology editor that generates Kafka Streams DSL, deeper type-aware payload exploration, and visual schema authoring with reference resolution. Java backend for live cluster introspection; React + TypeScript + Vite frontend; packaged as both an Electron desktop app and an embeddable SPA that sits next to kafka-editor inside the operator-managed UI.",
-    "keywords": ["kafka streams designer", "kafka streams visualizer", "kafka topology editor", "kafka schema designer", "kafka streams dsl generator"]
   }
 ]
