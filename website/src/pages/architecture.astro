@@ -47,7 +47,7 @@ const crds = [
   { name: 'KafkaBackup', purpose: 'CronJob backup of records, offsets, and schemas to object storage.' },
   { name: 'KafkaRestore', purpose: 'Idempotent one-shot restore with PITR and topic remapping.' },
   { name: 'KafkaBackupValidation', purpose: 'Scheduled validation of backup manifests, partitions, and schemas.' },
-  { name: 'KafkaUI', purpose: 'Quarkus + htmx web console; OIDC SSO; JWT propagation to the proxy.' },
+  { name: 'KafkaUI', purpose: 'React SPA (kafka-editor) + Quarkus backend; OIDC SSO; JWT propagation to the proxy via OAUTHBEARER.' },
   { name: 'KafkaRebalance', purpose: 'Strimzi-style Cruise Control trigger; annotation-based approval.' },
 ];
 ---

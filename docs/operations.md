@@ -619,7 +619,8 @@ managed via GitOps. See [security.md → UI Phase 2 trust model](security.md#ui-
 
 ### Audit log
 
-Every write emits one JSON line on the `kafka-ui.audit` logger:
+Every authenticated POST/PUT/PATCH/DELETE emits one JSON line on the
+`kafka-editor.audit` logger via the backend's `AuditFilter`:
 
 ```bash
 # Tail audit events from any single pod
@@ -627,19 +628,20 @@ kubectl --context kind-kafka-a -n kafka logs -l app=kafka-ui --tail=200 \
   | grep '"action"' | jq -c 'select(.action)'
 ```
 
-Fields: `ts`, `user`, `action` (e.g. `topic.create`, `message.produce`,
-`group.resetOffsets`, `schema.delete`), `target` (`cluster/object`), `outcome`
-(`success` / `failure`), optional `details`, and `correlationId` (from the
-operator-wide MDC).
+Fields: `ts`, `user`, `action` (`http.<method>`, e.g. `http.post`), `target`
+(URI path, e.g. `/api/admin/topics`), `outcome` (`success` / `failure`),
+`details.method` + `details.status`, and `correlationId` (from the
+operator-wide MDC). Read operations are audited at the proxy layer — see
+[unified audit](audit.md).
 
 ### CSRF
 
-State-changing requests (POST/PUT/PATCH/DELETE) are checked by
-`OriginCsrfFilter`: the `Origin` header (or `Referer` fallback) must match
-the `Host` header, or appear in `kafka-ui.csrf.allowed-origins` (comma-separated).
-SameSite=Lax on the OIDC session cookie is the primary protection; this filter
-is defence-in-depth. Disable with `kafka-ui.csrf.enabled=false` only for
-explicit embed scenarios.
+The browser carries the OIDC session via a `SameSite=Lax` cookie (Quarkus
+OIDC default), which already blocks the canonical cookie-replay CSRF attack
+on cross-site POSTs. The SPA reads `/api/*` from its own origin, so no
+additional Origin/Referer filter is shipped. If you embed the UI in a
+different origin, configure CORS via `quarkus.http.cors.origins` rather than
+disabling the SameSite default.
 
 ### Troubleshooting writes
 

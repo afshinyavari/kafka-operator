@@ -537,19 +537,19 @@ underlying Kafka topic is retained per `deletionPolicy=RETAIN`.
 
 ---
 
-## Kafka UI (Quarkus + htmx + Bootstrap 5)
+## Kafka UI (React + Vite SPA + Quarkus 3.17 backend)
 
-The `kafka-ui` sibling module is a Quarkus web app that lets authenticated
-users browse and operate the Kafka cluster(s) through a server-rendered HTML
-UI styled with Bootstrap 5 + Bootstrap Icons. It does **not** hold privileged
-credentials of its own; every Kafka/Apicurio call carries the logged-in user's
-JWT, so the existing `GroupAwareAuthorizer` + `apicurio-rbac-proxy` enforce
-access. Phase 2 added write operations (topic CRUD, produce, consumer-group
-reset/delete, schema CRUD); ACL editing remains out of scope for the UI —
+The `kafka-editor/` module is a React 19 + Vite SPA bundled into a Quarkus
+backend that lets authenticated users browse and operate the Kafka cluster
+through a visual editor and a topic/group/schema browser. It does **not**
+hold privileged credentials of its own; every Kafka/Apicurio call carries
+the logged-in user's JWT, so the existing `GroupAwareAuthorizer` +
+`apicurio-rbac-proxy` enforce access. ACL editing remains out of scope —
 `KafkaRbac` CRs are managed via GitOps.
 
-The UI is deployed via the **`KafkaUI` CRD** (`kui`, group `kafka.yavari.afshin.se`)
-— see [api-reference.md → KafkaUI](api-reference.md#kafkaui). The operator
+The UI is deployed via the unchanged **`KafkaUI` CRD** (`kui`, group
+`kafka.yavari.afshin.se`) — see
+[api-reference.md → KafkaUI](api-reference.md#kafkaui). The operator
 reconciler (`se.afshin.yavari.kafka.operator.ui`) materializes the
 ServiceAccount, namespaced Role/RoleBinding, Deployment, Service, and optional
 Ingress; child resources cascade via ownerReferences on `kubectl delete kui …`.
@@ -560,86 +560,43 @@ secret managers can own it.
 Browser ──OIDC code+PKCE──► Keycloak (realm "demo", client "kafka-ui-web")
    │                            │
    ▼                            ▼
-kafka-ui (Quarkus + Qute + htmx)
+kafka-editor (React SPA at /, Quarkus REST under /api/*)
    │
-   ├── AdminClient ─SASL_PLAINTEXT/OAUTHBEARER → KafkaProxy (per-CR Service)
-   ├── KafkaConsumer ─SASL_PLAINTEXT/OAUTHBEARER → KafkaProxy
-   ├── HTTP GET (Bearer JWT) ─────────────────► apicurio-rbac-proxy (per-CR Service)
-   └── KubernetesClient (read-only) ─────────► KafkaCluster / KafkaRbac CRs
+   ├── AdminClient ─SASL_SSL/OAUTHBEARER + PEM mTLS → KafkaProxy
+   ├── KafkaConsumer ─SASL_SSL/OAUTHBEARER + PEM mTLS → KafkaProxy
+   ├── HTTP GET (Bearer JWT) ──────────────────────► apicurio-rbac-proxy
+   └── KubernetesClient (read-only) ──────────────► KafkaRbac CRs
 ```
 
-### Endpoints
+The frontend is a single-page React app (xyflow canvas + zustand store) that
+talks to the backend exclusively under `/api/*`. The Quarkus backend serves
+the built SPA from `META-INF/resources/index.html`; an HTTP-permission rule
+forces the browser through Keycloak before the static handler hands over
+`/`, so an unauthenticated client never sees the SPA shell. Static assets
+under `/assets/*` stay public (they hold no secrets) and load on the
+post-login round-trip.
 
-| Path | Method | Purpose |
-|---|---|---|
-| `/` | GET | Cluster picker (lists `KafkaCluster` CRs) |
-| `/clusters/{id}` | GET | Broker dashboard |
-| `/clusters/{id}/topics` | GET | Topic list, filtered by KafkaRbac |
-| `/clusters/{id}/topics` | POST | Create topic (name, partitions, RF, configs) |
-| `/clusters/{id}/topics/{name}` | GET | Topic configs + partitions |
-| `/clusters/{id}/topics/{name}/configs` | POST | Alter configs (incremental, blank value = reset) |
-| `/clusters/{id}/topics/{name}/delete` | POST | Delete topic (typed-name confirmation required) |
-| `/clusters/{id}/topics/{name}/messages` | GET | Paginated message browser with auto-deserializer |
-| `/clusters/{id}/topics/{name}/messages/stream` | GET | SSE live tail |
-| `/clusters/{id}/topics/{name}/produce` | POST | Produce a single record (key, value, headers, partition) |
-| `/clusters/{id}/groups` | GET | Consumer groups |
-| `/clusters/{id}/groups/{groupId}/delete` | POST | Delete consumer group (typed-id confirmation) |
-| `/clusters/{id}/groups/{groupId}/reset-offsets` | POST | Reset committed offset (EARLIEST / LATEST / explicit) |
-| `/clusters/{id}/acls` | GET | KafkaRbac rules (read-only, header "Access rules") |
-| `/clusters/{id}/schemas` | GET | Apicurio artifact list |
-| `/clusters/{id}/schemas` | POST | Create artifact (AVRO / JSON / PROTOBUF / JSONSCHEMA) |
-| `/clusters/{id}/schemas/{id}` | GET | Artifact content + versions |
-| `/clusters/{id}/schemas/{id}/versions` | POST | Publish a new version |
-| `/clusters/{id}/schemas/{id}/delete` | POST | Delete artifact (typed-id confirmation) |
+### REST surface (Quarkus)
 
-All state-changing endpoints redirect (`303 See Other`) with a `success=` or
-`error=` query parameter; the templates pick these up and render Bootstrap
-alerts. Every write also emits a JSON line on the `kafka-ui.audit` logger
-(fields: `ts`, `user`, `action`, `target`, `outcome`, `details`,
-`correlationId`).
+`/api/health`, `/q/health/{live,ready}` are public; everything else is
+`@Authenticated`. Key paths (the SPA is the only intended consumer):
 
-### CSRF + write trust model
+| Prefix | Purpose |
+|---|---|
+| `/api/admin/cluster` | Broker dashboard + reachability probe |
+| `/api/admin/topics` | List / create / configure / delete topics, list partitions |
+| `/api/admin/messages` | Paginated browse + produce + replay |
+| `/api/admin/groups` | List, describe, delete consumer groups, reset offsets |
+| `/api/admin/acls` | Read/write ACLs (proxy enforces the bearer's authorization) |
+| `/api/admin/connect` | Kafka Connect proxy (no-op when no Connect URL configured) |
+| `/api/registry/*` | Schema-registry browse + write proxy |
+| `/api/run` | Run a visual-editor topology against TopologyTestDriver |
+| `/api/me/rbac` | Self-introspection: `UserRbac` derived from KafkaRbac CRs |
 
-POST/PUT/PATCH/DELETE requests are checked by `OriginCsrfFilter`: the `Origin`
-(or `Referer`) header must match the `Host` header, or appear on the
-configurable allow-list (`kafka-ui.csrf.allowed-origins`). This is
-defence-in-depth — the primary protection is Quarkus OIDC's SameSite=Lax
-session cookie, which already blocks the canonical cookie-replay attack.
-
-All write paths flow through systems that already see the user's identity:
-Kafka writes via Kroxylicious (broker enforces Kroxy RBAC), schema writes via
-the apicurio-rbac-proxy (Bearer JWT). The UI's ServiceAccount has only
-read-only permissions on `KafkaCluster` and `KafkaRbac` CRs — there is **no
-K8s API write path** from the UI. ACL changes go through GitOps on
-`KafkaRbac` CRs.
-
-### Smart deserializer
-
-Pure first-hit-wins detection on the value/key bytes:
-
-1. `null` payload → tombstone badge
-2. `0x00 || globalId:int64` → Apicurio V3 envelope, schema fetched by globalId
-3. `0x00 || schemaId:int32` → Confluent envelope, fetched by id
-4. Apicurio artifact lookup by `{topic}-{key|value}` naming convention
-5. JSON heuristic (starts with `{` or `[` and parses)
-6. UTF-8 heuristic (≥95% printable; strict decode — no replacement char accepted)
-7. Hex dump (first 256 bytes)
-
-Schema fetches are cached in-process (long TTL by globalId; 30 s for
-name-based lookups, including negative results). Avro decodes via
-`GenericDatumReader → JsonEncoder`; JSON schema artifacts pretty-print the
-payload; Protobuf renders as hex with a Phase-2 TODO.
-
-### Multi-cluster routing
-
-The UI lists *KafkaCluster CRs* — those are the logical clusters. The 3 MCS
-K8s clusters (kafka-a/b/c) backing one CR are invisible to the UI; the MCS
-mesh's locality-preferring routing through the aggregated
-`{service}.{ns}.svc.clusterset.local` DNS name picks a reachable replica.
-(Most MCS implementations — Submariner Lighthouse, Cilium Cluster Mesh, Istio
-multi-cluster — prefer local endpoints by default.) Per-CR Service names
-(`kafka-proxy-{crName}`, `apicurio-rbac-proxy-{crName}`) make different CRs
-addressable independently.
+Every write call emits one JSON line on the `kafka-editor.audit` logger via
+`AuditFilter` (fields: `ts`, `user`, `action` (`http.<method>`), `target`
+(URI path), `outcome`, `status`, `correlationId`). Read calls are audited at
+the proxy layer (see [unified audit](audit.md)).
 
 ### Multi-user JWT propagation
 
@@ -671,9 +628,9 @@ trickiest piece of OIDC wiring to get right.
 ### Transport: SASL_SSL + mTLS to the proxy
 
 The KafkaProxy's gateway uses `CnSubjectBuilderService`, so the transport
-layer must be mTLS. The UI mounts the operator-generated
+layer must be mTLS. The kafka-editor pod mounts the operator-generated
 `kafka-proxy-test-client-tls` Secret (PEM files: `tls.crt`, `tls.key`,
-`ca.crt`) at `/etc/kafka-tls` and `KafkaClientProvider` passes them inline
+`ca.crt`) at `/etc/kafka-tls` and `AdminClientFactory` passes them inline
 via `ssl.keystore.type=PEM` + `ssl.keystore.certificate.chain` (and
 `ssl.truststore.certificates`), which avoids any PKCS12 conversion step.
 Authorization is still driven by the per-user SASL/OAUTHBEARER JWT — mTLS

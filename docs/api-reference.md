@@ -836,13 +836,13 @@ MCS `ServiceExport` is created for both the registry and the proxy, so cross-clu
 
 ## KafkaUI
 
-Deploys the Quarkus + htmx Kafka UI as an operator-managed workload: ServiceAccount, namespaced Role/RoleBinding (read access to `KafkaCluster`/`KafkaProxy`/`KafkaRbac`/`ApicurioRegistry` CRs), Deployment, Service, and optional Ingress. The UI app itself discovers `KafkaCluster` CRs at runtime via the K8s API; it does not reference one through the CRD.
+Deploys the React + Quarkus **kafka-editor** as an operator-managed workload: ServiceAccount, namespaced Role/RoleBinding (read access to `KafkaCluster` / `KafkaRbac` CRs), Deployment, Service, and optional Ingress. The CRD shape is unchanged from the previous htmx-backed deployment — only the underlying image has flipped to `kafka-editor:dev`. The backend reads its bootstrap URL + OIDC config from operator-injected env vars (`KAFKA_EDITOR_BOOTSTRAP_SERVERS`, `KAFKA_EDITOR_TLS_DIR`, `QUARKUS_OIDC_*`) and surfaces the SPA at `/`; see [architecture.md → Kafka UI](architecture.md#kafka-ui-react--vite-spa--quarkus-317-backend).
 
 ### spec
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
-| `image` | string | no | `kafka-ui:dev` | Container image. |
+| `image` | string | no | `kafka-editor:dev` | Container image. |
 | `imagePullPolicy` | string | no | `IfNotPresent` | |
 | `replicas` | int | no | `1` | |
 | `oidc` | KafkaUIOidcConfig | **yes** | — | Keycloak SSO settings; the reconciler fails the CR if missing. |

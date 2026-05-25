@@ -121,14 +121,16 @@ Defence in depth on the browser side:
 
 - OIDC web-app session cookie is `SameSite=Lax` (Quarkus OIDC default), which
   already blocks the canonical cookie-replay CSRF attack on cross-site POSTs.
-- `OriginCsrfFilter` additionally rejects POST / PUT / PATCH / DELETE whose
-  `Origin` (or `Referer`) doesn't match the request `Host`, with an optional
-  allow-list via `kafka-ui.csrf.allowed-origins`.
-- Every write emits a structured JSON audit line on the `kafka-ui.audit`
-  logger (fields: `ts`, `user`, `action`, `target`, `outcome`, `details`,
-  `correlationId`). See [operations.md → Audit log](operations.md#audit-log).
+- The SPA's `/api/*` calls share the kafka-editor origin, so no separate
+  Origin/Referer filter is needed; embed scenarios should be opted into via
+  `quarkus.http.cors.origins` rather than disabling SameSite.
+- Every authenticated POST/PUT/PATCH/DELETE emits a structured JSON audit
+  line on the `kafka-editor.audit` logger via `AuditFilter` (fields: `ts`,
+  `user`, `action` = `http.<method>`, `target` = URI path, `outcome`,
+  `details.method` + `details.status`, `correlationId`). See
+  [operations.md → Audit log](operations.md#audit-log).
 - Delete operations (topic / group / schema) require typing the target name
-  in the confirmation modal — prevents accidental wipes from a misclick.
+  in the SPA's confirmation modal — prevents accidental wipes from a misclick.
 
 ### Why no UI-driven ACL editing?
 
