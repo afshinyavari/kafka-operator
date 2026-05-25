@@ -65,6 +65,11 @@ public class KafkaClusterSpec {
      *  which rolls the brokers once. */
     private KafkaClusterCruiseControlSpec cruiseControl;
 
+    /** Unified audit logging sub-spec. Null = stdout-only defaults (the in-process
+     *  audit emitter is always on; this sub-spec only controls the Kafka-topic sink
+     *  and operation allowlist). */
+    private KafkaClusterAuditSpec audit;
+
     public String getKafkaImage() { return kafkaImage; }
     public void setKafkaImage(String kafkaImage) { this.kafkaImage = kafkaImage; }
 
@@ -103,4 +108,7 @@ public class KafkaClusterSpec {
 
     public KafkaClusterCruiseControlSpec getCruiseControl() { return cruiseControl; }
     public void setCruiseControl(KafkaClusterCruiseControlSpec cruiseControl) { this.cruiseControl = cruiseControl; }
+
+    public KafkaClusterAuditSpec getAudit() { return audit; }
+    public void setAudit(KafkaClusterAuditSpec audit) { this.audit = audit; }
 }

@@ -118,7 +118,7 @@ reload-image:  ## Rebuild + reload image without recreating clusters
 	done
 
 kroxy-image:  ## Build the Kroxylicious + custom filters Docker image
-	cd $(OPERATOR_DIR)/filters && mvn package -DskipTests -q
+	cd $(OPERATOR_DIR)/filters && mvn install -DskipTests -q
 	docker build -t $(KROXY_IMAGE) $(OPERATOR_DIR)/filters
 
 reload-kroxy-image: kroxy-image  ## Rebuild + reload kroxy-filters image into all Kind clusters
@@ -127,6 +127,7 @@ reload-kroxy-image: kroxy-image  ## Rebuild + reload kroxy-filters image into al
 	done
 
 apicurio-proxy-image:  ## Build the apicurio-rbac-proxy Docker image
+	cd $(OPERATOR_DIR)/filters && mvn install -DskipTests -q
 	cd $(OPERATOR_DIR)/apicurio-proxy && mvn package -DskipTests -q
 	docker build -t $(APICURIO_PROXY_IMG) $(OPERATOR_DIR)/apicurio-proxy
 

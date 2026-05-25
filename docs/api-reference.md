@@ -40,6 +40,7 @@ Cluster-scoped configuration and KRaft quorum definition. One `KafkaCluster` CR 
 | `controllerTls` | KafkaListenerTlsConfig | no | — | Enables TLS on the KRaft `CONTROLLER:9093` listener. When set, all nodes load their TLS secret at startup. |
 | `proxyMtls` | KafkaProxyMtlsConfig | no | — | Enables mTLS on the broker `INTERNAL` listener for a Kroxylicious-style proxy. Driven from the cluster spec (not KafkaProxy presence) so every cluster in the MCS topology reconciles consistently, even when the proxy Deployment only runs on one cluster. |
 | `cruiseControl` | KafkaClusterCruiseControlSpec | no | — | Deploys LinkedIn Cruise Control for partition rebalancing. When set, the Cruise Control Metrics Reporter is added to every broker (a one-time rolling restart) and one Cruise Control Deployment runs on the primary cluster. |
+| `audit` | KafkaClusterAuditSpec | no | — | Unified audit logging. The in-process audit emitter is **always on** in both Kroxylicious and the Apicurio rbac-proxy (one JSON line per request on the `kafka-audit` SLF4J channel). This sub-spec opts into the Kafka-topic sink and allows trimming cardinality with an op allowlist. See `docs/audit.md` for the event schema. |
 
 ### spec.clusters[] — ClusterEntry
 
@@ -79,6 +80,27 @@ TLS requires a Secret named `{podName}-tls` in the same namespace with keys `tls
 |-------|------|----------|---------|-------------|
 | `enabled` | boolean | no | `false` | Enables mTLS on the broker `INTERNAL` listener. When `true`, the operator expects a pre-provisioned TLS secret per broker pool (cert-manager in production, `mcs-setup.sh` in tests). |
 | `proxyPrincipal` | string | no | `"kafka-proxy"` | The CN the proxy presents on its client cert. Added to `super.users` so the proxy has unrestricted access. |
+
+### spec.audit — KafkaClusterAuditSpec
+
+The in-process emitter writes one JSON line per Kafka request (Kroxylicious) or HTTP request (Apicurio rbac-proxy) to a dedicated SLF4J channel `kafka-audit` at INFO. That stream is always on — operators can ship it via Fluent Bit / Vector / Promtail to any log backend.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `kafkaTopic` | AuditKafkaTopicSpec | no | — | Opts into the Kafka-topic sink. When unset, stdout is the only sink. |
+| `includeOps` | []string | no | `[]` | Allowlist of operation names to emit (`PRODUCE`, `FETCH`, `CREATE_TOPICS`, `READ`, `WRITE`, `DELETE`, ...). Empty/omitted = emit every operation. Use this to drop the high-volume verbs (typically `FETCH`) so the `__audit` topic stays useful. |
+
+#### spec.audit.kafkaTopic — AuditKafkaTopicSpec
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `enabled` | boolean | no | `false` | Master switch for the Kafka-topic sink. When `true`, the operator upserts a `KafkaTopic` named `<cluster>-audit` and injects `KAFKA_AUDIT_*` env (with mTLS PEM paths) on the proxy + Apicurio Deployments. Audit traffic goes direct to the broker `INTERNAL` listener — never via Kroxylicious. |
+| `name` | string | no | `__audit` | Kafka topic name. Must match `[a-zA-Z0-9._-]{1,249}`. |
+| `retentionDays` | integer | no | `30` | Topic retention (1–365). Maps to `retention.ms`. |
+| `partitions` | integer | no | `3` | Topic partition count (≥1). |
+| `replicationFactor` | integer | no | `3` | Topic replication factor (≥1). |
+
+The audit event schema is documented in `docs/audit.md`.
 
 ### spec.cruiseControl — KafkaClusterCruiseControlSpec
 

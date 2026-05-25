@@ -1,0 +1,58 @@
+#
+# Kroxylicious log4j2 config — custom variant that surfaces se.afshin.yavari.*
+# filter logs and the kafka-audit channel. Mirrors the upstream layout (Console
+# + Routing JSON/text appenders) plus dedicated Loggers for our packages.
+#
+---
+Configuration:
+  status: WARN
+  shutdownHook: disable
+  name: Config
+  Appenders:
+    Console:
+      - name: STDOUT-PATTERN
+        target: SYSTEM_OUT
+        PatternLayout:
+          pattern: "%d{yyyy-MM-dd HH:mm:ss} %-5p <%t> %c{2.} - %m%replace{ %mdc}{' $'}{}%n"
+      - name: STDOUT-JSON
+        target: SYSTEM_OUT
+        JsonTemplateLayout:
+          eventTemplateUri: "${env:KROXYLICIOUS_LOG_JSON_TEMPLATE:-classpath:LogstashJsonEventLayoutV1.json}"
+    Routing:
+      name: STDOUT
+      Routes:
+        pattern: "${env:KROXYLICIOUS_LOG_FORMAT:-text}"
+        Route:
+          - key: json
+            ref: STDOUT-JSON
+          - key: text
+            ref: STDOUT-PATTERN
+  Loggers:
+    Root:
+      level: "${env:KROXYLICIOUS_ROOT_LOG_LEVEL:-WARN}"
+      additivity: false
+      AppenderRef:
+        - ref: STDOUT
+    Logger:
+      - name: io.kroxylicious
+        level: "${env:KROXYLICIOUS_APP_LOG_LEVEL:-${env:KROXYLICIOUS_ROOT_LOG_LEVEL:-INFO}}"
+        additivity: false
+        AppenderRef:
+          - ref: STDOUT
+      - name: com.github.benmanes.caffeine.cache.LocalAsyncCache
+        level: ERROR
+        additivity: false
+        AppenderRef:
+          - ref: STDOUT
+      # Custom filter packages — XML validation, OIDC/RBAC, audit.
+      - name: se.afshin.yavari
+        level: INFO
+        additivity: false
+        AppenderRef:
+          - ref: STDOUT
+      # Dedicated channel for AuditEvent JSON lines.
+      - name: kafka-audit
+        level: INFO
+        additivity: false
+        AppenderRef:
+          - ref: STDOUT

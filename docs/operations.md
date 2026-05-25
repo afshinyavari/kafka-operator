@@ -817,6 +817,61 @@ Validate a stored backup without a full restore with a `KafkaBackupValidation` C
 
 ---
 
+## Audit logging
+
+The proxy and the Apicurio rbac-proxy emit one JSON line per request on the SLF4J
+channel `kafka-audit` at INFO level — this is always on, requires no config, and
+sits next to ordinary application logs on stdout.
+
+Tail the proxy's audit stream:
+
+```bash
+kubectl --context kind-kafka-a -n kafka logs -l app=kroxylicious -f \
+  | grep '"decision":"'
+```
+
+A denied request looks like:
+
+```json
+{"ts":"2026-05-25T12:34:56.789Z","principal":"user:alice","op":"PRODUCE","resource":"orders","decision":"deny","latencyMs":3,"correlationId":"42"}
+```
+
+### Shipping to a Kafka topic
+
+Opt in on the parent `KafkaCluster`:
+
+```yaml
+spec:
+  audit:
+    kafkaTopic:
+      enabled: true
+      name: __audit
+      retentionDays: 30
+      partitions: 3
+      replicationFactor: 3
+    includeOps:
+      - PRODUCE
+      - WRITE
+      - DELETE   # drop the high-volume FETCH/READ noise
+```
+
+The operator upserts a `KafkaTopic` named `<cluster>-audit` and injects
+`KAFKA_AUDIT_*` env on the proxy + Apicurio rbac-proxy Deployments. Audit traffic
+connects direct to the broker `INTERNAL` listener (no Kroxylicious loop). Consume
+the topic with any Kafka client.
+
+If the sink misbehaves (network blip, ACL not yet propagated, topic not yet created),
+events fall back to stdout and the proxy emits one rate-limited WARN per minute:
+
+```
+Failed to ship audit event to Kafka topic __audit — falling back to stdout: <cause>
+```
+
+That's the signal to investigate. The request path is never blocked — the audit
+producer is configured `max.block.ms=0` and never throws on the calling thread.
+
+Full event schema in [docs/audit.md](audit.md).
+
 ## Monitoring
 
 ### Prometheus metrics

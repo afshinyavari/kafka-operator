@@ -151,6 +151,28 @@ listener is cluster-internal and mTLS-protected when `proxyMtls` is set; constra
 it further with NetworkPolicies. Object-storage credentials are supplied as
 Secret-backed env vars and are never written into the rendered config or logs.
 
+## Audit logging
+
+Every authorisation decision made by Kroxylicious and the Apicurio rbac-proxy
+is captured as one JSON line per request on the dedicated SLF4J channel
+`kafka-audit` at INFO level. This is the canonical record of *who did what,
+when, and was it allowed* — driven by the in-process emitter inside each
+component, so there is no "audit gateway" that can be bypassed.
+
+The lean v1 schema is `{ts, principal, op, resource, decision, latencyMs,
+correlationId}` — see [docs/audit.md](audit.md) for field semantics. `principal`
+is `user:<CN-or-sub>` from mTLS or the JWT, `group:<g>` when only a group
+claim is present, or `anonymous` otherwise. Out of scope for v1: JWT claim
+trail, source IP, user-agent, request bytes, audit-log signing.
+
+When `KafkaCluster.spec.audit.kafkaTopic.enabled=true`, the same records are
+also shipped to a Kafka topic on the parent cluster (`__audit` by default)
+over the proxy's existing mTLS client cert. The producer connects **direct
+to the broker `INTERNAL` listener** — it never re-enters Kroxylicious, so
+there is no loop and no extra RBAC surface (the proxy principal is already
+in `super.users`). The producer is non-blocking; sink failures fall back to
+the always-on stdout sink and log a rate-limited WARN once per minute.
+
 ## Threats considered but not (yet) defended
 
 - **Compromised operator pod**: today the operator has full Kafka admin via

@@ -88,6 +88,12 @@ class JwtGroupFilter implements SaslAuthenticateRequestFilter {
         }
 
         JwtGroupStore.put(sub, groups);
+
+        // Cache preferred_username (Keycloak's human-readable name) for audit display.
+        JsonNode unameNode = payload.get("preferred_username");
+        if (unameNode != null && !unameNode.isNull()) {
+            JwtGroupStore.putUsername(sub, unameNode.asText());
+        }
     }
 
     private static JsonNode resolveClaim(JsonNode root, String claimPath) {

@@ -71,6 +71,7 @@ public class ApicurioOrchestrator {
     @Inject KubernetesClient client;
     @Inject ApicurioDeploymentBuilder deploymentBuilder;
     @Inject ApicurioProxyContainerBuilder proxyContainerBuilder;
+    @Inject se.afshin.yavari.kafka.operator.audit.AuditOrchestrator auditOrchestrator;
     @Inject ApicurioProxyServiceBuilder proxyServiceBuilder;
     @Inject ApicurioKafkasqlSupport kafkasqlSupport;
     @Inject ExternalAccessResolver externalAccessResolver;
@@ -148,6 +149,9 @@ public class ApicurioOrchestrator {
             if (proxyEnabled) {
                 proxyContainer = proxyContainerBuilder.build(syn);
                 policyVolume = proxyContainerBuilder.policyVolume(rbacRef);
+                // Inject audit env + tls mount on the rbac-proxy container when the Kafka-topic
+                // sink is enabled (no-op otherwise).
+                auditOrchestrator.injectIntoContainer(proxyContainer, cr, namespace);
             }
 
             String secretRevisions = "";
@@ -182,6 +186,9 @@ public class ApicurioOrchestrator {
                 rollTracker.markRolling("apicurio", namespace, depName);
             }
 
+            // Add the audit-tls Volume to the pod template when the Kafka sink is enabled.
+            // The container-side mount was already added above; this is the matching pod volume.
+            auditOrchestrator.injectIntoDeployment(dep, cr, namespace);
             client.apps().deployments().inNamespace(namespace).resource(dep).serverSideApply();
 
             String proxySvcName = APICURIO_NAME + "-rbac-proxy";

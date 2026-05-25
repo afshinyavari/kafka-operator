@@ -9,6 +9,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaProxyOidcConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxySpec;
 
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 
@@ -18,11 +19,22 @@ public class KroxyliciousConfigBuilder {
     public String build(KafkaProxy proxy, int brokerCount, int brokerNodeIdBase,
                         String namespace, boolean mcsEnabled) {
         return build(proxy, brokerCount, brokerNodeIdBase, namespace, mcsEnabled,
-                ExternalAccessResolution.internal());
+                ExternalAccessResolution.internal(), null);
     }
 
     public String build(KafkaProxy proxy, int brokerCount, int brokerNodeIdBase,
                         String namespace, boolean mcsEnabled, ExternalAccessResolution external) {
+        return build(proxy, brokerCount, brokerNodeIdBase, namespace, mcsEnabled, external, null);
+    }
+
+    /**
+     * @param auditIncludeOps when non-null, wires the in-process audit filter at the end of the
+     *                       chain. Empty collection = emit every operation; non-empty = allowlist.
+     *                       Null = skip the audit filter entirely (used by lower-arg overloads).
+     */
+    public String build(KafkaProxy proxy, int brokerCount, int brokerNodeIdBase,
+                        String namespace, boolean mcsEnabled, ExternalAccessResolution external,
+                        Collection<String> auditIncludeOps) {
         KafkaProxySpec spec = proxy.getSpec();
         String dnsSuffix = mcsEnabled ? "clusterset.local" : "cluster.local";
         String poolHeadless = spec.getPoolRef() + "-headless." + namespace + ".svc." + dnsSuffix;
@@ -105,6 +117,16 @@ public class KroxyliciousConfigBuilder {
 
             appendSaslHandshakeSynthesizerFilter(cfg);
             activeFilters.add("sasl-handshake-synthesizer");
+        }
+
+        // Audit sits BEFORE authorization so that denies short-circuited by the auth filter are
+        // still captured. Audit's response observer reads the error codes set by authorization
+        // (response path runs in reverse order: auth → audit → client). The in-process stdout
+        // sink is always on; the Kafka sink is opt-in via KAFKA_AUDIT_BOOTSTRAP env injected by
+        // AuditOrchestrator.
+        if (auditIncludeOps != null) {
+            appendAuditFilter(cfg, auditIncludeOps);
+            activeFilters.add("audit");
         }
 
         if (spec.getRbacRef() != null) {
@@ -199,6 +221,16 @@ public class KroxyliciousConfigBuilder {
         cfg.append("      authorizer: GroupAwareAuthorizerService\n");
         cfg.append("      authorizerConfig:\n");
         cfg.append("        rulesFile: /etc/kroxy-rbac/rbac-rules.yaml\n");
+    }
+
+    private void appendAuditFilter(StringBuilder cfg, Collection<String> includeOps) {
+        cfg.append("  - name: audit\n");
+        cfg.append("    type: AuditFilterFactory\n");
+        if (includeOps != null && !includeOps.isEmpty()) {
+            cfg.append("    config:\n");
+            cfg.append("      includeOps:\n");
+            includeOps.forEach(op -> cfg.append("        - ").append(op).append("\n"));
+        }
     }
 
     private void appendXmlValidationFilter(StringBuilder cfg, KafkaProxyFiltersConfig filters,

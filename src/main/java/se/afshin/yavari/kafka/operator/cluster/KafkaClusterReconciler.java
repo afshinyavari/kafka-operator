@@ -71,6 +71,9 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
     CruiseControlOrchestrator cruiseControlOrchestrator;
 
     @Inject
+    se.afshin.yavari.kafka.operator.audit.AuditOrchestrator auditOrchestrator;
+
+    @Inject
     se.afshin.yavari.kafka.operator.infra.EventRecorder eventRecorder;
 
     @ConfigProperty(name = "kafka.cluster.id")
@@ -202,6 +205,12 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
         // Reconcile the optional Cruise Control sub-spec (singleton on the primary cluster).
         if (cr.getSpec().getCruiseControl() != null) {
             status.setCruiseControl(cruiseControlOrchestrator.reconcile(cr, namespace, localClusterId));
+        }
+        // Upsert the audit KafkaTopic on the parent cluster when the Kafka-topic sink is on.
+        // Stdout-only audit (the default) is handled entirely inside the proxy + apicurio
+        // emitters and needs no operator-side resources.
+        if (cr.getSpec().getAudit() != null) {
+            auditOrchestrator.reconcile(cr, namespace);
         }
 
         // Kubernetes-style conditions alongside the bespoke phase — let generic tooling

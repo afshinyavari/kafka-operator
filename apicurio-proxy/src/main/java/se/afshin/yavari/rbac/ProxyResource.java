@@ -7,12 +7,16 @@ import jakarta.inject.Inject;
 import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.*;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
+import org.slf4j.MDC;
 import org.yaml.snakeyaml.Yaml;
+import se.afshin.yavari.kroxy.audit.AuditEmitter;
+import se.afshin.yavari.kroxy.audit.AuditEvent;
 
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -30,6 +34,7 @@ public class ProxyResource {
 
     @Inject SecurityIdentity identity;
     @Inject PolicyEngine policy;
+    @Inject AuditEmitter audit;
 
     @ConfigProperty(name = "proxy.apicurio.url")   String apicurioUrl;
     @ConfigProperty(name = "proxy.xml-schema.url") String xmlSchemaUrl;
@@ -71,12 +76,32 @@ public class ProxyResource {
         String artifact      = resolveArtifact(fullPath, uriInfo.getRequestUri().getRawQuery());
         PolicyEngine.Action action = resolveAction(method, fullPath);
 
-        if (!policy.isAllowed(roles, artifact, action)) {
-            return Response.status(403).entity("Forbidden").build();
+        // Audit every request — allow, deny, or upstream error. Recorded in a try/finally so a
+        // thrown exception from forward() is still captured as decision=error.
+        long t0 = System.nanoTime();
+        String decision = "error";
+        try {
+            if (!policy.isAllowed(roles, artifact, action)) {
+                decision = "deny";
+                return Response.status(403).entity("Forbidden").build();
+            }
+            String upstreamBase = fullPath.startsWith("/apis/registry/") ? apicurioUrl : xmlSchemaUrl;
+            Response r = forward(method, upstreamBase, fullPath, uriInfo, requestHeaders, body);
+            int status = r.getStatus();
+            decision = status >= 500 ? "error" : status >= 400 ? "deny" : "allow";
+            return r;
+        } finally {
+            long latencyMs = (System.nanoTime() - t0) / 1_000_000;
+            audit.emit(new AuditEvent(Instant.now(), principalOf(identity),
+                    action.name(), artifact, decision, latencyMs, MDC.get("correlationId")));
         }
+    }
 
-        String upstreamBase = fullPath.startsWith("/apis/registry/") ? apicurioUrl : xmlSchemaUrl;
-        return forward(method, upstreamBase, fullPath, uriInfo, requestHeaders, body);
+    /** Identity → "user:<name>" or "anonymous". */
+    static String principalOf(SecurityIdentity identity) {
+        if (identity == null || identity.isAnonymous()) return "anonymous";
+        return identity.getPrincipal() != null && identity.getPrincipal().getName() != null
+                ? "user:" + identity.getPrincipal().getName() : "anonymous";
     }
 
     private Response forward(String method, String upstreamBase, String path,

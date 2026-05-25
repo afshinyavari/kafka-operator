@@ -50,6 +50,37 @@
             <artifactId>quarkus-smallrye-health</artifactId>
         </dependency>
 
+        <!-- Shared in-process audit emitter (StdoutAuditEmitter, KafkaAuditEmitter,
+             CompositeAuditEmitter, AuditEmitters.fromEnv()). Lives in the kroxy-filters
+             module so both Kroxylicious and the rbac-proxy emit the same JSON schema. -->
+        <dependency>
+            <groupId>se.afshin.yavari</groupId>
+            <artifactId>kroxy-filters</artifactId>
+            <version>1.0-SNAPSHOT</version>
+            <exclusions>
+                <!-- Kroxylicious filter API is provided in the proxy runtime; the
+                     audit-emitter classes (AuditEvent, StdoutAuditEmitter, KafkaAuditEmitter)
+                     don't depend on it, but the surrounding filter classes do. Excluding it
+                     keeps the rbac-proxy classpath small. -->
+                <exclusion>
+                    <groupId>io.kroxylicious</groupId>
+                    <artifactId>kroxylicious-api</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>io.kroxylicious</groupId>
+                    <artifactId>kroxylicious-authorizer-api</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <!-- Kafka clients for the audit emitter's KafkaProducer (kroxy-filters has
+             kafka-clients as scope=provided since it runs inside Kroxylicious; the
+             rbac-proxy needs it at runtime). -->
+        <dependency>
+            <groupId>org.apache.kafka</groupId>
+            <artifactId>kafka-clients</artifactId>
+            <version>3.9.0</version>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>io.quarkus</groupId>

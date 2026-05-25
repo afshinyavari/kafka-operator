@@ -74,6 +74,7 @@ public class KafkaProxyOrchestrator {
     @Inject KubernetesClient client;
     @Inject KroxyliciousConfigBuilder configBuilder;
     @Inject ProxyDeploymentBuilder deploymentBuilder;
+    @Inject se.afshin.yavari.kafka.operator.audit.AuditOrchestrator auditOrchestrator;
     @Inject ProxyServiceBuilder serviceBuilder;
     @Inject ExternalAccessResolver externalAccessResolver;
     @Inject TLSRouteBuilder tlsRouteBuilder;
@@ -160,8 +161,13 @@ public class KafkaProxyOrchestrator {
 
         try {
             // Generate and apply config ConfigMap.
+            // Audit filter is always wired (stdout sink is always on); spec.audit only customises
+            // the includeOps allowlist.
+            java.util.Collection<String> auditIncludeOps = (cr.getSpec().getAudit() != null
+                    && cr.getSpec().getAudit().getIncludeOps() != null)
+                    ? cr.getSpec().getAudit().getIncludeOps() : java.util.Set.of();
             String configYaml = configBuilder.build(syn, brokers.count, brokers.nodeIdBase,
-                    namespace, mcsEnabled, external);
+                    namespace, mcsEnabled, external, auditIncludeOps);
             String secretRevisions = secretRevisionTracker.revisionsOf(
                     List.of(clientCertSecret, serverCertSecret), namespace);
             String configHash = ConfigHasher.sha256(configYaml, secretRevisions);
@@ -197,6 +203,8 @@ public class KafkaProxyOrchestrator {
             // Apply Deployment + Service.
             Deployment deployment = deploymentBuilder.build(syn, namespace, configHash);
             attachOwnerRef(deployment.getMetadata(), clusterOwnerRef(cr));
+            // Inject audit env + tls mount when the Kafka-topic sink is enabled (no-op otherwise).
+            auditOrchestrator.injectIntoDeployment(deployment, cr, namespace);
             client.apps().deployments().inNamespace(namespace).resource(deployment).serverSideApply();
 
             Service service = serviceBuilder.build(syn, brokers.count, namespace, external);

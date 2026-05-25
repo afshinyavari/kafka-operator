@@ -861,3 +861,46 @@ config at all — Kroxylicious exposes Prometheus natively over HTTP.
 ServiceMonitor application goes through `OptionalResourceApplier`, which silently
 no-ops when the Prometheus Operator CRD is absent — making the operator safe to deploy
 on clusters without Prometheus.
+
+---
+
+## Audit logging
+
+A cross-cutting JSON audit stream is emitted from inside both authorisation paths:
+
+```
+  Kafka client                           HTTP client
+       │                                     │
+       ▼                                     ▼
+  ┌──────────────────┐               ┌──────────────────┐
+  │  Kroxylicious    │               │ Apicurio         │
+  │  filter chain    │               │ rbac-proxy       │
+  │  ...             │               │   ProxyResource  │
+  │  authorization   │               │   .proxy()       │
+  │  audit  ────────┐│               │   try { ... }    │
+  └─────────────────││               │   finally {      │
+                    ▼▼                    audit.emit(…) │
+        ┌─────────────────────┐      │   }              │
+        │  AuditEmitter       │◀─────┘                  │
+        │  (filters/kroxy/    │                         │
+        │   audit/)           │                         │
+        └────────┬────────────┘                         │
+                 ├── StdoutAuditEmitter ──► stdout (always on)
+                 └── KafkaAuditEmitter  ──► broker INTERNAL :9092
+                                            (direct, mTLS, never via Kroxylicious)
+```
+
+The emitter library lives in the existing `filters/` module under
+`se.afshin.yavari.kroxy.audit.*`. Both Kroxylicious (as a `Filter` sitting last in
+the chain, observing the authorisation filter's response error codes) and the
+Apicurio rbac-proxy (via a CDI-produced `AuditEmitter`) share the schema and the
+sink fan-out.
+
+The Kafka-topic sink is opt-in via `KafkaCluster.spec.audit.kafkaTopic.enabled`.
+The `AuditOrchestrator` (`audit/AuditOrchestrator.java`) upserts the
+`KafkaTopic` and injects `KAFKA_AUDIT_*` env + the `audit-tls` Volume on the proxy +
+Apicurio Deployments. The producer is non-blocking (`max.block.ms=0`); on failure it
+falls back to stdout and emits one rate-limited WARN per minute.
+
+See `docs/audit.md` for the event schema and `docs/security.md#audit-logging` for
+the trust posture.

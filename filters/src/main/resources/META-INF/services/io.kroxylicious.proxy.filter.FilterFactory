@@ -1,3 +1,4 @@
 se.afshin.yavari.kroxy.XmlValidationFilterFactory
 se.afshin.yavari.kroxy.auth.oauth.JwtGroupFilterFactory
 se.afshin.yavari.kroxy.auth.oauth.SaslHandshakeSynthesizerFilterFactory
+se.afshin.yavari.kroxy.audit.AuditFilterFactory
