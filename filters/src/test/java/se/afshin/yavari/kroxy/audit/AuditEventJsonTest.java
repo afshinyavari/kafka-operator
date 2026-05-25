@@ -12,13 +12,13 @@ class AuditEventJsonTest {
     void allFieldsPresent_inOrder() {
         AuditEvent e = new AuditEvent(
                 Instant.parse("2026-05-25T12:00:00Z"),
-                "user:alice", "PRODUCE", "orders", "allow", 12, "abc-123");
+                "user:alice", "WRITE", "orders", "allow", 12, "abc-123");
 
         String json = AuditEventJson.toJson(e);
 
         // Field order — the JSON is consumed by log shippers that key off it being stable.
         assertThat(json).isEqualTo(
-                "{\"ts\":\"2026-05-25T12:00:00Z\",\"principal\":\"user:alice\",\"op\":\"PRODUCE\","
+                "{\"ts\":\"2026-05-25T12:00:00Z\",\"principal\":\"user:alice\",\"op\":\"WRITE\","
                         + "\"resource\":\"orders\",\"decision\":\"allow\",\"latencyMs\":12,"
                         + "\"correlationId\":\"abc-123\"}");
     }
@@ -27,7 +27,7 @@ class AuditEventJsonTest {
     void nullCorrelationId_omitted() {
         AuditEvent e = new AuditEvent(
                 Instant.parse("2026-05-25T12:00:00Z"),
-                "user:alice", "FETCH", "events", "deny", 3, null);
+                "user:alice", "READ", "events", "deny", 3, null);
 
         String json = AuditEventJson.toJson(e);
 
@@ -39,7 +39,7 @@ class AuditEventJsonTest {
     void nullPrincipal_renderedAsAnonymous() {
         AuditEvent e = new AuditEvent(
                 Instant.parse("2026-05-25T12:00:00Z"),
-                null, "FETCH", "*", "allow", 1, null);
+                null, "READ", "*", "allow", 1, null);
 
         String json = AuditEventJson.toJson(e);
 
@@ -50,7 +50,7 @@ class AuditEventJsonTest {
     void latencyZero_serialisesAsNumber() {
         AuditEvent e = new AuditEvent(
                 Instant.parse("2026-05-25T12:00:00Z"),
-                "user:alice", "PRODUCE", "x", "allow", 0, null);
+                "user:alice", "WRITE", "x", "allow", 0, null);
 
         String json = AuditEventJson.toJson(e);
 

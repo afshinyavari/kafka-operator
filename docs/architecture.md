@@ -395,18 +395,24 @@ call any externally registered `SaslSubjectBuilderService` SPI. This means group
 2. `GroupAwareAuthorizer.isAllowed()` checks `subject.allPrincipalsOfType(Group.class)`;
    if empty, it falls back to `JwtGroupStore.get(user.name())` using the same sub UUID.
 
-### Operation aliases
+### Operations and implicit `DESCRIBE`
 
-`KafkaProxy` RBAC rules use semantic names; `GroupAwareAuthorizer.matchesOp()` maps them:
+`KafkaProxy` RBAC rules use Kafka's native ACL operation names:
+`READ`, `WRITE`, `DESCRIBE`, `CREATE`, `DELETE`, `ALTER`,
+`DESCRIBE_CONFIGS`, `ALTER_CONFIGS` (plus `*` for everything).
 
-| Semantic | Kroxylicious `TopicResource` operations |
-|----------|-----------------------------------------|
-| `PRODUCE` | `WRITE`, `DESCRIBE` |
-| `FETCH` | `READ`, `DESCRIBE` |
+Mirroring Apache Kafka's `StandardAuthorizer`, `GroupAwareAuthorizer.matchesOp()`
+treats some grants as implying `DESCRIBE`:
 
-`DESCRIBE` is needed because a Kafka producer first sends a `METADATA` request, which
-Kroxylicious authorises as `DESCRIBE`. Without this alias, METADATA requests fail even for
-groups that are allowed to produce.
+| Granting…                                 | Also grants…        |
+|-------------------------------------------|---------------------|
+| `READ`, `WRITE`, `DELETE`, `ALTER`        | `DESCRIBE`          |
+| `ALTER_CONFIGS`                           | `DESCRIBE_CONFIGS`  |
+
+This matters because a Kafka producer first sends a `METADATA` request, which
+Kroxylicious authorises as `DESCRIBE`. Without the implicit rule, a role that
+lists only `WRITE` would have METADATA denied and the producer would never
+reach the produce path.
 
 ---
 

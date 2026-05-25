@@ -144,7 +144,7 @@ spec:
     - name: orders-team
       kafka:
         topics: [orders, orders-dlq]
-        operations: [PRODUCE, FETCH]
+        operations: [WRITE, READ]
       schemaRegistry:
         artifacts: [orders]
         actions: [READ, WRITE]
@@ -156,7 +156,7 @@ spec:
     - name: app1   # mTLS cert CN
       kafka:
         topics: [orders]
-        operations: [PRODUCE]
+        operations: [WRITE]
 ```
 
 To add a NodePort external listener, patch the `KafkaCluster`:

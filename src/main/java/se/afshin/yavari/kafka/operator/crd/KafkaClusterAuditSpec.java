@@ -20,10 +20,10 @@ public class KafkaClusterAuditSpec {
     private AuditKafkaTopicSpec kafkaTopic;
 
     /**
-     * Optional allowlist of operation names to emit ({@code PRODUCE},
-     * {@code FETCH}, {@code CREATE_TOPICS}, ...). When null or empty, every
-     * decision is emitted. Use this to drop the busiest verbs (typically
-     * {@code FETCH}) so the {@code __audit} topic stays useful.
+     * Optional allowlist of operation names to emit ({@code WRITE},
+     * {@code READ}, {@code DESCRIBE}, {@code CREATE_TOPICS}, ...). When null or
+     * empty, every decision is emitted. Use this to drop the busiest verbs
+     * (typically {@code READ}) so the {@code __audit} topic stays useful.
      */
     private Set<String> includeOps;
 

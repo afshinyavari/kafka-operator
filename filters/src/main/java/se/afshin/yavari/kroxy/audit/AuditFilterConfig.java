@@ -10,11 +10,12 @@ import java.util.Set;
  * picked up by {@link AuditEmitters#fromEnv()} — see that class for the env names.
  *
  * <p>{@code includeOps} is the optional allowlist of operation names to emit
- * ({@code PRODUCE}, {@code FETCH}, ...). When unset/empty, all ops are emitted.
+ * ({@code WRITE}, {@code READ}, {@code DESCRIBE}, ...). When unset/empty, all
+ * ops are emitted.
  */
 public class AuditFilterConfig {
 
-    /** Optional allowlist of ops to emit (PRODUCE, FETCH, ...). Empty/null = all. */
+    /** Optional allowlist of ops to emit (WRITE, READ, DESCRIBE, ...). Empty/null = all. */
     @JsonProperty
     private Set<String> includeOps;
 

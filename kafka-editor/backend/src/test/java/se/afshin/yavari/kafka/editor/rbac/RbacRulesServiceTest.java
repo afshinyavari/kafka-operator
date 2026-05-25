@@ -21,7 +21,7 @@ class RbacRulesServiceTest {
     @Test
     void groupGrantsReadOnExplicitTopic() {
         applyRbac("rbac", "kafka", group("orders-team",
-                kafka(List.of("orders"), List.of("PRODUCE")),
+                kafka(List.of("orders"), List.of("WRITE")),
                 null));
         RbacRulesService svc = svc();
 
@@ -35,7 +35,7 @@ class RbacRulesServiceTest {
     @Test
     void userNotInGroup_seesNothing() {
         applyRbac("rbac", "kafka", group("orders-team",
-                kafka(List.of("orders"), List.of("FETCH")),
+                kafka(List.of("orders"), List.of("READ")),
                 null));
         UserRbac u = svc().forUser("kafka", Set.of("nobody"));
 
@@ -69,9 +69,9 @@ class RbacRulesServiceTest {
     void multipleGroups_unionsAccess() {
         applyRbac("rbac", "kafka",
                 group("orders-team",
-                        kafka(List.of("orders", "orders-dlq"), List.of("PRODUCE")), null),
+                        kafka(List.of("orders", "orders-dlq"), List.of("WRITE")), null),
                 group("invoices-team",
-                        kafka(List.of("invoices"), List.of("FETCH")), null));
+                        kafka(List.of("invoices"), List.of("READ")), null));
         UserRbac u = svc().forUser("kafka", Set.of("orders-team", "invoices-team"));
 
         assertThat(u.topicsAllowedToRead())
@@ -81,7 +81,7 @@ class RbacRulesServiceTest {
     @Test
     void operationWithoutReadIntent_isIgnored() {
         // Currently every Kafka op grants visibility (proxy enforces fine-grained
-        // access). This is intentional — see RbacRulesService.grantsRead aliases.
+        // access). This is intentional — see RbacRulesService.grantsRead.
         // We assert the *empty* ops case, since an empty list shouldn't grant anything.
         applyRbac("rbac", "kafka", group("orders-team",
                 kafka(List.of("orders"), List.of()),

@@ -143,27 +143,27 @@ echo ""
 echo "══ alice (orders-team): ALLOWED on orders, DENIED on invoices ══"
 
 try_produce alice orders && res=0 || res=$?
-if   [ $res -eq 0 ]; then ok "alice → orders (PRODUCE): ALLOWED"
-elif [ $res -eq 1 ]; then fail_t "alice → orders (PRODUCE): expected ALLOWED, got DENIED"
-else                       fail_t "alice → orders (PRODUCE): unexpected error (see stderr)"; fi
+if   [ $res -eq 0 ]; then ok "alice → orders (WRITE): ALLOWED"
+elif [ $res -eq 1 ]; then fail_t "alice → orders (WRITE): expected ALLOWED, got DENIED"
+else                       fail_t "alice → orders (WRITE): unexpected error (see stderr)"; fi
 
 try_produce alice invoices && res=0 || res=$?
-if   [ $res -eq 1 ]; then ok "alice → invoices (PRODUCE): DENIED (correct)"
-elif [ $res -eq 0 ]; then fail_t "alice → invoices (PRODUCE): expected DENIED, got ALLOWED"
-else                       fail_t "alice → invoices (PRODUCE): unexpected error (see stderr)"; fi
+if   [ $res -eq 1 ]; then ok "alice → invoices (WRITE): DENIED (correct)"
+elif [ $res -eq 0 ]; then fail_t "alice → invoices (WRITE): expected DENIED, got ALLOWED"
+else                       fail_t "alice → invoices (WRITE): unexpected error (see stderr)"; fi
 
 echo ""
 echo "══ bob (invoices-team): ALLOWED on invoices, DENIED on orders ══"
 
 try_produce bob invoices && res=0 || res=$?
-if   [ $res -eq 0 ]; then ok "bob → invoices (PRODUCE): ALLOWED"
-elif [ $res -eq 1 ]; then fail_t "bob → invoices (PRODUCE): expected ALLOWED, got DENIED"
-else                       fail_t "bob → invoices (PRODUCE): unexpected error (see stderr)"; fi
+if   [ $res -eq 0 ]; then ok "bob → invoices (WRITE): ALLOWED"
+elif [ $res -eq 1 ]; then fail_t "bob → invoices (WRITE): expected ALLOWED, got DENIED"
+else                       fail_t "bob → invoices (WRITE): unexpected error (see stderr)"; fi
 
 try_produce bob orders && res=0 || res=$?
-if   [ $res -eq 1 ]; then ok "bob → orders (PRODUCE): DENIED (correct)"
-elif [ $res -eq 0 ]; then fail_t "bob → orders (PRODUCE): expected DENIED, got ALLOWED"
-else                       fail_t "bob → orders (PRODUCE): unexpected error (see stderr)"; fi
+if   [ $res -eq 1 ]; then ok "bob → orders (WRITE): DENIED (correct)"
+elif [ $res -eq 0 ]; then fail_t "bob → orders (WRITE): expected DENIED, got ALLOWED"
+else                       fail_t "bob → orders (WRITE): unexpected error (see stderr)"; fi
 
 echo ""
 echo "────────────────────────────────────────────────────────────────────────"

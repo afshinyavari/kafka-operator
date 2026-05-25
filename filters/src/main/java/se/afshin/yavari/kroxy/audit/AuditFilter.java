@@ -36,10 +36,11 @@ import java.util.concurrent.CompletionStage;
  * inspects the response error codes to decide allow vs deny. Does <b>not</b>
  * re-evaluate RBAC.
  *
- * <p>For each Produce or Fetch request the filter captures
+ * <p>For each Write (Produce) or Read (Fetch) request the filter captures
  * {@code (startNanos, principal, op, topics)} keyed on {@code correlationId},
  * then on the matching response emits one {@link AuditEvent} per topic with
- * {@code decision=deny} if any partition reports
+ * {@code op} set to the Kafka-native operation ({@code WRITE} or {@code READ})
+ * and {@code decision=deny} if any partition reports
  * {@link Errors#TOPIC_AUTHORIZATION_FAILED} or
  * {@link Errors#CLUSTER_AUTHORIZATION_FAILED}, else {@code decision=allow}.
  *
@@ -70,11 +71,11 @@ public class AuditFilter implements
                                                                  FilterContext ctx) {
         // Audit is observational — never block or fail the request path.
         try {
-            if (emit("PRODUCE")) {
+            if (emit("WRITE")) {
                 List<String> topics = new ArrayList<>(body.topicData().size());
                 for (ProduceRequestData.TopicProduceData t : body.topicData()) topics.add(t.name());
                 inFlight.put(header.correlationId(),
-                        new InFlight(System.nanoTime(), principalOf(ctx), "PRODUCE", topics));
+                        new InFlight(System.nanoTime(), principalOf(ctx), "WRITE", topics));
             }
         } catch (Exception e) {
             LOG.warn("Audit pre-request capture failed", e);
@@ -99,7 +100,7 @@ public class AuditFilter implements
                             if (isAuthFailure(p.errorCode())) { deny = true; break; }
                         }
                     }
-                    emitter.emit(new AuditEvent(Instant.now(), state.principal, "PRODUCE",
+                    emitter.emit(new AuditEvent(Instant.now(), state.principal, "WRITE",
                             t.name(), deny ? "deny" : "allow", latencyMs, correlationId));
                 }
             }
@@ -118,7 +119,7 @@ public class AuditFilter implements
             // Audit is observational — emit out-of-band so response forwarding is never
             // blocked or failed. On Fetch v13+ the topic name field is empty and only
             // topicId is present; resolve names via the proxy's metadata cache.
-            if (emit("FETCH") && body.responses() != null) {
+            if (emit("READ") && body.responses() != null) {
                 List<FetchResponseData.FetchableTopicResponse> responses = body.responses();
                 Set<Uuid> ids = new LinkedHashSet<>();
                 for (FetchResponseData.FetchableTopicResponse t : responses) {
@@ -194,7 +195,7 @@ public class AuditFilter implements
                 name = nameById.get(t.topicId());
                 if (name == null) name = t.topicId().toString();
             }
-            emitter.emit(new AuditEvent(now, principal, "FETCH",
+            emitter.emit(new AuditEvent(now, principal, "READ",
                     name == null ? "" : name, deny ? "deny" : "allow", 0L, correlationId));
         }
     }

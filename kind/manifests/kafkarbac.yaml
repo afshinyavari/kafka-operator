@@ -16,8 +16,8 @@ spec:
           - source.mm2-customers   # MM2-mirrored from the kafka-src cluster
           - source.mm2-payments    # MM2-mirrored from the kafka-src cluster
         operations:
-          - PRODUCE
-          - FETCH
+          - WRITE
+          - READ
       schemaRegistry:
         artifacts:
           - orders
@@ -34,8 +34,8 @@ spec:
           - invoices
           - invoices-dlq
         operations:
-          - PRODUCE
-          - FETCH
+          - WRITE
+          - READ
       schemaRegistry:
         artifacts:
           - invoices
@@ -56,7 +56,7 @@ spec:
         topics:
           - orders
         operations:
-          - PRODUCE
+          - WRITE
     # Operator / MirrorMaker2 AdminClient cert CN — mcs-setup mints kafka-operator-client
     # with CN=<proxyPrincipal> (kafka-proxy). MM2 reaches the managed cluster through the
     # proxy and must mirror arbitrary topics + manage its own internal topics, so it needs

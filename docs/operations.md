@@ -835,7 +835,7 @@ kubectl --context kind-kafka-a -n kafka logs -l app=kroxylicious -f \
 A denied request looks like:
 
 ```json
-{"ts":"2026-05-25T12:34:56.789Z","principal":"user:alice","op":"PRODUCE","resource":"orders","decision":"deny","latencyMs":3,"correlationId":"42"}
+{"ts":"2026-05-25T12:34:56.789Z","principal":"user:alice","op":"WRITE","resource":"orders","decision":"deny","latencyMs":3,"correlationId":"42"}
 ```
 
 ### Shipping to a Kafka topic
@@ -852,9 +852,8 @@ spec:
       partitions: 3
       replicationFactor: 3
     includeOps:
-      - PRODUCE
       - WRITE
-      - DELETE   # drop the high-volume FETCH/READ noise
+      - DELETE   # drop the high-volume READ noise
 ```
 
 The operator upserts a `KafkaTopic` named `<cluster>-audit` and injects
@@ -986,7 +985,7 @@ If non-empty and not progressing:
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | All RBAC denied; proxy logs `subject=Subject[principals=[]]` | Filter chain order wrong; `OauthBearerValidationFilter` processes the broker's SASL error before `SaslHandshakeSynthesizerFilter` converts it to success, so `clientSaslAuthenticationSuccess()` is never called | Ensure chain order: `jwt-groups → oauth-bearer-validation → sasl-handshake-synthesizer` |
-| `TopicAuthorizationException` for METADATA requests despite valid JWT | `DESCRIBE` operation not covered by RBAC rules | Use semantic operations `PRODUCE`/`FETCH` which alias to `{WRITE, DESCRIBE}` / `{READ, DESCRIBE}` |
+| `TopicAuthorizationException` for METADATA requests despite valid JWT | `DESCRIBE` operation not covered by RBAC rules | `GroupAwareAuthorizer` mirrors Kafka's `StandardAuthorizer`: `READ`/`WRITE`/`DELETE`/`ALTER` implicitly grant `DESCRIBE`. If a role lists none of those (e.g. `[ALTER_CONFIGS]` only) and you need DESCRIBE, add it explicitly. |
 | Proxy pod logs `OIDC discovery failed` or `Connection refused` to Keycloak | Wrong realm in `spec.oidc.jwksEndpointUrl` or Keycloak not yet ready | Check the realm name matches the realm imported into Keycloak; run `make keycloak-setup` if Keycloak is missing |
 | ConfigMap `kafka-proxy-config` not updated after `KafkaRbac` change | Field manager conflict from prior manual `kubectl apply` | Delete and recreate the ConfigMap, or let the operator manage it exclusively via `createOrReplace` |
 | Schema registry proxy returns 502 Bad Gateway | `apicurio-registry` service not reachable from proxy pod | Verify `apicurio-registry` Service exists and registry pod is Running |
@@ -1081,7 +1080,7 @@ spec:
     - name: alice
       kafka:
         topics: [orders]
-        operations: [PRODUCE]
+        operations: [WRITE]
       quotas:
         producerByteRate: 1048576       # 1 MiB/s
         consumerByteRate: 2097152       # 2 MiB/s
