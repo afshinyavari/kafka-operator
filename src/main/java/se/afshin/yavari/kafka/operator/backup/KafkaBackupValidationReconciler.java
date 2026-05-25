@@ -1,7 +1,6 @@
 package se.afshin.yavari.kafka.operator.backup;
 
 import io.fabric8.kubernetes.api.model.OwnerReference;
-import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.batch.v1.Job;
 import io.fabric8.kubernetes.client.KubernetesClient;
 import io.javaoperatorsdk.operator.api.reconciler.Cleaner;
@@ -18,6 +17,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaBackup;
 import se.afshin.yavari.kafka.operator.crd.KafkaBackupValidation;
 import se.afshin.yavari.kafka.operator.crd.KafkaBackupValidationStatus;
 import se.afshin.yavari.kafka.operator.crd.RestoreSourceSpec;
+import se.afshin.yavari.kafka.operator.infra.OwnerReferences;
 import se.afshin.yavari.kafka.operator.infra.ReconcileContext;
 
 import java.time.Duration;
@@ -157,13 +157,6 @@ public class KafkaBackupValidationReconciler
     }
 
     static OwnerReference ownerRef(KafkaBackupValidation cr) {
-        return new OwnerReferenceBuilder()
-                .withApiVersion(cr.getApiVersion())
-                .withKind(cr.getKind())
-                .withName(cr.getMetadata().getName())
-                .withUid(cr.getMetadata().getUid())
-                .withController(true)
-                .withBlockOwnerDeletion(true)
-                .build();
+        return OwnerReferences.of(cr);
     }
 }

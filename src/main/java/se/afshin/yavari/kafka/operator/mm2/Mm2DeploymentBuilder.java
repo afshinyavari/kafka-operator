@@ -171,6 +171,27 @@ public class Mm2DeploymentBuilder {
                     .withName("metrics")
                     .withContainerPort(METRICS_PORT)
                     .endPort();
+            // connect-mirror-maker.sh (dedicated mode) does not start a Connect REST listener,
+            // so HTTP probes aren't possible without changing the worker config. When metrics
+            // are enabled the jmx_prometheus_javaagent listens on METRICS_PORT inside the JVM
+            // — TCP probes against that port are a reasonable proxy for JVM liveness/readiness.
+            workerBuilder
+                    .withNewReadinessProbe()
+                        .withNewTcpSocket()
+                            .withPort(new IntOrString(METRICS_PORT))
+                        .endTcpSocket()
+                        .withInitialDelaySeconds(20)
+                        .withPeriodSeconds(15)
+                        .withFailureThreshold(3)
+                    .endReadinessProbe()
+                    .withNewLivenessProbe()
+                        .withNewTcpSocket()
+                            .withPort(new IntOrString(METRICS_PORT))
+                        .endTcpSocket()
+                        .withInitialDelaySeconds(60)
+                        .withPeriodSeconds(30)
+                        .withFailureThreshold(3)
+                    .endLivenessProbe();
         }
         Container worker = workerBuilder.build();
 

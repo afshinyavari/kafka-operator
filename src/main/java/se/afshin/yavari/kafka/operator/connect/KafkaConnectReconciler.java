@@ -27,6 +27,7 @@ import se.afshin.yavari.kafka.operator.crd.SchemaRegistryType;
 import se.afshin.yavari.kafka.operator.endpoint.KafkaEndpointResolver;
 import se.afshin.yavari.kafka.operator.endpoint.ResolvedKafkaEndpoint;
 import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
+import se.afshin.yavari.kafka.operator.infra.McsPlacement;
 import se.afshin.yavari.kafka.operator.infra.MetricsResources;
 import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
 import se.afshin.yavari.kafka.operator.infra.ReconcileContext;
@@ -80,6 +81,7 @@ public class KafkaConnectReconciler implements Reconciler<KafkaConnect>, Cleaner
     @Inject CrossClusterRollCoordinator rollCoordinator;
     @Inject MetricsResources metricsResources;
     @Inject OptionalResourceApplier optionalApplier;
+    @Inject se.afshin.yavari.kafka.operator.infra.PdbBuilder pdbBuilder;
 
     @ConfigProperty(name = "kafka.cluster.id", defaultValue = "")
     String localClusterId;
@@ -102,10 +104,9 @@ public class KafkaConnectReconciler implements Reconciler<KafkaConnect>, Cleaner
 
         // MCS placement gate
         McsConfig mcs = cr.getSpec().getMcs();
-        boolean mcsEnabled = mcs != null && mcs.isEnabled();
         List<String> targetClusters = cr.getSpec().getTargetClusters();
-        if (mcsEnabled && targetClusters != null && !targetClusters.isEmpty()
-                && !targetClusters.contains(localClusterId)) {
+        boolean mcsEnabled = mcs != null && mcs.isEnabled();
+        if (McsPlacement.decide(mcs, targetClusters, localClusterId) == McsPlacement.Decision.SKIP) {
             LOG.infof("KafkaConnect %s/%s: cluster '%s' not in targetClusters %s — skipping",
                     namespace, name, localClusterId, targetClusters);
             status.setPhase(KafkaConnectStatus.Phase.SKIPPED);
@@ -238,6 +239,10 @@ public class KafkaConnectReconciler implements Reconciler<KafkaConnect>, Cleaner
                 deleteMetrics(name, namespace);
             }
 
+            pdbBuilder.apply(name, namespace,
+                    ConnectLabels.labels(name), ConnectLabels.labels(name),
+                    replicas, cr);
+
             if (mcsEnabled) {
                 serviceExportManager.apply(restService.getMetadata().getName(), namespace);
                 if (metricsEnabled) {
@@ -276,6 +281,7 @@ public class KafkaConnectReconciler implements Reconciler<KafkaConnect>, Cleaner
             serviceExportManager.delete(name + MetricsResources.METRICS_SUFFIX, namespace);
         }
         deleteMetrics(name, namespace);
+        pdbBuilder.delete(name, namespace);
         LOG.infof("KafkaConnect %s/%s deleted", namespace, name);
         return DeleteControl.defaultDelete();
     }

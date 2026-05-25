@@ -1,0 +1,18 @@
+# ServiceMonitor for the operator Quarkus /metrics endpoint. Apply this only when the
+# Prometheus Operator CRDs (monitoring.coreos.com/v1) are installed in the cluster — the
+# setup scripts gate this apply on `kubectl get crd servicemonitors.monitoring.coreos.com`.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kafka-operator-metrics
+  namespace: kafka
+  labels:
+    app: kafka-operator
+spec:
+  selector:
+    matchLabels:
+      app: kafka-operator
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s

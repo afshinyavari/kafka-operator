@@ -34,6 +34,8 @@ When the cluster opts in to the Kafka-topic sink (`spec.audit.kafkaTopic.enabled
 
 The `kafka-audit` SLF4J logger is wired in every Kroxylicious pod and every Apicurio rbac-proxy pod at INFO level. Records appear in the container's stdout next to ordinary application logs. With `quarkus.log.console.json=true` (production profile) every line is itself JSON, so a log shipper can scoop both kinds of records into the same downstream system without an extra parser.
 
+The same channel is used by the operator itself for admin-level events (`KafkaBackup` and `KafkaRestore` reconciles emit `backup.reconcile`, `backup.delete`, `restore.start`, `restore.complete` events via `infra/OperatorAuditLog.java`). The principal on operator-emitted events is `system:operator`.
+
 ### Kafka topic (opt-in)
 
 Set on the parent `KafkaCluster`:

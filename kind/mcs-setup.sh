@@ -497,6 +497,15 @@ done
 wait_pids "Operator deploy" "${PIDS[@]}"
 ok "Operator deployed with MCS enabled"
 
+# ServiceMonitor for the operator — only when Prometheus Operator CRDs are present.
+for cluster in "${CLUSTERS[@]}"; do
+  ctx="kind-${cluster}"
+  if kubectl --context "${ctx}" get crd servicemonitors.monitoring.coreos.com &>/dev/null; then
+    kubectl --context "${ctx}" apply --server-side -f \
+      "${MANIFESTS_DIR}/operator-servicemonitor.yaml" &>/dev/null || true
+  fi
+done
+
 # ── Step 12b: Export per-cluster operator service for cross-cluster roll coordination ──
 info "Exporting operator HTTP service for cross-cluster roll order checks..."
 PIDS=()

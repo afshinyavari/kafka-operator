@@ -87,9 +87,30 @@ public class MetricsResources {
                                                     Map<String, String> matchLabels,
                                                     String portName, String interval,
                                                     List<OwnerReference> ownerRefs) {
+        return serviceMonitor(baseName, namespace, labels, matchLabels,
+                portName, interval, /* path */ null, ownerRefs);
+    }
+
+    /**
+     * Builds a {@code <baseName>-metrics} ServiceMonitor with an explicit scrape path —
+     * required for Quarkus-based components that expose metrics at {@code /q/metrics} or
+     * a similar non-default path.
+     */
+    public GenericKubernetesResource serviceMonitor(String baseName, String namespace,
+                                                    Map<String, String> labels,
+                                                    Map<String, String> matchLabels,
+                                                    String portName, String interval,
+                                                    String path,
+                                                    List<OwnerReference> ownerRefs) {
+        Map<String, Object> endpoint = new java.util.LinkedHashMap<>();
+        endpoint.put("port", portName);
+        endpoint.put("interval", interval);
+        if (path != null && !path.isBlank()) {
+            endpoint.put("path", path);
+        }
         Map<String, Object> spec = Map.of(
                 "selector", Map.of("matchLabels", matchLabels),
-                "endpoints", List.of(Map.of("port", portName, "interval", interval)));
+                "endpoints", List.of(endpoint));
         return new GenericKubernetesResourceBuilder()
                 .withApiVersion(OptionalResourceApplier.SERVICEMONITOR_API)
                 .withKind(OptionalResourceApplier.SERVICEMONITOR_KIND)

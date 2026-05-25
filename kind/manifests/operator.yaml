@@ -52,3 +52,22 @@ spec:
             limits:
               cpu: 500m
               memory: 1536Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-operator-metrics
+  namespace: kafka
+  labels:
+    app: kafka-operator
+spec:
+  type: ClusterIP
+  selector:
+    app: kafka-operator
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+# Note: the matching ServiceMonitor lives in operator-servicemonitor.yaml. It is applied
+# separately by the setup scripts only when the Prometheus Operator CRDs are installed —
+# applying it unconditionally fails on kind clusters that don't run prometheus-operator.

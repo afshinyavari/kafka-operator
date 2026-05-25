@@ -6,7 +6,6 @@ import io.fabric8.kubernetes.api.model.IntOrString;
 import io.fabric8.kubernetes.api.model.LabelSelectorBuilder;
 import io.fabric8.kubernetes.api.model.ObjectMetaBuilder;
 import io.fabric8.kubernetes.api.model.OwnerReference;
-import io.fabric8.kubernetes.api.model.OwnerReferenceBuilder;
 import io.fabric8.kubernetes.api.model.Secret;
 import io.fabric8.kubernetes.api.model.Service;
 import io.fabric8.kubernetes.api.model.policy.v1.PodDisruptionBudget;
@@ -44,6 +43,7 @@ import se.afshin.yavari.kafka.operator.crd.PodEntry;
 import se.afshin.yavari.kafka.operator.infra.ConfigHasher;
 import se.afshin.yavari.kafka.operator.infra.MetricsResources;
 import se.afshin.yavari.kafka.operator.infra.OptionalResourceApplier;
+import se.afshin.yavari.kafka.operator.infra.OwnerReferences;
 import se.afshin.yavari.kafka.operator.infra.SecretRevisionTracker;
 import se.afshin.yavari.kafka.operator.infra.ServiceExportManager;
 
@@ -402,13 +402,6 @@ public class KafkaNodePoolReconciler implements Reconciler<KafkaNodePool>, Clean
     }
 
     private List<OwnerReference> poolOwnerRef(KafkaNodePool pool) {
-        return List.of(new OwnerReferenceBuilder()
-                .withApiVersion(pool.getApiVersion())
-                .withKind(pool.getKind())
-                .withName(pool.getMetadata().getName())
-                .withUid(pool.getMetadata().getUid())
-                .withController(true)
-                .withBlockOwnerDeletion(true)
-                .build());
+        return OwnerReferences.singleton(pool);
     }
 }

@@ -30,6 +30,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaRbac;
 import se.afshin.yavari.kafka.operator.crd.NodeRole;
 import se.afshin.yavari.kafka.operator.apicurio.ApicurioOrchestrator;
 import se.afshin.yavari.kafka.operator.cruisecontrol.CruiseControlOrchestrator;
+import se.afshin.yavari.kafka.operator.infra.OwnerReferences;
 import se.afshin.yavari.kafka.operator.proxy.KafkaProxyOrchestrator;
 import se.afshin.yavari.kafka.operator.upgrade.VersionUpgradeController;
 
@@ -348,16 +349,7 @@ public class KafkaClusterReconciler implements Reconciler<KafkaCluster>, Cleaner
                         KafkaPodSet.CLUSTER_LABEL,    cr.getMetadata().getName(),
                         KafkaPodSet.MANAGED_BY_LABEL, KafkaPodSet.MANAGED_BY_VALUE
                     ))
-                    .withOwnerReferences(List.of(
-                        new io.fabric8.kubernetes.api.model.OwnerReferenceBuilder()
-                            .withApiVersion(cr.getApiVersion())
-                            .withKind(cr.getKind())
-                            .withName(cr.getMetadata().getName())
-                            .withUid(cr.getMetadata().getUid())
-                            .withController(true)
-                            .withBlockOwnerDeletion(true)
-                            .build()
-                    ))
+                    .withOwnerReferences(OwnerReferences.singleton(cr))
                 .endMetadata()
                 .addToData("controller.quorum.voters", quorumVoters)
                 .addToData("cluster.id", clusterId)

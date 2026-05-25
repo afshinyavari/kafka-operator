@@ -153,6 +153,19 @@ public class CruiseControlDeploymentBuilder {
                     .withPeriodSeconds(15)
                     .withFailureThreshold(6)
                 .endReadinessProbe()
+                .withNewLivenessProbe()
+                    // Cruise Control's REST listener responds to any path (404 on unknown), so
+                    // a bare TCP probe is enough to detect a hung JVM. /state would require
+                    // the analyzer to be warmed up first — that's a readiness concern, not
+                    // liveness.
+                    .withNewTcpSocket()
+                        .withPort(new io.fabric8.kubernetes.api.model.IntOrString(
+                                CruiseControlOrchestrator.REST_PORT))
+                    .endTcpSocket()
+                    .withInitialDelaySeconds(120)
+                    .withPeriodSeconds(30)
+                    .withFailureThreshold(3)
+                .endLivenessProbe()
                 .withSecurityContext(SecurityContextDefaults.containerDefaults())
                 .build();
 

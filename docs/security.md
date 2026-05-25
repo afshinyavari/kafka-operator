@@ -28,6 +28,16 @@ even when the K8s `Role` looks innocuous.
 - **CRD CEL validation** bars wildcard topics on listener external-access,
   enforces TLS on externally-reachable listeners (Wave 5 removed those entirely),
   and requires `spec.proxy` on every KafkaCluster.
+- **Pod-level resilience**: every workload the operator builds ships with
+  liveness + readiness probes, and multi-replica deployments (proxy, Connect,
+  MM2, Apicurio) get a `maxUnavailable=1` PodDisruptionBudget owned by the
+  parent CR. Single-replica deployments don't — a `maxUnavailable=1` PDB on
+  a 1-replica deployment is a no-op.
+- **UBI base images, including Kroxylicious**: every image the operator builds
+  uses a Red Hat UBI base (`registry.access.redhat.com/ubi9/openjdk-{17,21}`).
+  Kroxylicious is compiled from source (tag `v0.21.0`) onto `ubi9/openjdk-21`
+  rather than rebased on top of the upstream `quay.io/kroxylicious/kroxylicious`
+  image. See `filters/Dockerfile`.
 
 ## Kafka-side hardening (Wave 4a)
 

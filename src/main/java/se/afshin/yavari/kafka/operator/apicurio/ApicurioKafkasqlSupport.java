@@ -19,6 +19,7 @@ import se.afshin.yavari.kafka.operator.crd.KafkaCluster;
 import se.afshin.yavari.kafka.operator.crd.KafkaProxyMtlsConfig;
 import se.afshin.yavari.kafka.operator.crd.KafkaTopic;
 import se.afshin.yavari.kafka.operator.crd.KafkaTopicSpec;
+import se.afshin.yavari.kafka.operator.infra.OwnerReferences;
 import se.afshin.yavari.kafka.operator.crd.KafkaTopicStatus;
 import se.afshin.yavari.kafka.operator.crd.TopicDeletionPolicy;
 import se.afshin.yavari.kafka.operator.topic.AdminClientTlsLoader;
@@ -155,6 +156,8 @@ public class ApicurioKafkasqlSupport {
         // KafkaCluster instead (looked up via storage.clusterRef which the orchestrator
         // populates). On the legacy path the registry IS a CR and has a real UID; we
         // honour that when present.
+        // ApicurioRegistry is a synthetic POJO (not HasMetadata) so the OwnerReferences util
+        // cannot resolve it; the owner-ref is built inline here.
         if (registry.getMetadata().getUid() != null && !registry.getMetadata().getUid().isBlank()) {
             meta.withOwnerReferences(new OwnerReferenceBuilder()
                     .withApiVersion(registry.getApiVersion())
@@ -168,14 +171,7 @@ public class ApicurioKafkasqlSupport {
             KafkaCluster owner = client.resources(KafkaCluster.class).inNamespace(ns)
                     .withName(storage.getClusterRef()).get();
             if (owner != null && owner.getMetadata().getUid() != null) {
-                meta.withOwnerReferences(new OwnerReferenceBuilder()
-                        .withApiVersion(owner.getApiVersion())
-                        .withKind(owner.getKind())
-                        .withName(owner.getMetadata().getName())
-                        .withUid(owner.getMetadata().getUid())
-                        .withController(true)
-                        .withBlockOwnerDeletion(true)
-                        .build());
+                meta.withOwnerReferences(OwnerReferences.of(owner));
             }
         }
         desired.setMetadata(meta.build());
