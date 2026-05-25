@@ -32,7 +32,7 @@ class UIDeploymentBuilderTest {
         assertThat(dep.getMetadata().getOwnerReferences().get(0).getController()).isTrue();
 
         Container c = dep.getSpec().getTemplate().getSpec().getContainers().get(0);
-        assertThat(c.getImage()).isEqualTo("kafka-ui:dev");
+        assertThat(c.getImage()).isEqualTo("kafka-editor:dev");
         assertThat(c.getImagePullPolicy()).isEqualTo("IfNotPresent");
         assertThat(c.getPorts().get(0).getContainerPort()).isEqualTo(8080);
         assertThat(c.getReadinessProbe().getHttpGet().getPath()).isEqualTo("/q/health/ready");
@@ -40,22 +40,35 @@ class UIDeploymentBuilderTest {
 
         Map<String, EnvVar> env = envByName(c.getEnv());
         assertThat(env).containsKeys(
+                "QUARKUS_OIDC_AUTH_SERVER_URL",
+                "QUARKUS_OIDC_CLIENT_ID",
+                "QUARKUS_OIDC_CREDENTIALS_SECRET",
+                "KAFKA_EDITOR_BOOTSTRAP_SERVERS",
+                "KAFKA_EDITOR_SECURITY_PROTOCOL",
+                "KAFKA_EDITOR_TLS_DIR",
+                "QUARKUS_HTTP_PORT");
+        assertThat(env.get("QUARKUS_OIDC_AUTH_SERVER_URL").getValue()).isEqualTo("http://issuer");
+        assertThat(env.get("KAFKA_EDITOR_TLS_DIR").getValue()).isEqualTo("/etc/kafka-tls");
+        assertThat(env.get("KAFKA_EDITOR_SECURITY_PROTOCOL").getValue()).isEqualTo("SASL_SSL");
+        // Default discovery: kafka-proxy.kafka.svc.cluster.local:9094
+        assertThat(env.get("KAFKA_EDITOR_BOOTSTRAP_SERVERS").getValue())
+                .isEqualTo("kafka-proxy.kafka.svc.cluster.local:9094");
+        assertThat(env.get("QUARKUS_OIDC_CREDENTIALS_SECRET").getValueFrom().getSecretKeyRef().getName())
+                .isEqualTo("kafka-ui-oidc");
+        assertThat(env.get("QUARKUS_OIDC_CREDENTIALS_SECRET").getValueFrom().getSecretKeyRef().getKey())
+                .isEqualTo("client-secret");
+
+        // The legacy KAFKA_UI_* and OIDC_* names are gone — backend reads
+        // QUARKUS_OIDC_* (auto-mapped by MicroProfile Config) and KAFKA_EDITOR_*.
+        assertThat(env).doesNotContainKeys(
                 "OIDC_ISSUER_URL", "OIDC_CLIENT_ID", "OIDC_CLIENT_SECRET",
                 "KAFKA_UI_KAFKA_SECURITY_PROTOCOL", "KAFKA_UI_KAFKA_SSL_TLS_DIR",
                 "UI_PORT", "KAFKA_UI_CLUSTER_NAMESPACE",
                 "KAFKA_UI_PROXY_SERVICE_NAME", "KAFKA_UI_PROXY_PORT",
-                "KAFKA_UI_APICURIO_SERVICE_NAME", "KAFKA_UI_APICURIO_PORT");
-        assertThat(env.get("OIDC_ISSUER_URL").getValue()).isEqualTo("http://issuer");
-        assertThat(env.get("KAFKA_UI_KAFKA_SSL_TLS_DIR").getValue()).isEqualTo("/etc/kafka-tls");
-        assertThat(env.get("OIDC_CLIENT_SECRET").getValueFrom().getSecretKeyRef().getName())
-                .isEqualTo("kafka-ui-oidc");
-        assertThat(env.get("OIDC_CLIENT_SECRET").getValueFrom().getSecretKeyRef().getKey())
-                .isEqualTo("client-secret");
+                "KAFKA_UI_APICURIO_SERVICE_NAME", "KAFKA_UI_APICURIO_PORT",
+                "KAFKA_UI_DNS_SUFFIX");
 
-        // No KAFKA_UI_DNS_SUFFIX env var when dnsSuffix is empty.
-        assertThat(env).doesNotContainKey("KAFKA_UI_DNS_SUFFIX");
-
-        // TLS secret mounted.
+        // TLS secret mounted (used by AdminClientFactory's PEM keystore + truststore).
         assertThat(c.getVolumeMounts().get(0).getName()).isEqualTo("kafka-client-tls");
         assertThat(c.getVolumeMounts().get(0).getMountPath()).isEqualTo("/etc/kafka-tls");
         assertThat(dep.getSpec().getTemplate().getSpec().getVolumes().get(0)
@@ -69,27 +82,33 @@ class UIDeploymentBuilderTest {
     void build_extraEnv_overridesDefault() {
         KafkaUI ui = ui();
         KafkaUIEnvVar override = new KafkaUIEnvVar();
-        override.setName("KAFKA_UI_PROXY_PORT");
-        override.setValue("12345");
+        override.setName("KAFKA_EDITOR_BOOTSTRAP_SERVERS");
+        override.setValue("override-broker:9092");
         ui.getSpec().setEnv(List.of(override));
 
         Deployment dep = builder.build(ui, ownerRef());
         Container c = dep.getSpec().getTemplate().getSpec().getContainers().get(0);
         Map<String, EnvVar> env = envByName(c.getEnv());
-        assertThat(env.get("KAFKA_UI_PROXY_PORT").getValue()).isEqualTo("12345");
+        assertThat(env.get("KAFKA_EDITOR_BOOTSTRAP_SERVERS").getValue()).isEqualTo("override-broker:9092");
         // appears exactly once (override removed the default).
-        long count = c.getEnv().stream().filter(e -> "KAFKA_UI_PROXY_PORT".equals(e.getName())).count();
+        long count = c.getEnv().stream()
+                .filter(e -> "KAFKA_EDITOR_BOOTSTRAP_SERVERS".equals(e.getName()))
+                .count();
         assertThat(count).isEqualTo(1L);
     }
 
     @Test
-    void build_dnsSuffix_emitsEnvVar() {
+    void build_dnsSuffix_appearsInBootstrap() {
         KafkaUI ui = ui();
+        // clusterset.local makes the proxy reachable cross-cluster via
+        // Submariner Lighthouse — but the SAME local proxy is what kafka-editor
+        // wants to call, so the operator still produces an in-cluster name.
         ui.getSpec().getDiscovery().setDnsSuffix("clusterset.local");
         Deployment dep = builder.build(ui, ownerRef());
         Map<String, EnvVar> env = envByName(
                 dep.getSpec().getTemplate().getSpec().getContainers().get(0).getEnv());
-        assertThat(env.get("KAFKA_UI_DNS_SUFFIX").getValue()).isEqualTo("clusterset.local");
+        assertThat(env.get("KAFKA_EDITOR_BOOTSTRAP_SERVERS").getValue())
+                .isEqualTo("kafka-proxy.kafka.clusterset.local:9094");
     }
 
     // ---- helpers ----

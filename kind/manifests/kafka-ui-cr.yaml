@@ -4,11 +4,13 @@ metadata:
   name: kafka-ui
   namespace: kafka
 spec:
-  image: kafka-ui:dev
+  image: kafka-editor:dev
   imagePullPolicy: IfNotPresent
   replicas: 1
   oidc:
     issuerUrl: "http://keycloak.kafka.svc.clusterset.local:8080/realms/demo"
+    # Reusing the existing Keycloak client + secret; the realm-side
+    # configuration is identical (web-app, code-flow, no further claims).
     clientId: "kafka-ui-web"
     clientSecretRef:
       name: kafka-ui-oidc

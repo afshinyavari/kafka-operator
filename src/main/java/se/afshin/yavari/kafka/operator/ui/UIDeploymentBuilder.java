@@ -120,17 +120,24 @@ public class UIDeploymentBuilder {
     private List<EnvVar> buildEnv(KafkaUISpec spec, int containerPort, String tlsMount) {
         List<EnvVar> envVars = new ArrayList<>();
 
+        // Quarkus OIDC env vars consumed directly by application.properties.
         KafkaUIOidcConfig oidc = spec.getOidc();
         if (oidc != null) {
             if (oidc.getIssuerUrl() != null) {
-                envVars.add(new EnvVarBuilder().withName("OIDC_ISSUER_URL").withValue(oidc.getIssuerUrl()).build());
+                envVars.add(new EnvVarBuilder()
+                        .withName("QUARKUS_OIDC_AUTH_SERVER_URL")
+                        .withValue(oidc.getIssuerUrl())
+                        .build());
             }
             if (oidc.getClientId() != null) {
-                envVars.add(new EnvVarBuilder().withName("OIDC_CLIENT_ID").withValue(oidc.getClientId()).build());
+                envVars.add(new EnvVarBuilder()
+                        .withName("QUARKUS_OIDC_CLIENT_ID")
+                        .withValue(oidc.getClientId())
+                        .build());
             }
             if (oidc.getClientSecretRef() != null) {
                 envVars.add(new EnvVarBuilder()
-                        .withName("OIDC_CLIENT_SECRET")
+                        .withName("QUARKUS_OIDC_CREDENTIALS_SECRET")
                         .withNewValueFrom()
                             .withNewSecretKeyRef(oidc.getClientSecretRef().getKey(),
                                     oidc.getClientSecretRef().getName(), false)
@@ -139,28 +146,26 @@ public class UIDeploymentBuilder {
             }
         }
 
-        envVars.add(new EnvVarBuilder()
-                .withName("KAFKA_UI_KAFKA_SECURITY_PROTOCOL").withValue("SASL_SSL").build());
-        envVars.add(new EnvVarBuilder()
-                .withName("KAFKA_UI_KAFKA_SSL_TLS_DIR").withValue(tlsMount).build());
-        envVars.add(new EnvVarBuilder()
-                .withName("UI_PORT").withValue(String.valueOf(containerPort)).build());
-
+        // Bootstrap servers are composed from spec.discovery: backend talks to
+        // the local proxy Service over SASL_SSL + OAUTHBEARER + PEM mTLS, all
+        // configured in kafka-editor's AdminClientFactory.
         KafkaUIDiscoveryConfig disc = spec.getDiscovery();
+        String suffix = disc.getDnsSuffix() == null || disc.getDnsSuffix().isEmpty()
+                ? ".svc.cluster.local"
+                : (disc.getDnsSuffix().startsWith(".") ? disc.getDnsSuffix() : "." + disc.getDnsSuffix());
+        String bootstrap = disc.getProxyServiceName() + "." + disc.getClusterNamespace()
+                + suffix + ":" + disc.getProxyPort();
+
         envVars.add(new EnvVarBuilder()
-                .withName("KAFKA_UI_CLUSTER_NAMESPACE").withValue(disc.getClusterNamespace()).build());
+                .withName("KAFKA_EDITOR_BOOTSTRAP_SERVERS").withValue(bootstrap).build());
         envVars.add(new EnvVarBuilder()
-                .withName("KAFKA_UI_PROXY_SERVICE_NAME").withValue(disc.getProxyServiceName()).build());
+                .withName("KAFKA_EDITOR_SECURITY_PROTOCOL").withValue("SASL_SSL").build());
         envVars.add(new EnvVarBuilder()
-                .withName("KAFKA_UI_PROXY_PORT").withValue(String.valueOf(disc.getProxyPort())).build());
+                .withName("KAFKA_EDITOR_TLS_DIR").withValue(tlsMount).build());
+
+        // Quarkus listens on 0.0.0.0:8080 by default; explicit for clarity.
         envVars.add(new EnvVarBuilder()
-                .withName("KAFKA_UI_APICURIO_SERVICE_NAME").withValue(disc.getApicurioServiceName()).build());
-        envVars.add(new EnvVarBuilder()
-                .withName("KAFKA_UI_APICURIO_PORT").withValue(String.valueOf(disc.getApicurioPort())).build());
-        if (disc.getDnsSuffix() != null && !disc.getDnsSuffix().isEmpty()) {
-            envVars.add(new EnvVarBuilder()
-                    .withName("KAFKA_UI_DNS_SUFFIX").withValue(disc.getDnsSuffix()).build());
-        }
+                .withName("QUARKUS_HTTP_PORT").withValue(String.valueOf(containerPort)).build());
 
         // User-supplied extras override defaults when the name collides.
         if (spec.getEnv() != null) {

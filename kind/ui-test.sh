@@ -1,12 +1,13 @@
 #!/bin/bash
-# Smoke-test the kafka-ui Deployment.
+# Smoke-test the kafka-ui Deployment (now backed by the kafka-editor image
+# — same KafkaUI CRD, swapped image; see backlog #27).
 #
 # Verifies:
 #  1. The pod is Ready (Quarkus reports /q/health/ready)
 #  2. The home route redirects unauthenticated browsers to Keycloak (OIDC wired up)
-#  3. Liveness probe responds
+#  3. The public /api/health endpoint answers 200 (proves the REST stack is up)
 #
-# Full login + browse flow is interactive (OIDC authorization code + PKCE
+# Full login + SPA browse flow is interactive (OIDC authorization code + PKCE
 # requires a browser); this script just gates the deployment shape.
 set -euo pipefail
 export PATH="${HOME}/.local/bin:${PATH}"
@@ -62,6 +63,17 @@ if [[ "${LOC}" == *"/realms/demo/protocol/openid-connect/auth"* ]]; then
     ok "GET / redirects to Keycloak (OIDC wired)"
 else
     fail_t "Expected 302 → Keycloak authorize; got: ${LOC:-<none>}"
+fi
+
+echo ""
+echo -e "${CYAN}══ Public /api/health ══${NC}"
+HC=$(kubectl --context "${CTX}" -n "${NS}" run --rm -i --restart=Never \
+        --image=curlimages/curl:8.10.1 ui-health-$$ -- \
+        curl -s -o /dev/null -w '%{http_code}' http://kafka-ui.${NS}.svc.cluster.local:8080/api/health 2>/dev/null)
+if [ "${HC}" = "200" ]; then
+    ok "GET /api/health → 200 (REST stack up)"
+else
+    fail_t "Expected 200 from /api/health; got: ${HC:-<none>}"
 fi
 
 echo ""

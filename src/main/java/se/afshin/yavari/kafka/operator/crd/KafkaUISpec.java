@@ -8,7 +8,7 @@ public class KafkaUISpec {
     /** Fixed container port the kafka-ui image listens on. */
     public static final int PORT = 8080;
 
-    private String image = "kafka-ui:dev";
+    private String image = "kafka-editor:dev";
     private String imagePullPolicy = "IfNotPresent";
     private int replicas = 1;
 
