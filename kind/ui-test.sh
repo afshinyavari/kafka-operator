@@ -70,7 +70,9 @@ echo -e "${CYAN}══ Public /api/health ══${NC}"
 HC=$(kubectl --context "${CTX}" -n "${NS}" run --rm -i --restart=Never \
         --image=curlimages/curl:8.10.1 ui-health-$$ -- \
         curl -s -o /dev/null -w '%{http_code}' http://kafka-ui.${NS}.svc.cluster.local:8080/api/health 2>/dev/null)
-if [ "${HC}" = "200" ]; then
+# kubectl run --rm appends "pod ... deleted" to stdout — wildcard-match the code
+# instead of comparing the full string.
+if [[ "${HC}" == 200* ]]; then
     ok "GET /api/health → 200 (REST stack up)"
 else
     fail_t "Expected 200 from /api/health; got: ${HC:-<none>}"
