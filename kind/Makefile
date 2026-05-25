@@ -7,7 +7,6 @@ KAFKA_IMAGE        := kafka-ubi:4.0.0
 KAFKA_VERSION      := 4.0.0
 KROXY_IMAGE        := kroxy-filters:dev
 APICURIO_PROXY_IMG := apicurio-rbac-proxy:dev
-KAFKA_UI_IMG       := kafka-ui:dev
 KAFKA_EDITOR_IMG   := kafka-editor:dev
 MM2_IMG            := mm2:dev
 KAFKA_BACKUP_IMG   := kafka-backup:dev
@@ -19,7 +18,7 @@ MANIFESTS_DIR      := manifests
 .PHONY: all setup mcs-setup teardown status quorum proxy-test xml-filter-test \
         logs-a logs-b logs-c build image \
         kroxy-image reload-kroxy-image apicurio-proxy-image reload-apicurio-proxy-image \
-        kafka-ui-image reload-kafka-ui-image kafka-ui-setup ui-test \
+        kafka-ui-setup ui-test \
         kafka-editor-image reload-kafka-editor-image \
         mm2-image reload-mm2-image \
         kafka-backup-image reload-kafka-backup-image kafka-backup-test \
@@ -138,16 +137,6 @@ reload-apicurio-proxy-image: apicurio-proxy-image  ## Rebuild + reload apicurio-
 	  kind load docker-image $(APICURIO_PROXY_IMG) --name $$cluster; \
 	done
 
-kafka-ui-image:  ## Build the kafka-ui Docker image
-	cd $(OPERATOR_DIR)/kafka-ui && mvn package -DskipTests -q
-	docker build -t $(KAFKA_UI_IMG) $(OPERATOR_DIR)/kafka-ui
-
-reload-kafka-ui-image: kafka-ui-image  ## Rebuild + reload kafka-ui image into all Kind clusters (HA #20)
-	@for cluster in $(CLUSTERS); do \
-	  kind load docker-image $(KAFKA_UI_IMG) --name $$cluster; \
-	  kubectl --context kind-$$cluster -n $(NAMESPACE) rollout restart deployment kafka-ui 2>/dev/null || true; \
-	done
-
 kafka-editor-image:  ## Build the kafka-editor Docker image (React SPA bundled into Quarkus backend, UBI runtime)
 	cd $(OPERATOR_DIR)/kafka-editor && npm ci && npm run build
 	rm -rf $(OPERATOR_DIR)/kafka-editor/backend/src/main/resources/META-INF/resources
@@ -189,8 +178,8 @@ reload-cruise-control-image: cruise-control-image  ## Rebuild + reload Cruise Co
 	  kind load docker-image $(CC_IMAGE) --name $$cluster; \
 	done
 
-kafka-ui-setup:  ## Deploy kafka-ui to all clusters via KafkaUI CR (HA #20; operator filters by targetClusters)
-	$(MAKE) reload-kafka-ui-image
+kafka-ui-setup:  ## Deploy the UI (kafka-editor backed) via the KafkaUI CR (HA #20; operator filters by targetClusters)
+	$(MAKE) reload-kafka-editor-image
 	@for cluster in $(CLUSTERS); do \
 	  kubectl --context kind-$$cluster apply -f $(MANIFESTS_DIR)/kafka-ui-oidc-secret.yaml; \
 	  kubectl --context kind-$$cluster apply -f $(MANIFESTS_DIR)/kafka-ui-cr.yaml; \
