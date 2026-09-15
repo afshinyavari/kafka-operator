@@ -1,9 +1,11 @@
 package se.afshin.yavari.rbac;
 
 import io.quarkus.runtime.StartupEvent;
+import io.quarkus.security.identity.SecurityIdentity;
 import jakarta.annotation.PreDestroy;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.event.Observes;
+import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.yaml.snakeyaml.Yaml;
 
@@ -34,6 +36,13 @@ public class PolicyEngine {
     @ConfigProperty(name = "proxy.policy.file")
     String policyFilePath;
 
+    /** Kafka-ACL source for certificate identities (package-private for tests). */
+    @Inject
+    KafkaAclPolicySource acls;
+
+    @ConfigProperty(name = "proxy.mtls.principal", defaultValue = "DN")
+    MtlsPrincipal.Mode principalMode;
+
     private final AtomicReference<List<Rule>> rules = new AtomicReference<>(List.of());
     private volatile boolean initialized = false;
     private volatile boolean running = true;
@@ -55,6 +64,30 @@ public class PolicyEngine {
 
     boolean isInitialized() { return initialized; }
 
+    /**
+     * Either/or dispatch: a certificate-authenticated identity is judged only by Kafka
+     * ACLs; any other (OIDC) identity only by the role rules. No fallback between them.
+     */
+    public boolean isAllowed(SecurityIdentity identity, String artifact, Action action) {
+        if (MtlsPrincipal.isCertificateIdentity(identity)) {
+            // Denied until an ACL snapshot exists (source disabled, or not yet loaded).
+            if (acls == null || !acls.isLoaded()) return false;
+            return acls.isAllowed(MtlsPrincipal.principalOf(identity, principalMode), artifact, action);
+        }
+        return isAllowed(identity.getRoles(), artifact, action);
+    }
+
+    /** Identity → "user:<name>" (certificate subject per mode for mTLS) or "anonymous". */
+    public static String principalOf(SecurityIdentity identity, MtlsPrincipal.Mode mode) {
+        if (identity == null || identity.isAnonymous()) return "anonymous";
+        if (MtlsPrincipal.isCertificateIdentity(identity)) {
+            return "user:" + MtlsPrincipal.principalOf(identity, mode);
+        }
+        return identity.getPrincipal() != null && identity.getPrincipal().getName() != null
+                ? "user:" + identity.getPrincipal().getName() : "anonymous";
+    }
+
+    /** Role-file rules only (OIDC path). */
     public boolean isAllowed(Set<String> callerRoles, String artifact, Action action) {
         for (Rule rule : rules.get()) {
             if (!Collections.disjoint(callerRoles, rule.roles())) {

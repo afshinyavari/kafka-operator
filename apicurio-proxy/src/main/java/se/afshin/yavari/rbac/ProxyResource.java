@@ -72,7 +72,6 @@ public class ProxyResource {
     private Response proxy(String method, String pathParam, UriInfo uriInfo,
                            HttpHeaders requestHeaders, byte[] body) {
         String fullPath = "/" + pathParam;
-        Set<String> roles    = identity.getRoles();
         String artifact      = resolveArtifact(fullPath, uriInfo.getRequestUri().getRawQuery());
         PolicyEngine.Action action = resolveAction(method, fullPath);
 
@@ -81,7 +80,7 @@ public class ProxyResource {
         long t0 = System.nanoTime();
         String decision = "error";
         try {
-            if (!policy.isAllowed(roles, artifact, action)) {
+            if (!policy.isAllowed(identity, artifact, action)) {
                 decision = "deny";
                 return Response.status(403).entity("Forbidden").build();
             }
@@ -92,16 +91,9 @@ public class ProxyResource {
             return r;
         } finally {
             long latencyMs = (System.nanoTime() - t0) / 1_000_000;
-            audit.emit(new AuditEvent(Instant.now(), principalOf(identity),
+            audit.emit(new AuditEvent(Instant.now(), PolicyEngine.principalOf(identity, policy.principalMode),
                     action.name(), artifact, decision, latencyMs, MDC.get("correlationId")));
         }
-    }
-
-    /** Identity → "user:<name>" or "anonymous". */
-    static String principalOf(SecurityIdentity identity) {
-        if (identity == null || identity.isAnonymous()) return "anonymous";
-        return identity.getPrincipal() != null && identity.getPrincipal().getName() != null
-                ? "user:" + identity.getPrincipal().getName() : "anonymous";
     }
 
     private Response forward(String method, String upstreamBase, String path,

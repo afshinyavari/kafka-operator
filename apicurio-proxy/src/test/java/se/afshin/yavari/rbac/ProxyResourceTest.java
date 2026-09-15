@@ -1,7 +1,16 @@
 package se.afshin.yavari.rbac;
 
 import io.quarkus.test.junit.QuarkusTest;
+import io.quarkus.test.security.SecurityAttribute;
 import io.quarkus.test.security.TestSecurity;
+import jakarta.inject.Inject;
+import org.apache.kafka.common.acl.AccessControlEntry;
+import org.apache.kafka.common.acl.AclBinding;
+import org.apache.kafka.common.acl.AclOperation;
+import org.apache.kafka.common.acl.AclPermissionType;
+import org.apache.kafka.common.resource.PatternType;
+import org.apache.kafka.common.resource.ResourcePattern;
+import org.apache.kafka.common.resource.ResourceType;
 import org.junit.jupiter.api.Test;
 
 import static io.restassured.RestAssured.given;
@@ -250,5 +259,54 @@ class ProxyResourceTest {
             .get("/apis/registry/v2/ids/globalIds/7")
             .then().extract().statusCode();
         assertThat(status).isNotEqualTo(403);
+    }
+
+    // ── mTLS identities are authorized from Kafka ACLs ────────────────────────
+
+    @Inject KafkaAclPolicySource aclSource;
+
+    private void aclSnapshot(AclBinding... bindings) {
+        aclSource.replaceSnapshot(java.util.List.of(bindings));
+    }
+
+    private static AclBinding topicAcl(String principal, String topic, AclOperation op, AclPermissionType perm) {
+        return new AclBinding(new ResourcePattern(ResourceType.TOPIC, topic, PatternType.LITERAL),
+                new AccessControlEntry("User:" + principal, "*", op, perm));
+    }
+
+    @Test
+    @TestSecurity(user = "CN=orders-service", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
+    void mtlsServiceWithWriteAclPassesPolicyForItsSubjects() {
+        aclSnapshot(topicAcl("CN=orders-service", "orders", AclOperation.WRITE, AclPermissionType.ALLOW));
+        int put = given().body("{}").contentType("application/json")
+            .put("/apis/registry/v2/groups/default/artifacts/orders-value")
+            .then().extract().statusCode();
+        assertThat(put).isNotEqualTo(403);
+        // Creating without an artifact id in the path is a "*" (registry-wide) operation.
+        given().body("{}").contentType("application/json")
+            .post("/apis/registry/v2/groups/default/artifacts")
+            .then().statusCode(403);
+    }
+
+    @Test
+    @TestSecurity(user = "CN=orders-service", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
+    void mtlsServiceIsBlockedFromOtherTopicsSubjects() {
+        aclSnapshot(topicAcl("CN=orders-service", "orders", AclOperation.WRITE, AclPermissionType.ALLOW));
+        given().get("/apis/registry/v2/groups/default/artifacts/invoices-value").then().statusCode(403);
+    }
+
+    @Test
+    @TestSecurity(user = "CN=orders-service", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
+    void mtlsServiceWithDenyIsRefused() {
+        aclSnapshot(topicAcl("*", "*", AclOperation.ALL, AclPermissionType.ALLOW),
+                    topicAcl("CN=orders-service", "orders", AclOperation.ALL, AclPermissionType.DENY));
+        given().get("/apis/registry/v2/groups/default/artifacts/orders-value").then().statusCode(403);
+    }
+
+    @Test
+    @TestSecurity(user = "CN=orders-service", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
+    void mtlsServiceIgnoresRoleFile() {
+        aclSnapshot(); // no ACLs at all; "orders" is granted to orders-team in the role file
+        given().get("/apis/registry/v2/groups/default/artifacts/orders").then().statusCode(403);
     }
 }
