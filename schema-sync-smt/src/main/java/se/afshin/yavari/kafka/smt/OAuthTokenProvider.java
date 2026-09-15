@@ -16,7 +16,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.time.Instant;
 
-import se.afshin.yavari.kafka.smt.ApicurioClient.ApicurioException;
+
 
 /**
  * Fetches and caches OAuth2 access tokens via the <em>client-credentials</em> grant,
@@ -64,7 +64,7 @@ public class OAuthTokenProvider {
     }
 
     /** Returns a valid access token, fetching or refreshing as needed. */
-    public synchronized String token() throws ApicurioException {
+    public synchronized String token() throws RegistryException {
         if (cachedToken != null && Instant.now().isBefore(expiresAt)) {
             return cachedToken;
         }
@@ -78,7 +78,7 @@ public class OAuthTokenProvider {
         expiresAt = Instant.EPOCH;
     }
 
-    private String fetch() throws ApicurioException {
+    private String fetch() throws RegistryException {
         StringBuilder form = new StringBuilder()
                 .append("grant_type=client_credentials")
                 .append("&client_id=").append(enc(clientId))
@@ -96,27 +96,27 @@ public class OAuthTokenProvider {
         try {
             resp = http.send(req, BodyHandlers.ofByteArray());
         } catch (Exception e) {
-            throw new ApicurioException("OAuth token request failed: " + tokenUrl, e);
+            throw new RegistryException("OAuth token request failed: " + tokenUrl, e);
         }
         if (resp.statusCode() / 100 != 2) {
-            throw new ApicurioException("OAuth token endpoint " + tokenUrl + " → " + resp.statusCode()
+            throw new RegistryException("OAuth token endpoint " + tokenUrl + " → " + resp.statusCode()
                     + " body=" + new String(resp.body(), StandardCharsets.UTF_8));
         }
         try {
             JsonNode json = MAPPER.readTree(resp.body());
             String token = json.path("access_token").asText(null);
             if (token == null || token.isBlank()) {
-                throw new ApicurioException("OAuth token response missing access_token");
+                throw new RegistryException("OAuth token response missing access_token");
             }
             long expiresIn = json.path("expires_in").asLong(300);
             this.cachedToken = token;
             this.expiresAt = Instant.now().plusSeconds(Math.max(1, expiresIn - EXPIRY_MARGIN_SECONDS));
             LOG.info("OAuth token acquired from {} (expires_in={}s)", tokenUrl, expiresIn);
             return token;
-        } catch (ApicurioException e) {
+        } catch (RegistryException e) {
             throw e;
         } catch (Exception e) {
-            throw new ApicurioException("Failed to parse OAuth token response from " + tokenUrl, e);
+            throw new RegistryException("Failed to parse OAuth token response from " + tokenUrl, e);
         }
     }
 

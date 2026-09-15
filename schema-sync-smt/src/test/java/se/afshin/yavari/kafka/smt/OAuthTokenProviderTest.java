@@ -91,7 +91,7 @@ class OAuthTokenProviderTest {
     void nonTwoxxResponseThrows() {
         statusCode = 401;
         assertThatThrownBy(() -> provider().token())
-                .isInstanceOf(ApicurioClient.ApicurioException.class)
+                .isInstanceOf(RegistryException.class)
                 .hasMessageContaining("401");
     }
 }

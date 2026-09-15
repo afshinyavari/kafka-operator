@@ -700,24 +700,47 @@ source proxy bootstrap            target proxy bootstrap
 - **External**: passes through `bootstrap`, `tlsSecretRef`, `sasl`, and
   `schemaRegistry` verbatim.
 
-CONFLUENT schema-registry type is rejected at reconcile (wire format
-differs; reserved for a future release).
+CONFLUENT schema-registry type is still rejected at reconcile by the
+operator's `KafkaEndpointResolver`. The SMT itself supports it since
+2026-09 (see below); wiring `source.format`/`target.format` from the CR is
+a follow-up.
 
 ### Schema-sync SMT
 
 The bundled `ApicurioSchemaTransferSmt` (in `schema-sync-smt/`) is wired
 into the source→target transforms chain when `spec.schemaSync.enabled=true`
-AND both ends expose a schema registry URL. Per record:
+AND both ends expose a schema registry URL. It is registry-neutral inside:
+
+- `EnvelopeCodec` (`APICURIO` = `0x00` + int64 globalId, `CONFLUENT` =
+  `0x00` + int32 schemaId) parses the source header and re-frames the
+  target header. Source and target codecs are independent.
+- `SchemaRegistryClient` (`fetchById` / `upsert` / `lookupId`) with two
+  implementations on a shared `RestRegistryClient` base (JDK `HttpClient`,
+  optional `SSLContext`, 401/403 refresh-and-retry): `ApicurioClient`
+  (Apicurio REST v2) and `ConfluentClient` (Confluent REST, also Apicurio
+  ccompat). Both speak the neutral `RegistrySchema` / `SchemaRef` model —
+  a Confluent subject is `artifactId` in group `default`, `schemaType` is
+  the artifact type.
+- `RegistryTls` builds the `SSLContext` from Kafka-style `<side>.ssl.*`
+  keys: PKCS12, JKS, or PEM (PKCS#8 key, RSA/EC) — JDK only.
+
+Per record:
 
 1. Topic regex check (`applyToTopics`).
-2. Envelope detection — `bytes != null && length ≥ 9 && bytes[0] == 0x00`.
-3. Parse 8-byte big-endian globalId.
-4. Cache lookup → on miss, DFS resolve the source artifact (with
-   `HashSet<Long> visiting` cycle guard, `maxDepth=16`) and recursively
-   upsert references on the target before the parent
-   (`?ifExists=FIND_OR_CREATE_VERSION`).
-5. Rewrite the envelope's 8 bytes with the target globalId; payload
-   unchanged.
+2. Envelope detection via the source codec — `bytes != null && length ≥
+   header && bytes[0] == 0x00`.
+3. Parse the source id; consult the positive LRU cache, then the negative
+   cache (`cache.negative.ttl.ms`) so payloads that merely look like
+   envelopes don't hit the registry per record.
+4. On miss, DFS resolve the source schema (with `HashSet<Long> visiting`
+   cycle guard, `maxDepth=16`): for each reference, resolve its source id,
+   ensure it on the target first, and rewrite the reference to the version
+   the target assigned (registries number versions independently). Then
+   upsert the parent (`?ifExists=RETURN_OR_UPDATE` on Apicurio; idempotent
+   `POST /subjects/{s}/versions` on Confluent), under
+   `target.subject.prefix` + source subject when a prefix is configured.
+5. Encode the target envelope with the target id via the target codec;
+   payload bytes unchanged (header length may change across formats).
 
 Six layers of safety make the SMT safe to drop on mixed-format clusters:
 per-record detection, tombstone passthrough, `applyTo` knob, topic
@@ -757,8 +780,10 @@ MCS gives single-K8s-cluster fault tolerance for the same flow.
 - `src/main/java/se/afshin/yavari/kafka/operator/mm2/` — reconciler + builders
 - `src/main/java/se/afshin/yavari/kafka/operator/endpoint/` — shared `KafkaEndpointResolver` + `ResolvedKafkaEndpoint` (also consumed by KafkaConnect)
 - `src/main/java/se/afshin/yavari/kafka/operator/crd/MirrorMaker2*.java` — CRD classes
-- `schema-sync-smt/` — Connect SMT JAR (shaded with Jackson); also carries
-  `OAuthTokenProvider` and the `Mm2MirrorProbe` e2e helper
+- `schema-sync-smt/` — Connect SMT JAR (shaded with Jackson, Java 17):
+  `ApicurioSchemaTransferSmt`, `EnvelopeCodec`, `SchemaRegistryClient` +
+  `ApicurioClient` / `ConfluentClient` / `RestRegistryClient`, `RegistryTls`,
+  `OAuthTokenProvider`, and the `Mm2MirrorProbe` e2e helper
 - `mm2-image/Dockerfile` — kafka-ubi:4.0.0 + the SMT JAR
 - `kind/mm2-smoke-test.sh` — smoke e2e (CRD + reconciler wiring)
 - `kind/mm2-mirror-test.sh` — extended e2e: real data + schema mirror

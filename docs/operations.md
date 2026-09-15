@@ -729,6 +729,56 @@ make reload-mm2-image   # builds JAR, rebuilds image, kind load, restart MM2 Dep
 
 The Deployment annotation `kafka.yavari.afshin.se/config-hash` only flips on properties/Secret changes, not image changes — `reload-mm2-image` issues an explicit rollout restart.
 
+### Running the SMT outside the operator (Strimzi, Confluent source)
+
+The SMT has no dependency on the operator — it is a plain Kafka Connect `Transformation` whose shaded JAR bundles only Jackson. It supports two registry formats per side, selected with `source.format` / `target.format`:
+
+| Format | Wire envelope | REST API |
+|---|---|---|
+| `APICURIO` (default) | `[0x00][globalId:int64 BE][payload]` | Apicurio Registry v2 (`/apis/registry/v2`, also served by Apicurio 3.x) |
+| `CONFLUENT` | `[0x00][schemaId:int32 BE][payload]` | Confluent Schema Registry (also Apicurio's `/apis/ccompat/v7`) |
+
+Formats are independent, so a Confluent source can feed an Apicurio target: the 5-byte Confluent header is replaced by the 9-byte Apicurio header carrying the target's globalId, the subject becomes the `artifactId` in group `default`, `schemaType` becomes the artifact type, and references are registered first and rewritten to the version the target assigned.
+
+**Strimzi image** — `KafkaMirrorMaker2` has no `spec.build`, so bake the JAR into a custom image and reference it with `spec.image`. Strimzi's plugin path is `/opt/kafka/plugins`:
+
+```dockerfile
+FROM quay.io/strimzi/kafka:0.47.0-kafka-4.0.0
+COPY schema-sync-smt-1.0-SNAPSHOT.jar /opt/kafka/plugins/schema-sync-smt/
+USER 1001
+```
+
+The JAR targets Java 17 (`maven.compiler.release=17`), matching Strimzi's images.
+
+**Connector config** (`spec.mirrors[].sourceConnector.config`), Confluent source with mTLS → Apicurio target with mTLS:
+
+```yaml
+transforms: schemaSync
+transforms.schemaSync.type: se.afshin.yavari.kafka.smt.ApicurioSchemaTransferSmt
+transforms.schemaSync.source.format: CONFLUENT
+transforms.schemaSync.source.url: https://schema-registry.prod.example:8081
+transforms.schemaSync.source.ssl.keystore.location: /mnt/registry-tls/source/client.p12
+transforms.schemaSync.source.ssl.keystore.password: ${secrets:kafka/mm2-registry-tls:source-keystore-password}
+transforms.schemaSync.source.ssl.truststore.location: /mnt/registry-tls/source/ca.p12
+transforms.schemaSync.source.ssl.truststore.password: ${secrets:kafka/mm2-registry-tls:source-truststore-password}
+transforms.schemaSync.target.format: APICURIO
+transforms.schemaSync.target.url: https://apicurio.dr.example
+transforms.schemaSync.target.subject.prefix: "prod."   # = source alias + "." with DefaultReplicationPolicy
+transforms.schemaSync.target.ssl.keystore.type: PEM
+transforms.schemaSync.target.ssl.keystore.location: /mnt/registry-tls/target/tls.crt
+transforms.schemaSync.target.ssl.key.location: /mnt/registry-tls/target/tls.key
+transforms.schemaSync.target.ssl.truststore.type: PEM
+transforms.schemaSync.target.ssl.truststore.location: /mnt/registry-tls/target/ca.crt
+transforms.schemaSync.behavior.on.error: WARN
+transforms.schemaSync.apply.to.topics: "orders\\..*,payments\\..*"
+```
+
+`target.subject.prefix` makes the target artifactId follow the mirrored topic name (`orders-value` → `prod.orders-value`) so producers and lookups on the target side using TopicNameStrategy find it; references keep their source subject. Leave it empty with `IdentityReplicationPolicy`.
+
+Mount the certificate Secrets with `spec.template.pod.volumes` + `spec.template.connectContainer.volumeMounts`; the `${secrets:…}` placeholders need Strimzi's `KubernetesSecretConfigProvider` declared under `spec.config` (`config.providers: secrets`). PEM keys must be PKCS#8 (`BEGIN PRIVATE KEY`); convert PKCS#1/SEC1 keys with `openssl pkcs8 -topk8 -nocrypt`. The full key list is in [api-reference.md#smt-configuration-keys](api-reference.md#smt-configuration-keys).
+
+**Mirroring every topic.** Records that are not envelopes (null, shorter than the header, or not starting with `0x00`) pass through without any registry call. A payload that merely starts with `0x00` (raw Protobuf, custom binary) is looked up once, fails, and is then remembered by the negative cache for `cache.negative.ttl.ms` (default 60 s) — so a high-volume unschema'd topic costs one registry call per minute, not one per record. Tighten `apply.to.topics` if even that is unwanted.
+
 ### Schema-registry authentication
 
 When `schemaSync` is enabled and the target is a managed cluster, the SMT writes mirrored schemas through that cluster's `apicurio-rbac-proxy`, which rejects unauthenticated writes. Give the endpoint an OAuth2 client-credentials Secret:
@@ -750,7 +800,9 @@ then set `target.schemaRegistryAuthSecretRef: mm2-schema-registry-oauth` on the 
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Worker logs `ApicurioSchemaTransferSmt passthrough … globalId=N … 404` | Source registry has no schema for that globalId (typically a non-Apicurio record on a topic in `applyToTopics`). Default WARN behavior is to pass through. | Tighten `applyToTopics` to exclude the topic, or accept the WARN noise. |
+| Worker logs `ApicurioSchemaTransferSmt passthrough … globalId=N … 404` | Source registry has no schema for that id (typically a non-registry record on a topic in `applyToTopics` whose payload starts with `0x00`). Default WARN behavior is to pass through; the negative cache suppresses repeat lookups for `cache.negative.ttl.ms`. | Tighten `applyToTopics` to exclude the topic, or accept the WARN noise. |
+| Every Confluent-encoded record passes through with a 404 | `source.format` left at `APICURIO` against a Confluent registry — the 8-byte parse reads garbage ids. | Set `source.format=CONFLUENT`. |
+| `Failed to build registry TLS context` at startup | Wrong keystore password/type, or a PEM key that is PKCS#1 (`BEGIN RSA PRIVATE KEY`) rather than PKCS#8. | Fix the `ssl.*` keys; convert the key with `openssl pkcs8 -topk8 -nocrypt`. |
 | Worker fails on every record | `behaviorOnError=FAIL` + a non-Apicurio record snuck through | Switch to `WARN` or narrow `applyToTopics`. |
 | Schemas appear on target but consumers fail | Target registry assigns different globalIds (expected — the SMT rewrites the envelope). If a consumer caches the source globalId out-of-band, it will miss. | Stop bypassing the envelope. The SMT is the only safe way to mirror when both ends use Apicurio. |
 | Reference resolution loops or hits `maxDepth` | Schema graph cycle in source registry (data bug) | Fix the source registry; the cycle guard prevents runaway DFS. |
