@@ -740,6 +740,8 @@ The SMT has no dependency on the operator — it is a plain Kafka Connect `Trans
 
 Formats are independent, so a Confluent source can feed an Apicurio target: the 5-byte Confluent header is replaced by the 9-byte Apicurio header carrying the target's globalId, the subject becomes the `artifactId` in group `default`, `schemaType` becomes the artifact type, and references are registered first and rewritten to the version the target assigned.
 
+A ready-made Dockerfile, a complete `KafkaMirrorMaker2` example (Confluent source, mTLS target Kafka + mTLS Apicurio) and build/apply instructions live in [`schema-sync-smt/strimzi/`](../schema-sync-smt/strimzi/README.md).
+
 **Strimzi image** — `KafkaMirrorMaker2` has no `spec.build`, so bake the JAR into a custom image and reference it with `spec.image`. Strimzi's plugin path is `/opt/kafka/plugins`:
 
 ```dockerfile

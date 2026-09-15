@@ -225,6 +225,7 @@ kafka-operator/
 │       ├── ApicurioClient.java             # Apicurio v2 REST client (SchemaRegistryClient)
 │       ├── ConfluentClient.java            # Confluent / Apicurio-ccompat REST client
 │       └── RegistryTls.java                # mTLS SSLContext from ssl.* keys (PKCS12/JKS/PEM)
+│   └── strimzi/          # Dockerfile + KafkaMirrorMaker2 example for running the SMT in Strimzi
 ├── mm2-image/        # MirrorMaker2 worker image (kafka-ubi base + schema-sync-smt JAR)
 ├── connect-image/    # Kafka Connect worker image (kafka-ubi base + /opt/kafka/connect-plugins/baked landing zone)
 ├── kafka-backup-image/  # osodevops kafka-backup compiled from source on UBI + schema scripts
