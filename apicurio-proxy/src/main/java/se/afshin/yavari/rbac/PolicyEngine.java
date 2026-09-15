@@ -43,6 +43,13 @@ public class PolicyEngine {
     @ConfigProperty(name = "proxy.mtls.principal", defaultValue = "DN")
     MtlsPrincipal.Mode principalMode;
 
+    /** Always read the mode through this accessor from other beans: {@code PolicyEngine} is
+     *  injected as a CDI client proxy, and a field read on the proxy yields the proxy's own
+     *  (null) field, not the bean's configured value. */
+    public MtlsPrincipal.Mode principalMode() {
+        return principalMode == null ? MtlsPrincipal.Mode.DN : principalMode;
+    }
+
     private final AtomicReference<List<Rule>> rules = new AtomicReference<>(List.of());
     private volatile boolean initialized = false;
     private volatile boolean running = true;

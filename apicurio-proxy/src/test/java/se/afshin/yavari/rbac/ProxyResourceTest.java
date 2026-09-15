@@ -309,4 +309,20 @@ class ProxyResourceTest {
         aclSnapshot(); // no ACLs at all; "orders" is granted to orders-team in the role file
         given().get("/apis/registry/v2/groups/default/artifacts/orders").then().statusCode(403);
     }
+
+    // ── audit principal through the CDI proxy (regression: field access on a client proxy) ──
+
+    @Inject ProxyResource resource;
+
+    @Test
+    @TestSecurity(user = "CN=orders-service,O=Acme", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
+    void auditPrincipalForMtlsIdentityUsesConfiguredDnMode() {
+        assertThat(resource.auditPrincipal()).isEqualTo("user:CN=orders-service,O=Acme");
+    }
+
+    @Test
+    @TestSecurity(user = "alice", roles = {"orders-team"})
+    void auditPrincipalForOidcIdentityIsTheUserName() {
+        assertThat(resource.auditPrincipal()).isEqualTo("user:alice");
+    }
 }

@@ -91,9 +91,14 @@ public class ProxyResource {
             return r;
         } finally {
             long latencyMs = (System.nanoTime() - t0) / 1_000_000;
-            audit.emit(new AuditEvent(Instant.now(), PolicyEngine.principalOf(identity, policy.principalMode),
+            audit.emit(new AuditEvent(Instant.now(), auditPrincipal(),
                     action.name(), artifact, decision, latencyMs, MDC.get("correlationId")));
         }
+    }
+
+    /** Audit principal for the current identity ({@code user:<name>} or {@code anonymous}). */
+    String auditPrincipal() {
+        return PolicyEngine.principalOf(identity, policy.principalMode());
     }
 
     private Response forward(String method, String upstreamBase, String path,
