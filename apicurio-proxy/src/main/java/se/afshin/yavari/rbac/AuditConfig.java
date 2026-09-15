@@ -3,8 +3,8 @@ package se.afshin.yavari.rbac;
 import jakarta.enterprise.context.ApplicationScoped;
 import jakarta.enterprise.inject.Disposes;
 import jakarta.enterprise.inject.Produces;
-import se.afshin.yavari.kroxy.audit.AuditEmitter;
-import se.afshin.yavari.kroxy.audit.AuditEmitters;
+import se.afshin.yavari.rbac.audit.AuditEmitter;
+import se.afshin.yavari.rbac.audit.AuditEmitters;
 
 import java.io.IOException;
 

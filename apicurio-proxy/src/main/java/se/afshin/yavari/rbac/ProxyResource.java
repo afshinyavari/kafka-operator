@@ -9,8 +9,8 @@ import jakarta.ws.rs.core.*;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.slf4j.MDC;
 import org.yaml.snakeyaml.Yaml;
-import se.afshin.yavari.kroxy.audit.AuditEmitter;
-import se.afshin.yavari.kroxy.audit.AuditEvent;
+import se.afshin.yavari.rbac.audit.AuditEmitter;
+import se.afshin.yavari.rbac.audit.AuditEvent;
 
 import java.net.URI;
 import java.net.http.HttpClient;
