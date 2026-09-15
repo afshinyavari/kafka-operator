@@ -1,0 +1,96 @@
+# Proxy as a sidecar on a registry managed by the Apicurio Registry Operator (2.x, operator >= 1.1).
+#
+# spec.deployment.podTemplateSpecPreview is merged into the operator's own pod template, so we
+# only ADD the proxy container and its volumes. The registry container keeps listening on the
+# pod IP :8080 (the operator's probes need that), so a NetworkPolicy closes 8080 to the outside
+# and a separate Service exposes the proxy's :8443. Verify the field name and the pod labels
+# against your operator version (`kubectl get pods -l app=<cr-name> --show-labels`).
+#
+# Secrets: same as apicurio-with-proxy-deployment.yaml.
+apiVersion: registry.apicur.io/v1
+kind: ApicurioRegistry
+metadata:
+  name: registry
+  namespace: kafka
+spec:
+  configuration:
+    persistence: kafkasql
+    kafkasql:
+      bootstrapServers: my-cluster-kafka-bootstrap:9093
+      # ... your existing kafkasql security settings ...
+  deployment:
+    replicas: 1
+    podTemplateSpecPreview:
+      spec:
+        containers:
+          - name: rbac-proxy
+            image: registry.example.com/apicurio-rbac-proxy:1.0
+            ports:
+              - { name: https, containerPort: 8443 }
+            env:
+              - { name: APICURIO_URL, value: "http://127.0.0.1:8080" }   # same pod
+              - { name: XML_SCHEMA_URL, value: "http://127.0.0.1:8080" }
+              - { name: POLICY_FILE, value: /opt/rbac/policy.yaml }
+              - { name: OIDC_ISSUER_URL, value: https://keycloak.example.com/realms/kafka }
+              - { name: OIDC_ROLE_CLAIM, value: realm_access/roles }
+              - { name: PROXY_TLS_ENABLED, value: "true" }
+              - { name: PROXY_TLS_PORT, value: "8443" }
+              - { name: PROXY_TLS_KEYSTORE, value: /tls/server/server.p12 }
+              - name: PROXY_TLS_KEYSTORE_PASSWORD
+                valueFrom: { secretKeyRef: { name: apicurio-proxy-server-tls, key: password } }
+              - { name: PROXY_TLS_TRUSTSTORE, value: /tls/clients-ca/ca.p12 }
+              - name: PROXY_TLS_TRUSTSTORE_PASSWORD
+                valueFrom: { secretKeyRef: { name: my-cluster-clients-ca-cert, key: ca.password } }
+              - { name: PROXY_MTLS_PRINCIPAL, value: DN }
+              - { name: PROXY_KAFKA_BOOTSTRAP, value: my-cluster-kafka-bootstrap:9093 }
+              - { name: PROXY_KAFKA_SSL_KEYSTORE, value: /tls/kafka-user/user.p12 }
+              - name: PROXY_KAFKA_SSL_KEYSTORE_PASSWORD
+                valueFrom: { secretKeyRef: { name: apicurio-proxy-kafka, key: user.password } }
+              - { name: PROXY_KAFKA_SSL_TRUSTSTORE, value: /tls/cluster-ca/ca.p12 }
+              - name: PROXY_KAFKA_SSL_TRUSTSTORE_PASSWORD
+                valueFrom: { secretKeyRef: { name: my-cluster-cluster-ca-cert, key: ca.password } }
+            volumeMounts:
+              - { name: server-tls,  mountPath: /tls/server,     readOnly: true }
+              - { name: clients-ca,  mountPath: /tls/clients-ca, readOnly: true }
+              - { name: kafka-user,  mountPath: /tls/kafka-user, readOnly: true }
+              - { name: cluster-ca,  mountPath: /tls/cluster-ca, readOnly: true }
+              - { name: policy,      mountPath: /opt/rbac,       readOnly: true }
+            readinessProbe:
+              httpGet: { path: /q/health/ready, port: 8443, scheme: HTTPS }
+              initialDelaySeconds: 5
+            livenessProbe:
+              httpGet: { path: /q/health/live, port: 8443, scheme: HTTPS }
+              initialDelaySeconds: 15
+        volumes:
+          - { name: server-tls, secret: { secretName: apicurio-proxy-server-tls } }
+          - { name: clients-ca, secret: { secretName: my-cluster-clients-ca-cert } }
+          - { name: kafka-user, secret: { secretName: apicurio-proxy-kafka } }
+          - { name: cluster-ca, secret: { secretName: my-cluster-cluster-ca-cert } }
+          - { name: policy,     secret: { secretName: apicurio-proxy-policy } }
+---
+# Exposes only the proxy. The operator's own Service (registry-service, port 8080) still exists
+# but is closed by the NetworkPolicy below.
+apiVersion: v1
+kind: Service
+metadata:
+  name: registry-rbac
+  namespace: kafka
+spec:
+  selector: { app: registry }        # the operator labels registry pods app=<cr-name>
+  ports:
+    - { name: https, port: 8443, targetPort: 8443 }
+---
+# Only 8443 may be reached from outside the pod. Kubelet probes are not subject to
+# NetworkPolicy in the common CNIs; the proxy reaches Apicurio over loopback inside the pod.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: registry-only-via-proxy
+  namespace: kafka
+spec:
+  podSelector:
+    matchLabels: { app: registry }
+  policyTypes: [Ingress]
+  ingress:
+    - ports:
+        - { protocol: TCP, port: 8443 }

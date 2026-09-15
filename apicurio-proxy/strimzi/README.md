@@ -11,11 +11,22 @@ Both mechanisms are active on one HTTPS listener: a request with `Authorization:
 goes the OIDC way, a request presenting a trusted client certificate goes the mTLS way, a
 request with neither gets 401.
 
-Files:
+## Deployment models
 
-- `apicurio-with-proxy-deployment.yaml` — Apicurio + proxy sidecar (Apicurio on `127.0.0.1:8080`,
-  proxy on `:8443`) and the Service exposing only the proxy.
-- `kafkauser.yaml` — the proxy's `KafkaUser` (`Describe` on `Cluster`, needed for `describeAcls`).
+Pick one; the proxy itself is stateless and identical in all three.
+
+| File | Model | When |
+|---|---|---|
+| `apicurio-with-proxy-deployment.yaml` | Plain Deployment with Apicurio + proxy sidecar; Apicurio bound to `127.0.0.1` so only the proxy is reachable. | You manage the registry Deployment yourself. |
+| `apicurio-operator-sidecar.yaml` | `ApicurioRegistry` CR with the proxy added through `spec.deployment.podTemplateSpecPreview`, plus a Service on 8443 and a NetworkPolicy closing 8080. | Apicurio Registry Operator (2.x, operator ≥ 1.1). Apicurio must keep listening on the pod IP for the operator's probes, hence the NetworkPolicy. |
+| `proxy-standalone-deployment.yaml` | Proxy as its own Deployment (2 replicas) in front of the registry Service, plus a NetworkPolicy letting only proxy pods reach the registry. | Any registry, operator-managed or not. Simplest with the operator: the CR is untouched and the proxy scales and rolls independently. **Recommended with the operator.** |
+
+`kafkauser.yaml` (the proxy's `KafkaUser` with `Describe` on `Cluster`, needed for `describeAcls`)
+applies to all three.
+
+NetworkPolicy notes: kubelet probes are not blocked by NetworkPolicy in the common CNIs
+(Calico, Cilium, OVN); if yours differs, allow ingress from the node CIDR on 8080. Check the labels
+the operator puts on registry pods (`kubectl get pods --show-labels`) and adjust `podSelector`.
 
 ## Build
 
@@ -46,7 +57,7 @@ All stores can be JKS (`*_TYPE=JKS`) or PEM (`*_TYPE=PEM`, with `PROXY_TLS_CERT`
 
 ```bash
 kubectl apply -f kafkauser.yaml
-kubectl apply -f apicurio-with-proxy-deployment.yaml
+kubectl apply -f apicurio-with-proxy-deployment.yaml     # or apicurio-operator-sidecar.yaml / proxy-standalone-deployment.yaml
 kubectl -n kafka logs deploy/apicurio-registry -c rbac-proxy | grep -E 'PolicyEngine|KafkaAclPolicySource|Listening'
 ```
 
