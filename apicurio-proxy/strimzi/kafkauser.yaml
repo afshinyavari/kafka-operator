@@ -1,0 +1,18 @@
+# The proxy's own Kafka identity: it reads ACLs with describeAcls, which needs Describe on Cluster.
+# Strimzi creates the Secret "apicurio-proxy-kafka" with user.p12 / user.password (and PEM user.crt / user.key).
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: apicurio-proxy-kafka
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: my-cluster
+spec:
+  authentication:
+    type: tls
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: cluster
+        operations: [Describe]

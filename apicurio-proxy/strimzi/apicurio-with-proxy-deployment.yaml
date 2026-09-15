@@ -1,0 +1,89 @@
+# Apicurio Registry with the RBAC proxy as a sidecar. Only the proxy's TLS port is exposed;
+# Apicurio listens on 127.0.0.1:8080 inside the pod.
+#
+# Secrets expected in the namespace (all PKCS12; JKS/PEM work too, see README):
+#   apicurio-proxy-server-tls    server.p12 + password    proxy's own server certificate
+#   my-cluster-clients-ca-cert   ca.p12 + ca.password     Strimzi clients CA — trust anchor for client certs
+#   apicurio-proxy-kafka         user.p12 + user.password Strimzi KafkaUser secret for the proxy (kafkauser.yaml)
+#   my-cluster-cluster-ca-cert   ca.p12 + ca.password     Strimzi cluster CA — trust anchor for Kafka
+#   apicurio-proxy-policy        policy.yaml              role rules for OIDC users
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: apicurio-registry
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: apicurio-registry }
+  template:
+    metadata:
+      labels: { app: apicurio-registry }
+    spec:
+      containers:
+        - name: registry
+          image: quay.io/apicurio/apicurio-registry-kafkasql:2.6.5.Final
+          env:
+            - { name: QUARKUS_HTTP_HOST, value: "127.0.0.1" }   # not reachable from outside the pod
+            - { name: QUARKUS_HTTP_PORT, value: "8080" }
+            - { name: KAFKA_BOOTSTRAP_SERVERS, value: my-cluster-kafka-bootstrap:9093 }
+            # ... your existing kafkasql TLS settings ...
+        - name: rbac-proxy
+          image: registry.example.com/apicurio-rbac-proxy:1.0
+          ports:
+            - { name: https, containerPort: 8443 }
+          env:
+            - { name: APICURIO_URL, value: "http://127.0.0.1:8080" }
+            - { name: XML_SCHEMA_URL, value: "http://127.0.0.1:8080" }
+            - { name: POLICY_FILE, value: /opt/rbac/policy.yaml }
+            # OIDC for humans (role rules from policy.yaml)
+            - { name: OIDC_ISSUER_URL, value: https://keycloak.example.com/realms/kafka }
+            - { name: OIDC_ROLE_CLAIM, value: realm_access/roles }
+            # TLS listener + optional client certificates (mTLS for services)
+            - { name: PROXY_TLS_ENABLED, value: "true" }
+            - { name: PROXY_TLS_PORT, value: "8443" }
+            - { name: PROXY_TLS_KEYSTORE, value: /tls/server/server.p12 }
+            - name: PROXY_TLS_KEYSTORE_PASSWORD
+              valueFrom: { secretKeyRef: { name: apicurio-proxy-server-tls, key: password } }
+            - { name: PROXY_TLS_TRUSTSTORE, value: /tls/clients-ca/ca.p12 }
+            - name: PROXY_TLS_TRUSTSTORE_PASSWORD
+              valueFrom: { secretKeyRef: { name: my-cluster-clients-ca-cert, key: ca.password } }
+            - { name: PROXY_MTLS_PRINCIPAL, value: DN }          # Strimzi KafkaUser → "CN=<name>"
+            # Kafka ACL source (the proxy's own KafkaUser; needs Describe on Cluster)
+            - { name: PROXY_KAFKA_BOOTSTRAP, value: my-cluster-kafka-bootstrap:9093 }
+            - { name: PROXY_KAFKA_SSL_KEYSTORE, value: /tls/kafka-user/user.p12 }
+            - name: PROXY_KAFKA_SSL_KEYSTORE_PASSWORD
+              valueFrom: { secretKeyRef: { name: apicurio-proxy-kafka, key: user.password } }
+            - { name: PROXY_KAFKA_SSL_TRUSTSTORE, value: /tls/cluster-ca/ca.p12 }
+            - name: PROXY_KAFKA_SSL_TRUSTSTORE_PASSWORD
+              valueFrom: { secretKeyRef: { name: my-cluster-cluster-ca-cert, key: ca.password } }
+            - { name: PROXY_KAFKA_ACL_REFRESH_SECONDS, value: "30" }
+            - { name: PROXY_ARTIFACT_SUFFIXES, value: "-value,-key" }
+          volumeMounts:
+            - { name: server-tls,  mountPath: /tls/server,     readOnly: true }
+            - { name: clients-ca,  mountPath: /tls/clients-ca, readOnly: true }
+            - { name: kafka-user,  mountPath: /tls/kafka-user, readOnly: true }
+            - { name: cluster-ca,  mountPath: /tls/cluster-ca, readOnly: true }
+            - { name: policy,      mountPath: /opt/rbac,       readOnly: true }
+          readinessProbe:
+            httpGet: { path: /q/health/ready, port: 8443, scheme: HTTPS }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /q/health/live, port: 8443, scheme: HTTPS }
+            initialDelaySeconds: 15
+      volumes:
+        - { name: server-tls, secret: { secretName: apicurio-proxy-server-tls } }
+        - { name: clients-ca, secret: { secretName: my-cluster-clients-ca-cert } }
+        - { name: kafka-user, secret: { secretName: apicurio-proxy-kafka } }
+        - { name: cluster-ca, secret: { secretName: my-cluster-cluster-ca-cert } }
+        - { name: policy,     secret: { secretName: apicurio-proxy-policy } }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: apicurio-registry
+  namespace: kafka
+spec:
+  selector: { app: apicurio-registry }
+  ports:
+    - { name: https, port: 8443, targetPort: 8443 }

@@ -142,6 +142,17 @@ Defence in depth on the browser side:
 - Delete operations (topic / group / schema) require typing the target name
   in the SPA's confirmation modal — prevents accidental wipes from a misclick.
 
+### RBAC proxy: mTLS + Kafka-ACL mode (branch only)
+
+On branch `feat/apicurio-proxy-mtls-acl` (not merged to `main`) the
+apicurio-rbac-proxy can also terminate TLS, accept client certificates next to
+OIDC bearer tokens on the same listener, and authorize certificate identities
+from **Kafka topic ACLs**: artifact `orders-value` ⇒ topic `orders`; WRITE ⇒
+READ+WRITE, READ/DESCRIBE ⇒ READ, DELETE ⇒ DELETE, ALL ⇒ all, with DENY
+precedence and PREFIXED/`*` patterns as in Kafka. OIDC identities keep the
+role file; the two never mix. Built for running the proxy as an Apicurio
+sidecar in a Strimzi environment — see `apicurio-proxy/strimzi/README.md`.
+
 ### Why no UI-driven ACL editing?
 
 The single global `KafkaRbac` ConfigMap is consumed by both Kroxylicious and

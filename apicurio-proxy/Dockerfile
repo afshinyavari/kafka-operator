@@ -5,5 +5,5 @@ COPY target/quarkus-app/*.jar ./
 COPY target/quarkus-app/app/ app/
 COPY target/quarkus-app/quarkus/ quarkus/
 COPY policy.yaml /opt/rbac/policy.yaml
-EXPOSE 8082
+EXPOSE 8082 8443
 ENTRYPOINT ["java", "-jar", "quarkus-run.jar"]

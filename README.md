@@ -215,8 +215,11 @@ kafka-operator/
 │       └── auth/oauth/  # SaslHandshakeSynthesizerFilter, JwtGroupFilterFactory, …
 ├── apicurio-proxy/   # Apicurio RBAC proxy — standalone Quarkus service (apicurio-rbac-proxy:dev)
 │   └── src/main/java/se/afshin/yavari/rbac/
-│       ├── ProxyResource.java      # JAX-RS proxy with OIDC auth + RBAC check
-│       └── PolicyEngine.java       # YAML policy loader with hot-reload via WatchService
+│   │   ├── ProxyResource.java      # JAX-RS proxy with OIDC auth + RBAC check
+│   │   ├── PolicyEngine.java       # YAML policy loader with hot-reload; OIDC→roles / mTLS→Kafka ACLs dispatch
+│   │   ├── KafkaAclPolicySource.java  # describeAcls snapshot + Kafka-semantics evaluation
+│   │   └── ProxyTlsConfigSource.java  # PROXY_TLS_* → HTTPS listener with optional client certs
+│   └── strimzi/          # sidecar Deployment + KafkaUser + README for Strimzi (mTLS + Kafka-ACL mode)
 ├── kafka-image/      # UBI9-based Kafka wrapper image (Dockerfile + start.sh)
 ├── schema-sync-smt/  # Registry-aware Kafka Connect SMT (shaded JAR, Java 17; bundled into mm2:dev)
 │   └── src/main/java/se/afshin/yavari/kafka/smt/
