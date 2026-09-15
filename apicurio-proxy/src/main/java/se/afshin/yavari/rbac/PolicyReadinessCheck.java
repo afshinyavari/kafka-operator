@@ -11,11 +11,13 @@ import org.eclipse.microprofile.health.Readiness;
 public class PolicyReadinessCheck implements HealthCheck {
 
     @Inject PolicyEngine engine;
+    @Inject KafkaAclPolicySource acls;
 
+    /** Ready once the role policy file is loaded and, when the Kafka-ACL source is
+     *  enabled, the first ACL snapshot has been fetched. */
     @Override
     public HealthCheckResponse call() {
-        return engine.isInitialized()
-            ? HealthCheckResponse.up("policy-loaded")
-            : HealthCheckResponse.down("policy-loaded");
+        boolean up = engine.isInitialized() && (!acls.isEnabled() || acls.isLoaded());
+        return up ? HealthCheckResponse.up("policy-loaded") : HealthCheckResponse.down("policy-loaded");
     }
 }
