@@ -1,0 +1,105 @@
+# Example: Strimzi KafkaMirrorMaker2 mirroring a Confluent-Schema-Registry-backed
+# source cluster into a Strimzi-managed target cluster with Apicurio Registry.
+#
+#   source Kafka      : plaintext, no auth (per environment; add tls/authentication as needed)
+#   source registry   : Confluent Schema Registry, plain HTTP, no auth
+#   target Kafka      : mTLS (Strimzi KafkaUser TLS certificate)
+#   target registry   : Apicurio Registry, native v2 API, mTLS with a dedicated client cert
+#
+# Secrets referenced below:
+#   target-cluster-cluster-ca-cert  - Strimzi cluster CA (created by Strimzi):    ca.crt
+#   mm2-target-user                 - Strimzi KafkaUser TLS secret:               user.crt, user.key
+#   mm2-registry-target-tls         - client cert for Apicurio (you create it):   tls.crt, tls.key (PKCS#8), ca.crt
+#
+# Image: build with strimzi/Dockerfile and push it, then set spec.image below.
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaMirrorMaker2
+metadata:
+  name: prod-to-dr
+  namespace: kafka
+spec:
+  version: 4.0.0
+  replicas: 1
+  image: registry.example.com/strimzi-kafka-schema-sync:0.47.0-kafka-4.0.0
+  connectCluster: target            # the Connect group lives on the target cluster
+
+  clusters:
+    - alias: prod
+      bootstrapServers: kafka-prod.example.com:9092
+      # No tls / authentication: plaintext source.
+
+    - alias: target
+      bootstrapServers: target-cluster-kafka-bootstrap.kafka.svc:9093
+      tls:
+        trustedCertificates:
+          - secretName: target-cluster-cluster-ca-cert
+            certificate: ca.crt
+      authentication:
+        type: tls
+        certificateAndKey:
+          secretName: mm2-target-user
+          certificate: user.crt
+          key: user.key
+      config:
+        config.storage.replication.factor: 3
+        offset.storage.replication.factor: 3
+        status.storage.replication.factor: 3
+
+  mirrors:
+    - sourceCluster: prod
+      targetCluster: target
+      topicsPattern: "orders\\..*|payments\\..*"
+      groupsPattern: ".*"
+      sourceConnector:
+        tasksMax: 4
+        config:
+          replication.factor: 3
+          offset-syncs.topic.replication.factor: 3
+          sync.topic.acls.enabled: "false"
+          # DefaultReplicationPolicy renames topics to "<sourceAlias>.<topic>", e.g. prod.orders.
+          # target.subject.prefix below mirrors that on the registry side.
+
+          transforms: schemaSync
+          transforms.schemaSync.type: se.afshin.yavari.kafka.smt.ApicurioSchemaTransferSmt
+
+          # --- source: Confluent Schema Registry, plain HTTP, no auth
+          transforms.schemaSync.source.format: CONFLUENT
+          transforms.schemaSync.source.url: http://schema-registry.prod.example.com:8081
+
+          # --- target: Apicurio Registry (native v2 API), mTLS
+          transforms.schemaSync.target.format: APICURIO
+          transforms.schemaSync.target.url: https://apicurio.kafka.svc:8443
+          transforms.schemaSync.target.subject.prefix: "prod."
+          transforms.schemaSync.target.ssl.keystore.type: PEM
+          transforms.schemaSync.target.ssl.keystore.location: /mnt/registry-tls/target/tls.crt
+          transforms.schemaSync.target.ssl.key.location: /mnt/registry-tls/target/tls.key
+          transforms.schemaSync.target.ssl.truststore.type: PEM
+          transforms.schemaSync.target.ssl.truststore.location: /mnt/registry-tls/target/ca.crt
+
+          # --- behaviour
+          transforms.schemaSync.behavior.on.error: WARN
+          transforms.schemaSync.apply.to: VALUE
+          transforms.schemaSync.apply.to.topics: "prod\\.orders\\..*,prod\\.payments\\..*"
+          transforms.schemaSync.cache.negative.ttl.ms: 60000
+      checkpointConnector:
+        tasksMax: 1
+        config:
+          checkpoints.topic.replication.factor: 3
+          sync.group.offsets.enabled: "true"
+      heartbeatConnector:
+        config:
+          heartbeats.topic.replication.factor: 3
+
+  # Mount the registry client certificate into the worker. Strimzi requires
+  # additional volume mounts to live under /mnt.
+  template:
+    pod:
+      volumes:
+        - name: registry-tls-target
+          secret:
+            secretName: mm2-registry-target-tls
+    connectContainer:
+      volumeMounts:
+        - name: registry-tls-target
+          mountPath: /mnt/registry-tls/target
+          readOnly: true

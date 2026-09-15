@@ -1043,7 +1043,7 @@ Each end (`spec.source` / `spec.target`) is independently either a **managed** r
 
 A managed end is reached through the proxy, which enforces RBAC. The MM2 worker connects as the `proxyMtls.proxyPrincipal` identity, so that cluster's `KafkaRbac` must grant that principal broad Kafka access (`users: [{ name: <proxyPrincipal>, kafka: { topics: ["*"], operations: ["*"] } }]`) — MM2 mirrors arbitrary topics and manages its own internal topics. Without it the worker fails with `TopicAuthorizationException`.
 
-When both ends carry an Apicurio schema registry (managed clusters with `spec.apicurio`, or external endpoints with `schemaRegistry` set) and `spec.schemaSync.enabled=true`, the operator wires an Apicurio-aware Connect SMT (`ApicurioSchemaTransferSmt`) into the MirrorSourceConnector. Per-record it parses the V3 envelope (`0x00` + 8-byte big-endian globalId), ensures the schema exists in the target registry (recursively for references), and rewrites the envelope with the target's globalId. See [Non-Apicurio topics](#non-apicurio-topics) below for the passthrough safety net.
+When both ends carry an Apicurio schema registry (managed clusters with `spec.apicurio`, or external endpoints with `schemaRegistry` set) and `spec.schemaSync.enabled=true`, the operator wires a registry-aware Connect SMT (`ApicurioSchemaTransferSmt`) into the MirrorSourceConnector. Per-record it parses the envelope (`0x00` + 8-byte big-endian globalId for Apicurio), ensures the schema exists in the target registry (recursively for references), and rewrites the envelope with the target's id. The SMT itself also speaks the Confluent format (5-byte envelope + Confluent REST) on either side — see [SMT configuration keys](#smt-configuration-keys); the operator's `MirrorMaker2` CR currently drives only Apicurio↔Apicurio. See [Non-Apicurio topics](#non-apicurio-topics) below for the passthrough safety net.
 
 The SMT **writes** mirrored schemas into the target registry. A managed cluster's Apicurio is reachable only through its `apicurio-rbac-proxy`, which OIDC-gates every request — writing into such a target needs `target.schemaRegistryAuthSecretRef`. See [Schema-registry authentication](#schema-registry-authentication).
 
@@ -1118,6 +1118,34 @@ Shared discriminated union describing one Kafka attachment, reused by MirrorMake
 | `applyTo` | enum | `VALUE` | `VALUE`, `KEY`, or `BOTH`. |
 | `applyToTopics` | string[] | `[".*"]` | Topic regex allowlist. Tighten in mixed-format clusters. |
 
+### SMT configuration keys
+<a id="smt-configuration-keys"></a>
+
+The keys `ApicurioSchemaTransferSmt` accepts directly (prefixed `transforms.<name>.` in Connect config). The operator sets the first block from `Mm2SchemaSyncConfig`; the rest matter when the JAR is used standalone, e.g. in a Strimzi `KafkaMirrorMaker2` — see [operations.md](operations.md#running-the-smt-outside-the-operator-strimzi-confluent-source).
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `source.url` / `target.url` | — | Registry base URL. Apicurio: the host (the client appends `/apis/registry/v2`). Confluent: the REST root; for Apicurio's compatibility API use `…/apis/ccompat/v7`. |
+| `source.format` / `target.format` | `APICURIO` | `APICURIO` (9-byte envelope, Apicurio v2 REST) or `CONFLUENT` (5-byte envelope, Confluent REST). Independent per side; a `CONFLUENT` source with an `APICURIO` target re-frames the header and maps subject → `artifactId` in group `default`, `schemaType` → artifact type. |
+| `target.subject.prefix` | _(empty)_ | Prepended to the subject/artifactId when a record's schema is registered on the target, so subjects mirror MirrorMaker's topic prefix: with `"prod."`, `orders-value` becomes `prod.orders-value`. Include the trailing dot. Referenced schemas keep their source subject. Empty keeps the source subject. |
+| `cache.size` | `10000` | LRU size for source-id → target-id mappings. |
+| `cache.negative.ttl.ms` | `60000` | How long a failed source-id lookup is remembered before the registry is asked again. `0` disables. |
+| `behavior.on.error` | `WARN` | `FAIL` / `WARN` / `IGNORE`. |
+| `apply.to` | `VALUE` | `VALUE` / `KEY` / `BOTH`. |
+| `apply.to.topics` | `.*` | Comma-separated topic regexes. |
+| `max.ref.depth` | `16` | Reference DFS depth limit. |
+| `<side>.auth.header` | — | Static `Authorization` header value. |
+| `<side>.auth.oauth.dir` | — | Directory with `token-url`, `client-id`, `client-secret`, optional `scope` (OAuth2 client-credentials). |
+| `<side>.ssl.keystore.location` | — | Client keystore for mTLS (PKCS12/JKS), or the PEM certificate chain when the type is `PEM`. |
+| `<side>.ssl.keystore.password` | — | Keystore password (PKCS12/JKS). |
+| `<side>.ssl.keystore.type` | `PKCS12` | `PKCS12` / `JKS` / `PEM`. |
+| `<side>.ssl.key.location` | — | PKCS#8 private-key file (`BEGIN PRIVATE KEY`), PEM mode only. RSA and EC. |
+| `<side>.ssl.truststore.location` | — | Truststore (PKCS12/JKS) or CA bundle (PEM). JDK default trust when unset. |
+| `<side>.ssl.truststore.password` | — | Truststore password (PKCS12/JKS). |
+| `<side>.ssl.truststore.type` | `PKCS12` | `PKCS12` / `JKS` / `PEM`. |
+
+`<side>` is `source` or `target`. With `target.subject.prefix` set, a schema that appears both as a reference and as a record's top-level schema is registered twice on the target (once under its source subject as a reference, once under the prefixed subject); content is identical, so this is harmless. Reference handling is registry-aware: registries number versions independently, so each referenced schema is registered on the target first and the parent's reference is rewritten to the version the target actually assigned before the parent is registered.
+
 ### Schema-registry authentication
 
 The schema-sync SMT reads from the source registry and **writes** mirrored schemas to the target registry. A managed cluster's Apicurio is reachable only through its `apicurio-rbac-proxy`, which OIDC-gates every request — so writing mirrored schemas into a managed target requires an authenticated identity with the `schema-admin` role.
@@ -1149,11 +1177,11 @@ The SMT performs the `client_credentials` grant, caches the access token, and re
 
 The schema-sync SMT coexists with topics that don't use Apicurio. Six layers of safety:
 
-1. **Per-record envelope detection.** Only acts when `bytes != null && bytes.length >= 9 && bytes[0] == 0x00`. Plain strings, JSON, XML, and BOM-prefixed text never trip this.
+1. **Per-record envelope detection.** Only acts when `bytes != null && bytes.length >= header && bytes[0] == 0x00` (header is 9 bytes for `APICURIO`, 5 for `CONFLUENT`). Plain strings, JSON, XML, and BOM-prefixed text never trip this.
 2. **Tombstones (null values)** pass through untouched.
 3. **`applyTo`** keeps the SMT off the side you didn't intend to process (default `VALUE`).
 4. **`applyToTopics`** allowlist skips non-Apicurio topics entirely.
-5. **`behaviorOnError=WARN` (default)** swallows a source-404 (false positive) or target write failure and passes the record through. `FAIL` is available for strict environments.
+5. **`behaviorOnError=WARN` (default)** swallows a source-404 (false positive) or target write failure and passes the record through. `FAIL` is available for strict environments. Failed ids are remembered by the negative cache (`cache.negative.ttl.ms`, 60 s) so a false positive costs one registry call per TTL, not one per record.
 6. **Per-record evaluation** — mixed-format topics (some records schema'd, some not) are handled per record.
 
 Edge case: UTF-16BE-encoded XML without a BOM starts with `0x00 0x3C` — the envelope check fires, source registry returns 404, default behavior logs and passes through.
