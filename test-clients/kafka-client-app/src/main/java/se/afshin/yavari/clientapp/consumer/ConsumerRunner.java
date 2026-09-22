@@ -34,6 +34,10 @@ public final class ConsumerRunner {
         consumer.subscribe(List.of(config.topic()));
         thread = new Thread(this::loop, "consumer");
         thread.setDaemon(true);
+        thread.setUncaughtExceptionHandler((t, e) -> {
+            running = false;
+            LOG.errorf(e, "Consumer thread died");
+        });
         thread.start();
         LOG.infof("Consumer started: topic=%s group=%s format=%s", config.topic(), config.groupId(), config.format());
     }
@@ -47,7 +51,14 @@ public final class ConsumerRunner {
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
         }
-        consumer.close();
+        if (thread.isAlive()) {
+            LOG.warnf("Consumer thread did not stop within 5s; closing anyway");
+        }
+        try {
+            consumer.close();
+        } catch (Exception e) {
+            LOG.warnf("Error closing consumer: %s", e.toString());
+        }
         LOG.infof("Consumer stopped: received=%d", received.get());
     }
 

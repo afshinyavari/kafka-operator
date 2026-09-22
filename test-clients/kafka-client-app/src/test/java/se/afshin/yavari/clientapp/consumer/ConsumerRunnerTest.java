@@ -57,4 +57,37 @@ class ConsumerRunnerTest {
         assertTrue(mock.closed());
         assertFalse(r.isStarted());
     }
+
+    @Test
+    void stopSwallowsCloseFailure() throws Exception {
+        MockConsumer<String, Object> mock = new MockConsumer<>("earliest") {
+            @Override
+            public void close() {
+                throw new org.apache.kafka.common.KafkaException("close boom");
+            }
+        };
+        ConsumerRunner r = new ConsumerRunner(CFG, mock);
+        r.start();
+        Thread.sleep(50);
+        assertDoesNotThrow(r::stop);
+        assertFalse(r.isStarted());
+    }
+
+    @Test
+    void threadDeathTurnsIsStartedFalse() throws Exception {
+        MockConsumer<String, Object> mock = new MockConsumer<>("earliest") {
+            @Override
+            public synchronized org.apache.kafka.clients.consumer.ConsumerRecords<String, Object> poll(java.time.Duration timeout) {
+                throw new Error("boom");
+            }
+        };
+        ConsumerRunner r = new ConsumerRunner(CFG, mock);
+        r.start();
+        long deadline = System.currentTimeMillis() + 2_000;
+        while (r.isStarted() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(10);
+        }
+        assertFalse(r.isStarted());
+        assertDoesNotThrow(r::stop);
+    }
 }
