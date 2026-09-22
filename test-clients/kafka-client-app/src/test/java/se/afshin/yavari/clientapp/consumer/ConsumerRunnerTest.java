@@ -81,7 +81,8 @@ class ConsumerRunnerTest {
                 throw new Error("boom");
             }
         };
-        ConsumerRunner r = new ConsumerRunner(CFG, mock);
+        java.util.concurrent.atomic.AtomicReference<Throwable> caught = new java.util.concurrent.atomic.AtomicReference<>();
+        ConsumerRunner r = new ConsumerRunner(CFG, mock, caught::set);
         r.start();
         long deadline = System.currentTimeMillis() + 2_000;
         while (r.isStarted() && System.currentTimeMillis() < deadline) {
@@ -89,5 +90,8 @@ class ConsumerRunnerTest {
         }
         assertFalse(r.isStarted());
         assertDoesNotThrow(r::stop);
+        assertInstanceOf(Error.class, caught.get());
+        assertEquals("boom", caught.get().getMessage());
+        assertTrue(mock.closed());
     }
 }
