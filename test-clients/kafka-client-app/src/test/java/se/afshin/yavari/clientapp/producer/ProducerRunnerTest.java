@@ -144,4 +144,36 @@ class ProducerRunnerTest {
         assertTimeoutPreemptively(Duration.ofSeconds(8), r::stop);
         assertTrue(mock.closed());
     }
+
+    @Test
+    void tickErrorInvokesDeathCallback() throws Exception {
+        MockProducer<String, Object> mock = new MockProducer<>(true, null, new StringSerializer(), ANY);
+        Clock explodingClock = new Clock() {
+            @Override
+            public ZoneId getZone() { return ZoneId.of("UTC"); }
+
+            @Override
+            public Clock withZone(ZoneId zone) { return this; }
+
+            @Override
+            public Instant instant() { throw new Error("boom"); }
+
+            @Override
+            public long millis() { throw new Error("boom"); }
+        };
+        java.util.concurrent.atomic.AtomicReference<Throwable> caught = new java.util.concurrent.atomic.AtomicReference<>();
+        ProducerConfig fast = new ProducerConfig(true, "orders", 10L, Format.STRING, null);
+        ProducerRunner r = new ProducerRunner(fast, mock, new PayloadGenerator("h", explodingClock), caught::set);
+        r.start();
+
+        long deadline = System.currentTimeMillis() + 2_000;
+        while (caught.get() == null && System.currentTimeMillis() < deadline) {
+            Thread.sleep(10);
+        }
+
+        assertInstanceOf(Error.class, caught.get());
+        assertEquals("boom", caught.get().getMessage());
+        assertFalse(r.isStarted());
+        assertTrue(mock.closed());
+    }
 }

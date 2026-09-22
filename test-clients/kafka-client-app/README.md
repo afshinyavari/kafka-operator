@@ -110,4 +110,6 @@ Secrets (`*_CLIENT_SECRET`) go in a Secret referenced from `envFrom`, not in the
 - Producer: `Sent seq=<n> key=<uuid> to <topic>-<p>@<offset>` per record; `Send failed ...` WARN
   and retry on the next tick when the broker or registry rejects (e.g. 403 from the RBAC proxy).
 - Consumer: `Received key=<uuid> <topic>-<p>@<offset> value=...`.
+- `Consumer thread died` / `Producer thread died` at ERROR + exit 3 when a runner thread dies
+  from an `Error` (e.g. `OutOfMemoryError`); the pod restarts.
 - Readiness `/q/health/ready` is UP once every enabled runner has started.

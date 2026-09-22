@@ -19,25 +19,39 @@ public final class ConsumerRunner {
 
     private final ConsumerConfig config;
     private final Consumer<String, Object> consumer;
+    private final java.util.function.Consumer<Throwable> onThreadDeath;
     private final AtomicLong received = new AtomicLong();
     private volatile boolean running;
     private Thread thread;
 
     public ConsumerRunner(ConsumerConfig config, Consumer<String, Object> consumer) {
+        this(config, consumer, t -> { });
+    }
+
+    public ConsumerRunner(ConsumerConfig config, Consumer<String, Object> consumer,
+                          java.util.function.Consumer<Throwable> onThreadDeath) {
         this.config = config;
         this.consumer = consumer;
+        this.onThreadDeath = onThreadDeath;
     }
 
     public synchronized void start() {
         if (running) return;
-        running = true;
-        consumer.subscribe(List.of(config.topic()));
-        thread = new Thread(this::loop, "consumer");
-        thread.setDaemon(true);
-        thread.setUncaughtExceptionHandler((t, e) -> {
+        Thread t = new Thread(this::loop, "consumer");
+        t.setDaemon(true);
+        t.setUncaughtExceptionHandler((th, e) -> {
             running = false;
             LOG.errorf(e, "Consumer thread died");
+            try {
+                consumer.close(Duration.ofSeconds(5));
+            } catch (Exception ex) {
+                LOG.warnf("Error closing consumer after thread death: %s", ex.toString());
+            }
+            onThreadDeath.accept(e);
         });
+        consumer.subscribe(List.of(config.topic()));
+        running = true;
+        thread = t;
         thread.start();
         LOG.infof("Consumer started: topic=%s group=%s format=%s", config.topic(), config.groupId(), config.format());
     }

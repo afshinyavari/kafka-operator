@@ -72,8 +72,9 @@ class RunnersTest {
         ConsumerConfig consumer = new ConsumerConfig(true, "t", "g1", "earliest", Format.STRING, null);
         AppConfig config = new AppConfig(PLAINTEXT, producer, consumer);
         RunnerRegistry registry = new RunnerRegistry();
+        java.util.concurrent.atomic.AtomicReference<Throwable> deathCallback = new java.util.concurrent.atomic.AtomicReference<>();
 
-        Runners runners = Runners.start(config, registry);
+        Runners runners = Runners.start(config, registry, deathCallback::set);
         assertNotNull(runners);
         assertTrue(registry.allStarted());
 

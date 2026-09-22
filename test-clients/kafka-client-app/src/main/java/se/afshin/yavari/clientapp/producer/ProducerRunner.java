@@ -21,14 +21,21 @@ public final class ProducerRunner {
     private final ProducerConfig config;
     private final Producer<String, Object> producer;
     private final PayloadGenerator generator;
+    private final java.util.function.Consumer<Throwable> onThreadDeath;
     private final AtomicLong sent = new AtomicLong();
     private final AtomicLong failed = new AtomicLong();
     private volatile ScheduledExecutorService executor;
 
     public ProducerRunner(ProducerConfig config, Producer<String, Object> producer, PayloadGenerator generator) {
+        this(config, producer, generator, t -> { });
+    }
+
+    public ProducerRunner(ProducerConfig config, Producer<String, Object> producer, PayloadGenerator generator,
+                          java.util.function.Consumer<Throwable> onThreadDeath) {
         this.config = config;
         this.producer = producer;
         this.generator = generator;
+        this.onThreadDeath = onThreadDeath;
     }
 
     public synchronized void start() {
@@ -38,7 +45,20 @@ public final class ProducerRunner {
             t.setDaemon(true);
             return t;
         });
-        executor.scheduleAtFixedRate(this::tick, 0, config.intervalMs(), TimeUnit.MILLISECONDS);
+        executor.scheduleAtFixedRate(() -> {
+            try {
+                tick();
+            } catch (Throwable t) {
+                LOG.error("Producer thread died", t);
+                executor = null;
+                try {
+                    producer.close(Duration.ofSeconds(5));
+                } catch (Exception e) {
+                    LOG.warnf("Error closing producer after thread death: %s", e.toString());
+                }
+                onThreadDeath.accept(t);
+            }
+        }, 0, config.intervalMs(), TimeUnit.MILLISECONDS);
         LOG.infof("Producer started: topic=%s format=%s interval=%dms", config.topic(), config.format(), config.intervalMs());
     }
 
