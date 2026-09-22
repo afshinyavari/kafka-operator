@@ -52,4 +52,51 @@ class TlsStoresTest {
         assertNull(t.keystorePath());
         assertEquals("PKCS12", t.keystoreType());
     }
+
+    @Test
+    void keystorePathWithoutPasswordRecordsProblem() {
+        Problems p = new Problems();
+        TlsStores.resolve(env(Map.of("KAFKA_TLS_KEYSTORE_PATH", "/ks.p12")), "KAFKA_TLS_", p);
+        assertEquals(1, p.list().size());
+        assertEquals("KAFKA_TLS_KEYSTORE_PASSWORD (or TLS_KEYSTORE_PASSWORD) is required when a keystore path is set",
+                p.list().get(0));
+    }
+
+    @Test
+    void truststorePathWithoutPasswordRecordsProblem() {
+        Problems p = new Problems();
+        TlsStores.resolve(env(Map.of("KAFKA_TLS_TRUSTSTORE_PATH", "/ts.p12")), "KAFKA_TLS_", p);
+        assertEquals(1, p.list().size());
+        assertEquals("KAFKA_TLS_TRUSTSTORE_PASSWORD (or TLS_TRUSTSTORE_PASSWORD) is required when a truststore path is set",
+                p.list().get(0));
+    }
+
+    @Test
+    void badKeystoreTypeRecordsProblem() {
+        Problems p = new Problems();
+        TlsStores.resolve(env(Map.of("KAFKA_TLS_KEYSTORE_TYPE", "bks")), "KAFKA_TLS_", p);
+        assertEquals(1, p.list().size());
+        assertEquals("KAFKA_TLS_KEYSTORE_TYPE must be PKCS12 or JKS, got 'BKS'", p.list().get(0));
+    }
+
+    @Test
+    void badTruststoreTypeRecordsProblem() {
+        Problems p = new Problems();
+        TlsStores.resolve(env(Map.of("KAFKA_TLS_TRUSTSTORE_TYPE", "bks")), "KAFKA_TLS_", p);
+        assertEquals(1, p.list().size());
+        assertEquals("KAFKA_TLS_TRUSTSTORE_TYPE must be PKCS12 or JKS, got 'BKS'", p.list().get(0));
+    }
+
+    @Test
+    void pkcs12AndJksTypesAreAcceptedCaseInsensitively() {
+        Problems p1 = new Problems();
+        TlsStores t1 = TlsStores.resolve(env(Map.of("KAFKA_TLS_KEYSTORE_TYPE", "pkcs12")), "KAFKA_TLS_", p1);
+        assertTrue(p1.isEmpty(), p1.message());
+        assertEquals("PKCS12", t1.keystoreType());
+
+        Problems p2 = new Problems();
+        TlsStores t2 = TlsStores.resolve(env(Map.of("KAFKA_TLS_KEYSTORE_TYPE", "jks")), "KAFKA_TLS_", p2);
+        assertTrue(p2.isEmpty(), p2.message());
+        assertEquals("JKS", t2.keystoreType());
+    }
 }

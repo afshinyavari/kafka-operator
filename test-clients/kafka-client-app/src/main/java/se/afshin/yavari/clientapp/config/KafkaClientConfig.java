@@ -19,7 +19,7 @@ public record KafkaClientConfig(String bootstrapServers, SecurityProtocol protoc
         String bootstrap = env.require("KAFKA_BOOTSTRAP_SERVERS", problems);
         SecurityProtocol protocol = env.getEnum("KAFKA_SECURITY_PROTOCOL", SecurityProtocol.class,
                 SecurityProtocol.SSL, problems);
-        TlsStores tls = TlsStores.resolve(env, TLS_PREFIX);
+        TlsStores tls = TlsStores.resolve(env, TLS_PREFIX, problems);
         String clientId = env.get("KAFKA_CLIENT_ID", DEFAULT_CLIENT_ID);
         OAuth oauth = null;
 
@@ -47,9 +47,9 @@ public record KafkaClientConfig(String bootstrapServers, SecurityProtocol protoc
             case SSL -> {
                 putTruststore(p);
                 if (tls.hasKeystore()) {
-                    p.put("ssl.keystore.location", tls.keystorePath());
-                    p.put("ssl.keystore.password", tls.keystorePassword());
-                    p.put("ssl.keystore.type", tls.keystoreType());
+                    putIfSet(p, "ssl.keystore.location", tls.keystorePath());
+                    putIfSet(p, "ssl.keystore.password", tls.keystorePassword());
+                    putIfSet(p, "ssl.keystore.type", tls.keystoreType());
                 }
             }
             case SASL_SSL -> {
@@ -63,9 +63,13 @@ public record KafkaClientConfig(String bootstrapServers, SecurityProtocol protoc
     }
 
     private void putTruststore(Properties p) {
-        p.put("ssl.truststore.location", tls.truststorePath());
-        p.put("ssl.truststore.password", tls.truststorePassword());
-        p.put("ssl.truststore.type", tls.truststoreType());
+        putIfSet(p, "ssl.truststore.location", tls.truststorePath());
+        putIfSet(p, "ssl.truststore.password", tls.truststorePassword());
+        putIfSet(p, "ssl.truststore.type", tls.truststoreType());
+    }
+
+    private static void putIfSet(Properties p, String key, String value) {
+        if (value != null) p.put(key, value);
     }
 
     private String jaasConfig() {

@@ -100,6 +100,15 @@ class SerdePropsTest {
     }
 
     @Test
+    void mtlsWithNullKeystoreFieldsEmitsNoKeystoreKeys() {
+        TlsStores keystorePresentButFieldsNull = new TlsStores(null, null, "PKCS12", "/ts.p12", "tp", "PKCS12");
+        Map<String, Object> p = SerdeProps.producer(
+                cfg(RegistryType.APICURIO, "https://proxy:8443/apis/registry/v3", AuthMode.MTLS, keystorePresentButFieldsNull, null));
+        assertTrue(p.keySet().stream().noneMatch(k -> k.contains(".keystore.")));
+        assertTrue(p.values().stream().noneMatch(java.util.Objects::isNull));
+    }
+
+    @Test
     void confluentConsumer() {
         Map<String, Object> p = SerdeProps.consumer(cfg(RegistryType.CONFLUENT, "https://sr:8081", AuthMode.NONE, BOTH, null));
         assertEquals(SerdeProps.CONFLUENT_DESERIALIZER, p.get("value.deserializer"));

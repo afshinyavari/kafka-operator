@@ -9,7 +9,7 @@ public record ConsumerConfig(boolean enabled, String topic, String groupId, Stri
     public static final String DEFAULT_AUTO_OFFSET_RESET = "earliest";
 
     public static ConsumerConfig from(Env env, Problems problems) {
-        boolean enabled = env.getBoolean("CONSUMER_ENABLED", false);
+        boolean enabled = env.getBoolean("CONSUMER_ENABLED", false, problems);
         if (!enabled) {
             return new ConsumerConfig(false, null, DEFAULT_GROUP_ID, DEFAULT_AUTO_OFFSET_RESET, Format.STRING, null);
         }

@@ -19,8 +19,8 @@ public record SchemaRegistryConfig(RegistryType type, String url, AuthMode auth,
         RegistryType type = env.getEnum(prefix + "REGISTRY_TYPE", RegistryType.class, RegistryType.APICURIO, problems);
         String url = env.require(prefix + "URL", problems);
         AuthMode auth = env.getEnum(prefix + "AUTH", AuthMode.class, AuthMode.NONE, problems);
-        TlsStores tls = TlsStores.resolve(env, prefix + "TLS_");
-        boolean autoRegister = env.getBoolean(prefix + "AUTO_REGISTER", true);
+        TlsStores tls = TlsStores.resolve(env, prefix + "TLS_", problems);
+        boolean autoRegister = env.getBoolean(prefix + "AUTO_REGISTER", true, problems);
         String group = env.get(prefix + "GROUP", DEFAULT_GROUP);
         Oidc oidc = null;
 
