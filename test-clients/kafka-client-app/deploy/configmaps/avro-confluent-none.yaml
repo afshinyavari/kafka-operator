@@ -1,0 +1,31 @@
+# Avro against an unsecured Confluent Schema Registry over plain HTTP.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-client-app-producer
+  namespace: kafka
+data:
+  KAFKA_BOOTSTRAP_SERVERS: my-cluster-kafka-bootstrap:9092
+  KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+  PRODUCER_ENABLED: "true"
+  PRODUCER_TOPIC: orders
+  PRODUCER_FORMAT: avro
+  PRODUCER_SCHEMA_REGISTRY_TYPE: confluent
+  PRODUCER_SCHEMA_URL: http://schema-registry.kafka.svc:8081
+  PRODUCER_SCHEMA_AUTH: none
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-client-app-consumer
+  namespace: kafka
+data:
+  KAFKA_BOOTSTRAP_SERVERS: my-cluster-kafka-bootstrap:9092
+  KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+  CONSUMER_ENABLED: "true"
+  CONSUMER_TOPIC: orders
+  CONSUMER_GROUP_ID: kafka-client-app
+  CONSUMER_FORMAT: avro
+  CONSUMER_SCHEMA_REGISTRY_TYPE: confluent
+  CONSUMER_SCHEMA_URL: http://schema-registry.kafka.svc:8081
+  CONSUMER_SCHEMA_AUTH: none

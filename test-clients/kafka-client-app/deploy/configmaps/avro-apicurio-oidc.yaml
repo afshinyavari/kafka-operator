@@ -1,0 +1,36 @@
+# Avro against an Apicurio secured by Keycloak (no proxy). Client credentials flow.
+# Put PRODUCER_SCHEMA_CLIENT_SECRET / CONSUMER_SCHEMA_CLIENT_SECRET in a Secret and add it to envFrom.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-client-app-producer
+  namespace: kafka
+data:
+  KAFKA_BOOTSTRAP_SERVERS: my-cluster-kafka-bootstrap:9093
+  KAFKA_SECURITY_PROTOCOL: SSL
+  PRODUCER_ENABLED: "true"
+  PRODUCER_TOPIC: orders
+  PRODUCER_FORMAT: avro
+  PRODUCER_SCHEMA_REGISTRY_TYPE: apicurio
+  PRODUCER_SCHEMA_URL: https://apicurio.kafka.svc:8443/apis/registry/v3
+  PRODUCER_SCHEMA_AUTH: oidc
+  PRODUCER_SCHEMA_CLIENT_ID: kafka-client-app
+  PRODUCER_SCHEMA_TOKEN_ENDPOINT: https://keycloak.example.com/realms/kafka/protocol/openid-connect/token
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-client-app-consumer
+  namespace: kafka
+data:
+  KAFKA_BOOTSTRAP_SERVERS: my-cluster-kafka-bootstrap:9093
+  KAFKA_SECURITY_PROTOCOL: SSL
+  CONSUMER_ENABLED: "true"
+  CONSUMER_TOPIC: orders
+  CONSUMER_GROUP_ID: kafka-client-app
+  CONSUMER_FORMAT: avro
+  CONSUMER_SCHEMA_REGISTRY_TYPE: apicurio
+  CONSUMER_SCHEMA_URL: https://apicurio.kafka.svc:8443/apis/registry/v3
+  CONSUMER_SCHEMA_AUTH: oidc
+  CONSUMER_SCHEMA_CLIENT_ID: kafka-client-app
+  CONSUMER_SCHEMA_TOKEN_ENDPOINT: https://keycloak.example.com/realms/kafka/protocol/openid-connect/token

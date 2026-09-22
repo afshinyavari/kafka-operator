@@ -1,0 +1,32 @@
+# Avro against Confluent Schema Registry over HTTPS with client certificate (mTLS).
+# Use PRODUCER_SCHEMA_AUTH: none for server-side TLS only (truststore, no client cert).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-client-app-producer
+  namespace: kafka
+data:
+  KAFKA_BOOTSTRAP_SERVERS: my-cluster-kafka-bootstrap:9093
+  KAFKA_SECURITY_PROTOCOL: SSL
+  PRODUCER_ENABLED: "true"
+  PRODUCER_TOPIC: orders
+  PRODUCER_FORMAT: avro
+  PRODUCER_SCHEMA_REGISTRY_TYPE: confluent
+  PRODUCER_SCHEMA_URL: https://schema-registry.kafka.svc:8081
+  PRODUCER_SCHEMA_AUTH: mtls
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-client-app-consumer
+  namespace: kafka
+data:
+  KAFKA_BOOTSTRAP_SERVERS: my-cluster-kafka-bootstrap:9093
+  KAFKA_SECURITY_PROTOCOL: SSL
+  CONSUMER_ENABLED: "true"
+  CONSUMER_TOPIC: orders
+  CONSUMER_GROUP_ID: kafka-client-app
+  CONSUMER_FORMAT: avro
+  CONSUMER_SCHEMA_REGISTRY_TYPE: confluent
+  CONSUMER_SCHEMA_URL: https://schema-registry.kafka.svc:8081
+  CONSUMER_SCHEMA_AUTH: mtls
