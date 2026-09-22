@@ -1,0 +1,12 @@
+{
+  "type": "record",
+  "name": "Event",
+  "namespace": "se.afshin.yavari.clientapp.avro",
+  "doc": "Test event produced by kafka-client-app",
+  "fields": [
+    { "name": "id", "type": "string", "doc": "UUID" },
+    { "name": "sequence", "type": "long", "doc": "0,1,2,... from process start" },
+    { "name": "timestamp", "type": "long", "doc": "epoch millis" },
+    { "name": "message", "type": "string", "doc": "hello from <hostname> #<sequence>" }
+  ]
+}
