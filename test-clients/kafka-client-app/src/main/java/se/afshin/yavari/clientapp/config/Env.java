@@ -18,8 +18,19 @@ public final class Env {
 
     public String get(String name, String def) { return get(name).orElse(def); }
 
+    /** Backward-compatible variant that discards its problems; prefer the 3-arg overload. */
     public boolean getBoolean(String name, boolean def) {
-        return get(name).map(v -> v.equalsIgnoreCase("true") || v.equalsIgnoreCase("yes")).orElse(def);
+        return getBoolean(name, def, new Problems());
+    }
+
+    public boolean getBoolean(String name, boolean def, Problems problems) {
+        Optional<String> v = get(name);
+        if (v.isEmpty()) return def;
+        String s = v.get();
+        if (s.equalsIgnoreCase("true") || s.equalsIgnoreCase("yes")) return true;
+        if (s.equalsIgnoreCase("false") || s.equalsIgnoreCase("no")) return false;
+        problems.add(name + " must be true or false, got '" + s + "'");
+        return def;
     }
 
     public long getLong(String name, long def, Problems problems) {

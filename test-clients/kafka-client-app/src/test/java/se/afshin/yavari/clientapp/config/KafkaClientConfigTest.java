@@ -113,4 +113,17 @@ class KafkaClientConfigTest {
         KafkaClientConfig.from(env(Map.of("KAFKA_SECURITY_PROTOCOL", "PLAINTEXT")), p);
         assertEquals("KAFKA_BOOTSTRAP_SERVERS is required", p.message());
     }
+
+    @Test
+    void sslWithTruststoreOnlyEmitsNoKeystoreKeysAndNoNullValues() {
+        Map<String, String> m = new HashMap<>();
+        m.put("KAFKA_BOOTSTRAP_SERVERS", "b:9093");
+        m.put("TLS_TRUSTSTORE_PATH", "/etc/tls/truststore.p12");
+        m.put("TLS_TRUSTSTORE_PASSWORD", "tp");
+        Problems p = new Problems();
+        Properties props = KafkaClientConfig.from(env(m), p).toProperties("-producer");
+        assertTrue(p.isEmpty(), p.message());
+        assertTrue(props.keySet().stream().noneMatch(k -> k.toString().startsWith("ssl.keystore.")));
+        assertTrue(props.values().stream().noneMatch(java.util.Objects::isNull));
+    }
 }

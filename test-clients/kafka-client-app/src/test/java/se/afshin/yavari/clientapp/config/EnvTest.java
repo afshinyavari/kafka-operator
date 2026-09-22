@@ -26,6 +26,19 @@ class EnvTest {
     }
 
     @Test
+    void validatingBooleanParsesCaseInsensitiveAndRecordsProblemOnGarbage() {
+        Problems p = new Problems();
+        Env e = env(Map.of("A", "TRUE", "B", "no", "C", "maybe"));
+        assertTrue(e.getBoolean("A", false, p));
+        assertFalse(e.getBoolean("B", true, p));
+        assertTrue(e.getBoolean("MISSING", true, p));
+        assertEquals(0, p.list().size());
+        assertTrue(e.getBoolean("C", true, p));
+        assertEquals(1, p.list().size());
+        assertEquals("C must be true or false, got 'maybe'", p.list().get(0));
+    }
+
+    @Test
     void longRecordsProblemOnGarbage() {
         Problems p = new Problems();
         Env e = env(Map.of("A", "12x"));

@@ -59,14 +59,14 @@ public final class SerdeProps {
             case APICURIO -> {
                 p.put("apicurio.registry.url", c.url());
                 if (c.https() && tls.hasTruststore()) {
-                    p.put("apicurio.registry.tls.truststore.location", tls.truststorePath());
-                    p.put("apicurio.registry.tls.truststore.password", tls.truststorePassword());
-                    p.put("apicurio.registry.tls.truststore.type", tls.truststoreType());
+                    putIfSet(p, "apicurio.registry.tls.truststore.location", tls.truststorePath());
+                    putIfSet(p, "apicurio.registry.tls.truststore.password", tls.truststorePassword());
+                    putIfSet(p, "apicurio.registry.tls.truststore.type", tls.truststoreType());
                 }
-                if (c.auth() == AuthMode.MTLS) {
-                    p.put("apicurio.registry.tls.keystore.location", tls.keystorePath());
-                    p.put("apicurio.registry.tls.keystore.password", tls.keystorePassword());
-                    p.put("apicurio.registry.tls.keystore.type", tls.keystoreType());
+                if (c.auth() == AuthMode.MTLS && tls.hasKeystore()) {
+                    putIfSet(p, "apicurio.registry.tls.keystore.location", tls.keystorePath());
+                    putIfSet(p, "apicurio.registry.tls.keystore.password", tls.keystorePassword());
+                    putIfSet(p, "apicurio.registry.tls.keystore.type", tls.keystoreType());
                 }
                 if (c.auth() == AuthMode.OIDC) {
                     p.put("apicurio.registry.auth.service.token.endpoint", c.oidc().tokenEndpoint());
@@ -80,17 +80,21 @@ public final class SerdeProps {
             case CONFLUENT -> {
                 p.put("schema.registry.url", c.url());
                 if (c.https() && tls.hasTruststore()) {
-                    p.put("schema.registry.ssl.truststore.location", tls.truststorePath());
-                    p.put("schema.registry.ssl.truststore.password", tls.truststorePassword());
-                    p.put("schema.registry.ssl.truststore.type", tls.truststoreType());
+                    putIfSet(p, "schema.registry.ssl.truststore.location", tls.truststorePath());
+                    putIfSet(p, "schema.registry.ssl.truststore.password", tls.truststorePassword());
+                    putIfSet(p, "schema.registry.ssl.truststore.type", tls.truststoreType());
                 }
-                if (c.auth() == AuthMode.MTLS) {
-                    p.put("schema.registry.ssl.keystore.location", tls.keystorePath());
-                    p.put("schema.registry.ssl.keystore.password", tls.keystorePassword());
-                    p.put("schema.registry.ssl.keystore.type", tls.keystoreType());
+                if (c.auth() == AuthMode.MTLS && tls.hasKeystore()) {
+                    putIfSet(p, "schema.registry.ssl.keystore.location", tls.keystorePath());
+                    putIfSet(p, "schema.registry.ssl.keystore.password", tls.keystorePassword());
+                    putIfSet(p, "schema.registry.ssl.keystore.type", tls.keystoreType());
                 }
             }
         }
         return p;
+    }
+
+    private static void putIfSet(Map<String, Object> p, String key, Object value) {
+        if (value != null) p.put(key, value);
     }
 }

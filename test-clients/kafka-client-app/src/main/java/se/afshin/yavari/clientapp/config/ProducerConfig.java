@@ -8,7 +8,7 @@ public record ProducerConfig(boolean enabled, String topic, long intervalMs, For
     public static final long DEFAULT_INTERVAL_MS = 1000L;
 
     public static ProducerConfig from(Env env, Problems problems) {
-        boolean enabled = env.getBoolean("PRODUCER_ENABLED", false);
+        boolean enabled = env.getBoolean("PRODUCER_ENABLED", false, problems);
         if (!enabled) {
             return new ProducerConfig(false, null, DEFAULT_INTERVAL_MS, Format.STRING, null);
         }
