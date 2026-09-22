@@ -4,17 +4,12 @@ import io.quarkus.arc.Arc;
 import io.quarkus.runtime.Quarkus;
 import io.quarkus.runtime.QuarkusApplication;
 import io.quarkus.runtime.annotations.QuarkusMain;
-import org.apache.kafka.clients.consumer.KafkaConsumer;
-import org.apache.kafka.clients.producer.KafkaProducer;
 import org.jboss.logging.Logger;
 import se.afshin.yavari.clientapp.config.AppConfig;
 import se.afshin.yavari.clientapp.config.ConfigException;
 import se.afshin.yavari.clientapp.config.Env;
-import se.afshin.yavari.clientapp.consumer.ConsumerRunner;
-import se.afshin.yavari.clientapp.producer.PayloadGenerator;
-import se.afshin.yavari.clientapp.producer.ProducerRunner;
-import se.afshin.yavari.clientapp.runtime.ClientFactory;
 import se.afshin.yavari.clientapp.runtime.RunnerRegistry;
+import se.afshin.yavari.clientapp.runtime.Runners;
 
 /**
  * Loads and validates configuration from the environment, builds the Kafka clients,
@@ -50,32 +45,23 @@ public class Main implements QuarkusApplication {
         }
 
         RunnerRegistry registry = Arc.container().instance(RunnerRegistry.class).get();
-        ProducerRunner producer = null;
-        ConsumerRunner consumer = null;
 
-        if (config.producer().enabled()) {
-            producer = new ProducerRunner(config.producer(),
-                    new KafkaProducer<>(ClientFactory.producerProperties(config.kafka(), config.producer())),
-                    PayloadGenerator.forThisHost());
-            ProducerRunner p = producer;
-            registry.register(p::isStarted);
-            producer.start();
+        Runners runners;
+        try {
+            runners = Runners.start(config, registry);
+        } catch (Exception e) {
+            System.err.println("Failed to start Kafka clients: " + e.getMessage());
+            LOG.error("Failed to start Kafka clients", e);
+            return 2;
         }
-        if (config.consumer().enabled()) {
-            consumer = new ConsumerRunner(config.consumer(),
-                    new KafkaConsumer<>(ClientFactory.consumerProperties(config.kafka(), config.consumer())));
-            ConsumerRunner c = consumer;
-            registry.register(c::isStarted);
-            consumer.start();
-        }
+
         LOG.infof("kafka-client-app up: bootstrap=%s protocol=%s producer=%s consumer=%s",
                 config.kafka().bootstrapServers(), config.kafka().protocol(),
                 config.producer().enabled(), config.consumer().enabled());
 
         Quarkus.waitForExit();
 
-        if (producer != null) producer.stop();
-        if (consumer != null) consumer.stop();
+        runners.stopAll();
         return 0;
     }
 }
