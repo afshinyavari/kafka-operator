@@ -64,24 +64,29 @@ public final class ProducerRunner {
     public long failed() { return failed.get(); }
 
     void tick() {
-        Event event = generator.next();
-        Object value = config.format() == Format.STRING ? PayloadGenerator.toJson(event) : event;
-        ProducerRecord<String, Object> record = new ProducerRecord<>(config.topic(), event.getId(), value);
+        Event event = null;
         try {
+            event = generator.next();
+            Object value = config.format() == Format.STRING ? PayloadGenerator.toJson(event) : event;
+            ProducerRecord<String, Object> record = new ProducerRecord<>(config.topic(), event.getId(), value);
+            final Event sentEvent = event;
             producer.send(record, (meta, err) -> {
                 if (err != null) {
                     failed.incrementAndGet();
-                    LOG.warnf("Send failed for seq=%d: %s", event.getSequence(), err.toString());
+                    LOG.warnf("Send failed for seq=%d: %s", sentEvent.getSequence(), err.toString());
                 } else {
                     sent.incrementAndGet();
-                    LOG.infof("Sent seq=%d key=%s to %s-%d@%d", event.getSequence(), event.getId(),
+                    LOG.infof("Sent seq=%d key=%s to %s-%d@%d", sentEvent.getSequence(), sentEvent.getId(),
                             meta.topic(), meta.partition(), meta.offset());
                 }
             });
         } catch (Exception e) {
-            // Serializer errors (e.g. registry 403 through the RBAC proxy) surface synchronously.
+            // Covers generator/serializer/record-construction failures as well as synchronous
+            // exceptions from send (e.g. registry 403 through the RBAC proxy) -- never let an
+            // exception escape tick(), or scheduleAtFixedRate silently cancels the periodic task.
             failed.incrementAndGet();
-            LOG.warnf("Send failed for seq=%d before dispatch: %s", event.getSequence(), e.toString());
+            LOG.warnf("Send failed for %s: %s",
+                    event == null ? "before event creation" : "seq=" + event.getSequence(), e.toString());
         }
     }
 }
