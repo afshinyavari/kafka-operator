@@ -33,6 +33,7 @@ spec:
           envFrom:
             - secretRef:
                 name: kafka-client-app-tls-passwords
+                optional: true
             - configMapRef:
                 name: kafka-client-app-producer
           volumeMounts:
@@ -58,3 +59,4 @@ spec:
         - name: tls
           secret:
             secretName: kafka-client-app-tls
+            optional: true

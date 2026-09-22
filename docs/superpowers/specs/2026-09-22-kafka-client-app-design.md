@@ -71,7 +71,7 @@ keystore.
 |---|---|---|
 | `KAFKA_BOOTSTRAP_SERVERS` | required | |
 | `KAFKA_SECURITY_PROTOCOL` | `SSL` | `PLAINTEXT`, `SSL`, `SASL_SSL` |
-| `KAFKA_TLS_*` | global | `SSL`: keystore + truststore → `ssl.keystore.*`, `ssl.truststore.*`. `SASL_SSL`: truststore only (keystore ignored) |
+| `KAFKA_TLS_*` | global | `SSL`: keystore (optional — omit for truststore-only listeners) + truststore → `ssl.keystore.*`, `ssl.truststore.*`. `SASL_SSL`: truststore only (keystore ignored) |
 | `KAFKA_OAUTH_TOKEN_ENDPOINT` | required for `SASL_SSL` | Keycloak token endpoint |
 | `KAFKA_OAUTH_CLIENT_ID` | required for `SASL_SSL` | |
 | `KAFKA_OAUTH_CLIENT_SECRET` | required for `SASL_SSL` | |
@@ -155,10 +155,18 @@ serde/
 producer/
   Event                Avro SpecificRecord generated from src/main/avro/Event.avsc
   PayloadGenerator     next() → Event (id, sequence, timestamp, message); asJson(Event) → String
-  ProducerRunner       @ApplicationScoped; starts on StartupEvent if enabled; scheduled thread sends one record per interval
+  ProducerRunner       plain class; scheduled thread sends one record per interval; onThreadDeath
+                       callback fires (after a guarded producer close) if a tick throws an Error
 consumer/
-  ConsumerRunner       @ApplicationScoped; dedicated thread polling and logging
-health/
+  ConsumerRunner       plain class; dedicated thread polling and logging; onThreadDeath callback
+                       fires (after a guarded consumer close) if the poll thread dies from an Error
+runtime/
+  ClientFactory        KafkaClientConfig + ProducerConfig/ConsumerConfig → final kafka-clients Properties
+  Runners              start(AppConfig, RunnerRegistry[, onThreadDeath]) builds and starts the
+                       enabled runners, rolling back (stopping) anything already started if a
+                       later step throws; stopAll() stops consumer then producer, never throws.
+                       The default onThreadDeath calls Quarkus.asyncExit(EXIT_THREAD_DEATH=3)
+  RunnerRegistry       @ApplicationScoped; started-state of every enabled runner for the readiness probe
   RunnersReadyCheck    @Readiness: UP when every enabled runner reports started
 Main                  @QuarkusMain: loads AppConfig, validates, exits 1 with message on failure
 ```
@@ -197,6 +205,10 @@ left on. The consumer is closed on shutdown.
 
 **Health.** `/q/health/ready` reports UP when all enabled runners have started their
 thread/executor; `/q/health/live` is always UP while the process runs.
+
+**Thread death.** If a runner's dedicated thread dies from an escaped `Error` (e.g. an
+`OutOfMemoryError`), the runner closes its Kafka client (guarded) and the process exits with
+code 3, so the pod restarts instead of running on with a dead producer or consumer.
 
 ## Deployment artifacts
 
