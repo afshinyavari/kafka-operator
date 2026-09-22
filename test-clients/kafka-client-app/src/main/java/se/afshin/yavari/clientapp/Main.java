@@ -50,7 +50,12 @@ public class Main implements QuarkusApplication {
         try {
             runners = Runners.start(config, registry);
         } catch (Exception e) {
-            System.err.println("Failed to start Kafka clients: " + e.getMessage());
+            Throwable root = e;
+            while (root.getCause() != null) {
+                root = root.getCause();
+            }
+            String causeSuffix = root != e && root.getMessage() != null ? " — cause: " + root.getMessage() : "";
+            System.err.println("Failed to start Kafka clients: " + e.getMessage() + causeSuffix);
             LOG.error("Failed to start Kafka clients", e);
             return 2;
         }

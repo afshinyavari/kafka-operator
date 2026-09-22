@@ -102,6 +102,11 @@ kubectl logs -f deploy/kafka-client-app-producer
 
 Secrets (`*_CLIENT_SECRET`) go in a Secret referenced from `envFrom`, not in the ConfigMap.
 
+The `kafka-client-app-tls` Secret volume and the `kafka-client-app-tls-passwords` Secret in
+`envFrom` are both marked `optional: true`, so the Deployments apply standalone for
+`PLAINTEXT`/http scenarios that need no TLS material; add them only for `SSL`/`SASL_SSL`/`mtls`
+scenarios.
+
 ## What the logs show
 
 - Startup: `Invalid configuration:` + one line per problem, exit 1, if anything is missing.

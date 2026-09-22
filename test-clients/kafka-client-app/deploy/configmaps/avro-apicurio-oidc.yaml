@@ -1,5 +1,6 @@
 # Avro against an Apicurio secured by Keycloak (no proxy). Client credentials flow.
-# Put PRODUCER_SCHEMA_CLIENT_SECRET / CONSUMER_SCHEMA_CLIENT_SECRET in a Secret and add it to envFrom.
+# PRODUCER_SCHEMA_CLIENT_SECRET / CONSUMER_SCHEMA_CLIENT_SECRET can be added to the existing
+# kafka-client-app-tls-passwords Secret (it is already in envFrom) or to another Secret added to envFrom.
 apiVersion: v1
 kind: ConfigMap
 metadata:
