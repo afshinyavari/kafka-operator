@@ -1,0 +1,15 @@
+# Kafka secured with SASL_SSL / OAUTHBEARER (Strimzi oauth listener + Keycloak). JSON strings.
+# Put KAFKA_OAUTH_CLIENT_SECRET in a Secret and add it to envFrom.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-client-app-producer
+  namespace: kafka
+data:
+  KAFKA_BOOTSTRAP_SERVERS: my-cluster-kafka-bootstrap:9094
+  KAFKA_SECURITY_PROTOCOL: SASL_SSL
+  KAFKA_OAUTH_TOKEN_ENDPOINT: https://keycloak.example.com/realms/kafka/protocol/openid-connect/token
+  KAFKA_OAUTH_CLIENT_ID: kafka-client-app
+  PRODUCER_ENABLED: "true"
+  PRODUCER_TOPIC: orders
+  PRODUCER_FORMAT: string

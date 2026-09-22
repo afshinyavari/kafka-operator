@@ -1,0 +1,31 @@
+# Avro against an unsecured Apicurio over plain HTTP.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-client-app-producer
+  namespace: kafka
+data:
+  KAFKA_BOOTSTRAP_SERVERS: my-cluster-kafka-bootstrap:9092
+  KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+  PRODUCER_ENABLED: "true"
+  PRODUCER_TOPIC: orders
+  PRODUCER_FORMAT: avro
+  PRODUCER_SCHEMA_REGISTRY_TYPE: apicurio
+  PRODUCER_SCHEMA_URL: http://apicurio.kafka.svc:8080/apis/registry/v3
+  PRODUCER_SCHEMA_AUTH: none
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kafka-client-app-consumer
+  namespace: kafka
+data:
+  KAFKA_BOOTSTRAP_SERVERS: my-cluster-kafka-bootstrap:9092
+  KAFKA_SECURITY_PROTOCOL: PLAINTEXT
+  CONSUMER_ENABLED: "true"
+  CONSUMER_TOPIC: orders
+  CONSUMER_GROUP_ID: kafka-client-app
+  CONSUMER_FORMAT: avro
+  CONSUMER_SCHEMA_REGISTRY_TYPE: apicurio
+  CONSUMER_SCHEMA_URL: http://apicurio.kafka.svc:8080/apis/registry/v3
+  CONSUMER_SCHEMA_AUTH: none
