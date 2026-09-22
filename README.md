@@ -237,6 +237,8 @@ kafka-operator/
 │   ├── Makefile      # All development targets
 │   └── manifests/    # KafkaCluster, KafkaNodePool, KafkaProxy, KafkaRbac,
 │                     # ApicurioRegistry, Keycloak YAML manifests
+├── test-clients/
+│   └── kafka-client-app/    # Env-configured Quarkus producer/consumer (string or Avro via Apicurio/Confluent, PLAINTEXT/mTLS/OAuth). See its [README](test-clients/kafka-client-app/README.md).
 └── docs/
     ├── architecture.md   # Component design and data flow
     ├── api-reference.md  # CRD field reference
