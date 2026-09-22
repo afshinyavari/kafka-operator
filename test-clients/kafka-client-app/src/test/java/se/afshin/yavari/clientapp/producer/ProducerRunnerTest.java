@@ -69,6 +69,29 @@ class ProducerRunnerTest {
     }
 
     @Test
+    void generatorFailureIsCountedNotThrown() {
+        MockProducer<String, Object> mock = new MockProducer<>(true, null, new StringSerializer(), ANY);
+        Clock throwingClock = new Clock() {
+            @Override
+            public java.time.ZoneId getZone() { throw new RuntimeException("gen boom"); }
+
+            @Override
+            public Clock withZone(java.time.ZoneId zone) { throw new RuntimeException("gen boom"); }
+
+            @Override
+            public long millis() { throw new RuntimeException("gen boom"); }
+
+            @Override
+            public java.time.Instant instant() { throw new RuntimeException("gen boom"); }
+        };
+        ProducerRunner r = new ProducerRunner(cfg(Format.STRING), mock, new PayloadGenerator("h", throwingClock));
+        assertDoesNotThrow(r::tick);
+        assertEquals(1, r.failed());
+        assertEquals(0, r.sent());
+        assertTrue(mock.history().isEmpty());
+    }
+
+    @Test
     void startAndStopLifecycle() throws Exception {
         MockProducer<String, Object> mock = new MockProducer<>(true, null, new StringSerializer(), ANY);
         ProducerConfig fast = new ProducerConfig(true, "orders", 10L, Format.STRING, null);
