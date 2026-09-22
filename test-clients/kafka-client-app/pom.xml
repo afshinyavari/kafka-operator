@@ -1,0 +1,194 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>se.afshin.yavari</groupId>
+    <artifactId>kafka-client-app</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+
+    <description>
+        Env-configured Quarkus producer/consumer test client: JSON string or Avro via
+        Apicurio (mTLS through the RBAC proxy, OIDC, or none) or Confluent Schema Registry.
+    </description>
+
+    <properties>
+        <maven.compiler.release>21</maven.compiler.release>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <quarkus.platform.version>3.39.4</quarkus.platform.version>
+        <apicurio.version>3.3.3</apicurio.version>
+        <confluent.version>8.3.2</confluent.version>
+        <strimzi-oauth.version>0.18.0</strimzi-oauth.version>
+        <avro.version>1.12.2</avro.version>
+        <surefire.version>3.5.4</surefire.version>
+    </properties>
+
+    <repositories>
+        <repository>
+            <id>confluent</id>
+            <url>https://packages.confluent.io/maven/</url>
+        </repository>
+    </repositories>
+
+    <dependencyManagement>
+        <dependencies>
+            <dependency>
+                <groupId>io.quarkus.platform</groupId>
+                <artifactId>quarkus-bom</artifactId>
+                <version>${quarkus.platform.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-arc</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-kafka-client</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-smallrye-health</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.avro</groupId>
+            <artifactId>avro</artifactId>
+            <version>${avro.version}</version>
+        </dependency>
+
+        <!-- Apicurio Registry 3.x Avro serde (TLS keystore/truststore + OIDC via config) -->
+        <dependency>
+            <groupId>io.apicurio</groupId>
+            <artifactId>apicurio-registry-avro-serde-kafka</artifactId>
+            <version>${apicurio.version}</version>
+        </dependency>
+
+        <!--
+          Marker extensions only: Quarkus's kafka-client build step refuses to augment the app
+          if either io.confluent.kafka.serializers.KafkaAvroDeserializer or the Apicurio
+          Registry 3.x Avro classes are on the classpath without the matching extension's
+          capability being present (KafkaProcessor#handleAvro). We don't use either extension's
+          runtime features; our own io.confluent:kafka-avro-serializer and
+          io.apicurio:apicurio-registry-avro-serde-kafka dependencies below (explicit, depth 1)
+          win version mediation over whatever these extensions pull in transitively (depth 2),
+          so they stay pinned at ${confluent.version} / ${apicurio.version}. Both extensions
+          transitively pull in quarkus-avro-deployment, whose Avro codegen build step would
+          otherwise duplicate what avro-maven-plugin already generates from src/main/avro; that
+          is neutralized below via <skipSourceGeneration> on the quarkus-maven-plugin execution.
+        -->
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-confluent-registry-avro</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.quarkus</groupId>
+            <artifactId>quarkus-apicurio-registry-avro</artifactId>
+        </dependency>
+
+        <!-- Confluent Schema Registry Avro serde -->
+        <dependency>
+            <groupId>io.confluent</groupId>
+            <artifactId>kafka-avro-serializer</artifactId>
+            <version>${confluent.version}</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.apache.kafka</groupId>
+                    <artifactId>*</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.slf4j</groupId>
+                    <artifactId>slf4j-log4j12</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>log4j</groupId>
+                    <artifactId>log4j</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <!-- Strimzi OAuth login callback handler for SASL_SSL/OAUTHBEARER -->
+        <dependency>
+            <groupId>io.strimzi</groupId>
+            <artifactId>kafka-oauth-client</artifactId>
+            <version>${strimzi-oauth.version}</version>
+        </dependency>
+
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>kafka-client-app</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.avro</groupId>
+                <artifactId>avro-maven-plugin</artifactId>
+                <version>${avro.version}</version>
+                <executions>
+                    <execution>
+                        <phase>generate-sources</phase>
+                        <goals><goal>schema</goal></goals>
+                        <configuration>
+                            <sourceDirectory>${project.basedir}/src/main/avro</sourceDirectory>
+                            <outputDirectory>${project.build.directory}/generated-sources/avro</outputDirectory>
+                            <stringType>String</stringType>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>io.quarkus.platform</groupId>
+                <artifactId>quarkus-maven-plugin</artifactId>
+                <version>${quarkus.platform.version}</version>
+                <extensions>true</extensions>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>build</goal>
+                            <goal>generate-code</goal>
+                            <goal>generate-code-tests</goal>
+                        </goals>
+                        <configuration>
+                            <!--
+                              We already generate Event.java from src/main/avro via the
+                              avro-maven-plugin execution above. quarkus-confluent-registry-avro
+                              (added only as a marker so KafkaProcessor#handleAvro accepts the
+                              io.confluent Avro classes on the classpath) transitively pulls in
+                              quarkus-avro-deployment, whose own AvroSchemaCodeGenProvider scans
+                              the same src/main/avro directory and would regenerate the same
+                              class into target/generated-sources/avsc, causing a duplicate-class
+                              compile error. Skip Quarkus's own source-generation step so
+                              avro-maven-plugin remains the single source of generated Avro code;
+                              the "build" goal (and its capability check) is unaffected.
+                            -->
+                            <skipSourceGeneration>true</skipSourceGeneration>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>${surefire.version}</version>
+                <configuration>
+                    <systemPropertyVariables>
+                        <java.util.logging.manager>org.jboss.logmanager.LogManager</java.util.logging.manager>
+                    </systemPropertyVariables>
+                </configuration>
+            </plugin>
+        </plugins>
+    </build>
+</project>
