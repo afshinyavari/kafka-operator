@@ -10,7 +10,12 @@ import se.afshin.yavari.clientapp.config.Format;
 import se.afshin.yavari.clientapp.config.ProducerConfig;
 
 import java.time.Clock;
+import java.time.Duration;
+import java.time.Instant;
+import java.time.ZoneId;
 import java.util.List;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
 
@@ -103,5 +108,40 @@ class ProducerRunnerTest {
         r.stop();
         assertTrue(mock.closed());
         assertTrue(r.sent() >= 2, "expected several ticks, got " + r.sent());
+    }
+
+    @Test
+    void stopForcesShutdownWhenTickBlocks() throws Exception {
+        MockProducer<String, Object> mock = new MockProducer<>(true, null, new StringSerializer(), ANY);
+        CountDownLatch blockForever = new CountDownLatch(1);
+        CountDownLatch enteredMillis = new CountDownLatch(1);
+        Clock blockingClock = new Clock() {
+            @Override
+            public ZoneId getZone() { return ZoneId.of("UTC"); }
+
+            @Override
+            public Clock withZone(ZoneId zone) { return this; }
+
+            @Override
+            public Instant instant() { return Instant.EPOCH; }
+
+            @Override
+            public long millis() {
+                enteredMillis.countDown();
+                try {
+                    blockForever.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                return 0L;
+            }
+        };
+        ProducerConfig fast = new ProducerConfig(true, "orders", 10L, Format.STRING, null);
+        ProducerRunner r = new ProducerRunner(fast, mock, new PayloadGenerator("h", blockingClock));
+        r.start();
+        assertTrue(enteredMillis.await(2, TimeUnit.SECONDS), "expected tick to enter millis()");
+
+        assertTimeoutPreemptively(Duration.ofSeconds(8), r::stop);
+        assertTrue(mock.closed());
     }
 }

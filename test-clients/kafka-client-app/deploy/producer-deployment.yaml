@@ -18,6 +18,7 @@ spec:
         app: kafka-client-app
         role: producer
     spec:
+      terminationGracePeriodSeconds: 20
       containers:
         - name: app
           image: image-registry.openshift-image-registry.svc:5000/kafka/kafka-client-app:1.0.0

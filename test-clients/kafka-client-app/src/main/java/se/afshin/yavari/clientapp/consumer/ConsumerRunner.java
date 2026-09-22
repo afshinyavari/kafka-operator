@@ -55,7 +55,7 @@ public final class ConsumerRunner {
             LOG.warnf("Consumer thread did not stop within 5s; closing anyway");
         }
         try {
-            consumer.close();
+            consumer.close(Duration.ofSeconds(5));
         } catch (Exception e) {
             LOG.warnf("Error closing consumer: %s", e.toString());
         }

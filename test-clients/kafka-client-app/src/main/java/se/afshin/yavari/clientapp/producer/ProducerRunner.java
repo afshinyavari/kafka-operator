@@ -7,6 +7,7 @@ import se.afshin.yavari.clientapp.avro.Event;
 import se.afshin.yavari.clientapp.config.Format;
 import se.afshin.yavari.clientapp.config.ProducerConfig;
 
+import java.time.Duration;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
@@ -47,14 +48,18 @@ public final class ProducerRunner {
         executor = null;
         ex.shutdown();
         try {
-            ex.awaitTermination(5, TimeUnit.SECONDS);
+            if (!ex.awaitTermination(5, TimeUnit.SECONDS)) {
+                ex.shutdownNow();
+                LOG.warnf("Producer scheduler did not terminate within 5s; forced shutdown");
+            }
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
+            ex.shutdownNow();
         }
         try {
-            producer.flush();
-        } finally {
-            producer.close();
+            producer.close(Duration.ofSeconds(5));
+        } catch (Exception e) {
+            LOG.warnf("Error closing producer: %s", e.toString());
         }
         LOG.infof("Producer stopped: sent=%d failed=%d", sent.get(), failed.get());
     }
