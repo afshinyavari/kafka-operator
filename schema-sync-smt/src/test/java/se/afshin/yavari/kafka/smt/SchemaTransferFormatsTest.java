@@ -6,6 +6,7 @@ import com.sun.net.httpserver.HttpsParameters;
 import com.sun.net.httpserver.HttpsServer;
 import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.connect.errors.ConnectException;
+import org.apache.kafka.connect.errors.RetriableException;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -247,6 +248,156 @@ class SchemaTransferFormatsTest {
                 .extracting(FakeApicurio.Artifact::artifactId).isEqualTo("orders-value");
     }
 
+    // ---- error classification: only not-found goes through behavior.on.error ----
+
+    @Test
+    void transientTargetFailureIsRetriableAndNotCached() {
+        FakeConfluent.Schema s = confluentSource.register("orders-value", "AVRO", "o", List.of());
+        apicurioTarget.failNextRequests.set(1);
+        apicurioTarget.failStatus = 503;
+        try (var smt = newSmt(Map.of("source.format", "CONFLUENT", "behavior.on.error", "WARN"))) {
+            byte[] in = confluent(s.id(), "p");
+            // WARN must NOT pass the record through with the source id: retriable instead.
+            assertThatThrownBy(() -> smt.apply(record("orders", in)))
+                    .isInstanceOf(RetriableException.class)
+                    .hasMessageContaining("transient")
+                    .hasMessageContaining("503");
+            // Nothing remembered: the next record succeeds once the target is back.
+            SourceRecord out = smt.apply(record("orders", in));
+            assertThat((byte[]) out.value()).isEqualTo(apicurio(1L, "p"));
+        }
+        assertThat(apicurioTarget.upsertCalls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void transientSourceFailureIsRetriableUnderIgnoreToo() {
+        FakeConfluent.Schema s = confluentSource.register("orders-value", "AVRO", "o", List.of());
+        confluentSource.failNextRequests.set(1);
+        confluentSource.failStatus = 500;
+        try (var smt = newSmt(Map.of("source.format", "CONFLUENT", "behavior.on.error", "IGNORE"))) {
+            byte[] in = confluent(s.id(), "p");
+            assertThatThrownBy(() -> smt.apply(record("orders", in))).isInstanceOf(RetriableException.class);
+            assertThat(smt.apply(record("orders", in)).value()).isEqualTo(apicurio(1L, "p"));
+        }
+        // The injected 500 short-circuits before the counter; the retry is the one real fetch.
+        assertThat(confluentSource.fetchCalls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void unreachableRegistryIsRetriable() {
+        // Nothing listens on the port: connection refused → transient.
+        try (var smt = newSmt(Map.of("source.url", "http://127.0.0.1:1", "behavior.on.error", "WARN"))) {
+            assertThatThrownBy(() -> smt.apply(record("orders", apicurio(1L, "p"))))
+                    .isInstanceOf(RetriableException.class);
+        }
+    }
+
+    @Test
+    void permanentTargetRejectionIsAConnectExceptionEvenUnderWarn() {
+        FakeConfluent.Schema s = confluentSource.register("orders-value", "AVRO", "o", List.of());
+        apicurioTarget.failNextRequests.set(1);
+        apicurioTarget.failStatus = 409; // incompatible schema
+        try (var smt = newSmt(Map.of("source.format", "CONFLUENT", "behavior.on.error", "WARN"))) {
+            byte[] in = confluent(s.id(), "p");
+            assertThatThrownBy(() -> smt.apply(record("orders", in)))
+                    .isInstanceOf(ConnectException.class)
+                    .isNotInstanceOf(RetriableException.class)
+                    .hasMessageContaining("permanent")
+                    .hasMessageContaining("409");
+            // Not negative-cached either: a fixed target is used on the next record.
+            assertThat(smt.apply(record("orders", in)).value()).isEqualTo(apicurio(1L, "p"));
+        }
+    }
+
+    @Test
+    void notFoundStillPassesThroughUnderWarnAndIsRemembered() {
+        byte[] garbage = new byte[12];
+        try (var smt = newSmt(Map.of("behavior.on.error", "WARN"))) {
+            assertThat(smt.apply(record("raw", garbage)).value()).isSameAs(garbage);
+            assertThat(smt.apply(record("raw", garbage)).value()).isSameAs(garbage);
+        }
+        assertThat(apicurioSource.metadataCalls.get()).isEqualTo(1);
+    }
+
+    @Test
+    void missingReferencedSchemaIsPermanentNotPassthrough() {
+        // The parent references "address"@1 whose globalId resolves but whose content is gone.
+        apicurioSource.register(1L, "default", "address", "JSON", "{\"addr\":true}");
+        apicurioSource.register(2L, "default", "order", "JSON", "{\"order\":true}",
+                List.of(new SchemaRef("address.json", "default", "address", "1")));
+        apicurioSource.byGlobalId.remove(1L); // meta still lists it; content 404s
+        try (var smt = newSmt(Map.of("behavior.on.error", "WARN"))) {
+            assertThatThrownBy(() -> smt.apply(record("orders", apicurio(2L, "p"))))
+                    .isInstanceOf(ConnectException.class)
+                    .isNotInstanceOf(RetriableException.class)
+                    .hasMessageContaining("Referenced schema globalId=1");
+        }
+        assertThat(apicurioTarget.upsertCalls.get()).isZero();
+    }
+
+    // ---- subject choice ----
+
+    @Test
+    void sourceModePicksLexicographicallySmallestOwningSubject() {
+        // Same content under two subjects → one Confluent id owned by both. Registered
+        // "zebra" first so registration order and lexicographic order differ.
+        FakeConfluent.Schema z = confluentSource.register("zebra-value", "AVRO", "\"string\"", List.of());
+        FakeConfluent.Schema a = confluentSource.register("apple-value", "AVRO", "\"string\"", List.of());
+        assertThat(a.id()).isEqualTo(z.id());
+        try (var smt = newSmt(Map.of("source.format", "CONFLUENT"))) {
+            smt.apply(record("zebra", confluent(z.id(), "p")));
+        }
+        assertThat(apicurioTarget.upserts).extracting(FakeApicurio.Artifact::artifactId)
+                .containsExactly("apple-value");
+    }
+
+    @Test
+    void topicModeDerivesSubjectFromRecordTopicAndSide() {
+        FakeConfluent.Schema s = confluentSource.register("whatever", "AVRO", "\"string\"", List.of());
+        try (var smt = newSmt(Map.of("source.format", "CONFLUENT", "target.subject.mode", "topic",
+                "apply.to", "BOTH"))) {
+            SourceRecord out = smt.apply(new SourceRecord(null, null, "prod.orders", null, null,
+                    confluent(s.id(), "k"), null, confluent(s.id(), "v")));
+            assertThat((byte[]) out.key()).isEqualTo(apicurio(1L, "k"));
+            assertThat((byte[]) out.value()).isEqualTo(apicurio(2L, "v"));
+        }
+        assertThat(apicurioTarget.upserts).extracting(FakeApicurio.Artifact::artifactId)
+                .containsExactly("prod.orders-key", "prod.orders-value");
+    }
+
+    @Test
+    void topicModeRegistersSharedSchemaUnderEveryTopicSubject() {
+        FakeConfluent.Schema s = confluentSource.register("a-value", "AVRO", "\"string\"", List.of());
+        try (var smt = newSmt(Map.of("source.format", "CONFLUENT", "target.subject.mode", "TOPIC"))) {
+            smt.apply(record("a", confluent(s.id(), "p")));
+            smt.apply(record("b", confluent(s.id(), "p")));
+            smt.apply(record("a", confluent(s.id(), "p"))); // cache hit per (id, subject)
+        }
+        assertThat(apicurioTarget.upserts).extracting(FakeApicurio.Artifact::artifactId)
+                .containsExactly("a-value", "b-value");
+    }
+
+    @Test
+    void topicModeIgnoresPrefixAndKeepsReferenceSubjects() {
+        FakeConfluent.Schema addr = confluentSource.register("address", "AVRO", "a", List.of());
+        FakeConfluent.Schema order = confluentSource.register("orders-value", "AVRO", "o",
+                List.of(new FakeConfluent.Ref("address", "address", addr.version())));
+        try (var smt = newSmt(Map.of("source.format", "CONFLUENT", "target.subject.mode", "TOPIC",
+                "target.subject.prefix", "dr."))) {
+            smt.apply(record("dr.orders", confluent(order.id(), "p")));
+            smt.apply(record("dr.address", confluent(addr.id(), "q")));
+        }
+        assertThat(apicurioTarget.upserts).extracting(FakeApicurio.Artifact::artifactId)
+                .containsExactly("address", "dr.orders-value", "dr.address-value");
+    }
+
+    @Test
+    void unknownSubjectModeIsAConfigError() {
+        assertThatThrownBy(() -> newSmt(Map.of("target.subject.mode", "RECORD")))
+                .isInstanceOf(ConfigException.class)
+                .hasMessageContaining("target.subject.mode");
+    }
+
     @Test
     void unknownFormatIsAConfigError() {
         assertThatThrownBy(() -> newSmt(Map.of("source.format", "PULSAR")))
@@ -273,12 +424,13 @@ class SchemaTransferFormatsTest {
                 SourceRecord out = smt.apply(record("t", confluent(s.id(), "p")));
                 assertThat((byte[]) out.value()).isEqualTo(apicurio(1L, "p"));
             }
-            // Without the client keystore the registry rejects the handshake and WARN passes through.
+            // Without the client keystore the registry rejects the handshake. That is a
+            // transient failure: retriable, never a passthrough (even under WARN).
             cfg.remove("source.ssl.keystore.location");
             cfg.remove("source.ssl.keystore.password");
             try (var smt = newSmt(cfg)) {
                 byte[] in = confluent(s.id(), "p");
-                assertThat(smt.apply(record("t", in)).value()).isSameAs(in);
+                assertThatThrownBy(() -> smt.apply(record("t", in))).isInstanceOf(RetriableException.class);
             }
         } finally {
             tls.stop(0);

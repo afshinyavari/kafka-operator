@@ -49,6 +49,22 @@ class ConfluentClientTest {
     }
 
     @Test
+    void fetchByIdOfUnknownIdIsNotFound() {
+        assertThatThrownBy(() -> client.fetchById(4711))
+                .isInstanceOf(RegistryException.class)
+                .matches(e -> ((RegistryException) e).isNotFound());
+    }
+
+    @Test
+    void fetchByIdPicksSmallestSubjectWhenIdIsShared() throws Exception {
+        fake.register("zebra-value", "AVRO", "\"string\"", List.of());
+        FakeConfluent.Schema a = fake.register("apple-value", "AVRO", "\"string\"", List.of());
+        fake.register("mango-value", "AVRO", "\"string\"", List.of());
+
+        assertThat(client.fetchById(a.id()).artifactId()).isEqualTo("apple-value");
+    }
+
+    @Test
     void fetchByIdCarriesSchemaTypeAndReferences() throws Exception {
         FakeConfluent.Schema addr = fake.register("address", "PROTOBUF", "message Address {}", List.of());
         FakeConfluent.Schema s = fake.register("orders-value", "PROTOBUF", "message Order {}",

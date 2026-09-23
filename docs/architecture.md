@@ -729,16 +729,19 @@ Per record:
 1. Topic regex check (`applyToTopics`).
 2. Envelope detection via the source codec — `bytes != null && length ≥
    header && bytes[0] == 0x00`.
-3. Parse the source id; consult the positive LRU cache, then the negative
-   cache (`cache.negative.ttl.ms`) so payloads that merely look like
-   envelopes don't hit the registry per record.
+3. Parse the source id; consult the positive LRU cache (keyed by source id,
+   plus the target subject in `TOPIC` mode), then the negative cache
+   (`cache.negative.ttl.ms`, not-found ids only) so payloads that merely
+   look like envelopes don't hit the registry per record.
 4. On miss, DFS resolve the source schema (with `HashSet<Long> visiting`
    cycle guard, `maxDepth=16`): for each reference, resolve its source id,
    ensure it on the target first, and rewrite the reference to the version
    the target assigned (registries number versions independently). Then
    upsert the parent (`?ifExists=RETURN_OR_UPDATE` on Apicurio; idempotent
-   `POST /subjects/{s}/versions` on Confluent), under
-   `target.subject.prefix` + source subject when a prefix is configured.
+   `POST /subjects/{s}/versions` on Confluent), under the subject chosen by
+   `target.subject.mode`: the source subject (lexicographically smallest
+   owner when a Confluent id is shared) plus `target.subject.prefix`, or
+   `<topic>-key` / `<topic>-value` derived from the record.
 5. Encode the target envelope with the target id via the target codec;
    payload bytes unchanged (header length may change across formats).
 
@@ -746,6 +749,15 @@ Six layers of safety make the SMT safe to drop on mixed-format clusters:
 per-record detection, tombstone passthrough, `applyTo` knob, topic
 allowlist, default `behavior.on.error=WARN`, and per-record evaluation. See
 [api-reference.md#non-apicurio-topics](api-reference.md#non-apicurio-topics).
+
+`behavior.on.error` governs only *not-found* (the source has no schema for
+the id). Every `RegistryException` carries a `Kind`: `NOT_FOUND` goes
+through the setting and the negative cache; `TRANSIENT` (I/O, 408/429/5xx)
+is re-thrown as a Connect `RetriableException`; `PERMANENT` (other 4xx,
+reference cycle, missing referenced schema) as `ConnectException`. Neither
+of the last two is cached or passed through, because an unrewritten record
+carries an id that is wrong on the target. See
+[api-reference.md#smt-error-classes](api-reference.md#smt-error-classes).
 
 ### Schema-registry authentication
 

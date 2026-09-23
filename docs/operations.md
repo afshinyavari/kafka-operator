@@ -765,7 +765,8 @@ transforms.schemaSync.source.ssl.truststore.location: /mnt/registry-tls/source/c
 transforms.schemaSync.source.ssl.truststore.password: ${secrets:kafka/mm2-registry-tls:source-truststore-password}
 transforms.schemaSync.target.format: APICURIO
 transforms.schemaSync.target.url: https://apicurio.dr.example
-transforms.schemaSync.target.subject.prefix: "prod."   # = source alias + "." with DefaultReplicationPolicy
+transforms.schemaSync.target.subject.mode: SOURCE      # or TOPIC: subject = <mirrored topic>-value, no prefix needed
+transforms.schemaSync.target.subject.prefix: "prod."   # SOURCE mode: = source alias + "." with DefaultReplicationPolicy
 transforms.schemaSync.target.ssl.keystore.type: PEM
 transforms.schemaSync.target.ssl.keystore.location: /mnt/registry-tls/target/tls.crt
 transforms.schemaSync.target.ssl.key.location: /mnt/registry-tls/target/tls.key
@@ -775,11 +776,13 @@ transforms.schemaSync.behavior.on.error: WARN
 transforms.schemaSync.apply.to.topics: "orders\\..*,payments\\..*"
 ```
 
-`target.subject.prefix` makes the target artifactId follow the mirrored topic name (`orders-value` → `prod.orders-value`) so producers and lookups on the target side using TopicNameStrategy find it; references keep their source subject. Leave it empty with `IdentityReplicationPolicy`.
+`target.subject.prefix` makes the target artifactId follow the mirrored topic name (`orders-value` → `prod.orders-value`) so producers and lookups on the target side using TopicNameStrategy find it; references keep their source subject. Leave it empty with `IdentityReplicationPolicy`. `target.subject.mode: TOPIC` reaches the same result without a prefix by deriving the subject from the record's topic, and is the better choice when several source subjects share one schema id (a common key schema): in `SOURCE` mode the SMT must then pick one subject (the lexicographically smallest), in `TOPIC` mode every topic gets its own. See [api-reference.md#smt-subject-choice](api-reference.md#smt-subject-choice).
 
 Mount the certificate Secrets with `spec.template.pod.volumes` + `spec.template.connectContainer.volumeMounts`; the `${secrets:…}` placeholders need Strimzi's `KubernetesSecretConfigProvider` declared under `spec.config` (`config.providers: secrets`). PEM keys must be PKCS#8 (`BEGIN PRIVATE KEY`); convert PKCS#1/SEC1 keys with `openssl pkcs8 -topk8 -nocrypt`. The full key list is in [api-reference.md#smt-configuration-keys](api-reference.md#smt-configuration-keys).
 
-**Mirroring every topic.** Records that are not envelopes (null, shorter than the header, or not starting with `0x00`) pass through without any registry call. A payload that merely starts with `0x00` (raw Protobuf, custom binary) is looked up once, fails, and is then remembered by the negative cache for `cache.negative.ttl.ms` (default 60 s) — so a high-volume unschema'd topic costs one registry call per minute, not one per record. Tighten `apply.to.topics` if even that is unwanted.
+**Mirroring every topic.** Records that are not envelopes (null, shorter than the header, or not starting with `0x00`) pass through without any registry call. A payload that merely starts with `0x00` (raw Protobuf, custom binary) is looked up once, comes back not-found, and is then remembered by the negative cache for `cache.negative.ttl.ms` (default 60 s) — so a high-volume unschema'd topic costs one registry call per minute, not one per record. Tighten `apply.to.topics` if even that is unwanted.
+
+**Registry outages.** `behavior.on.error` covers only the not-found case above. If a registry is unreachable or returns 5xx, or the target rejects a schema, the record is *not* passed through (that would ship it with the source id in the header, which is wrong on the target for good). Transient failures surface as a Connect `RetriableException`; set `errors.retry.timeout` (e.g. `-1` for indefinite) and `errors.retry.delay.max.ms` on the connector so the task waits the outage out instead of failing. Permanent failures (incompatible schema, bad credentials) fail the task until fixed. See [api-reference.md#smt-error-classes](api-reference.md#smt-error-classes).
 
 ### Schema-registry authentication
 
@@ -802,7 +805,11 @@ then set `target.schemaRegistryAuthSecretRef: mm2-schema-registry-oauth` on the 
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Worker logs `ApicurioSchemaTransferSmt passthrough … globalId=N … 404` | Source registry has no schema for that id (typically a non-registry record on a topic in `applyToTopics` whose payload starts with `0x00`). Default WARN behavior is to pass through; the negative cache suppresses repeat lookups for `cache.negative.ttl.ms`. | Tighten `applyToTopics` to exclude the topic, or accept the WARN noise. |
+| Worker logs `ApicurioSchemaTransferSmt passthrough … globalId=N … No schema for` | Source registry has no schema for that id (typically a non-registry record on a topic in `applyToTopics` whose payload starts with `0x00`). Default WARN behavior is to pass through; the negative cache suppresses repeat lookups for `cache.negative.ttl.ms`. | Tighten `applyToTopics` to exclude the topic, or accept the WARN noise. |
+| Task fails with `transient registry failure … 503` / `HTTP request failed` (a `RetriableException`) | A registry or the OAuth IdP is down or unreachable. The SMT refuses to pass the record through (it would carry the wrong id) and asks Connect to retry. | Fix connectivity. Set `errors.retry.timeout=-1` and `errors.retry.delay.max.ms` on the connector so the task rides out outages; otherwise restart the task once the registry is back. |
+| Task fails with `permanent registry failure … 409` / `422` | The target registry rejected the mirrored schema: compatibility rule on the target subject, or invalid content for the artifact type. | Fix the target's compatibility level / rules for that subject (the SMT does not copy them), or register the schema manually, then restart the task. |
+| Task fails with `Referenced schema globalId=N is missing from the source registry` | The parent's reference resolves to a version whose content the source registry no longer serves. | Repair the source registry (re-register the referenced version). |
+| Shared schema lands under an unexpected subject on the target | In `subjectMode=SOURCE` a Confluent id owned by many subjects is registered under the lexicographically smallest one. | Set `subjectMode: TOPIC` (`target.subject.mode=TOPIC` standalone) so each mirrored topic gets its own `<topic>-value` subject. |
 | Every Confluent-encoded record passes through with a 404 | `source.format` left at `APICURIO` against a Confluent registry — the 8-byte parse reads garbage ids. | Set `source.format=CONFLUENT`. |
 | `Failed to build registry TLS context` at startup | Wrong keystore password/type, or a PEM key that is PKCS#1 (`BEGIN RSA PRIVATE KEY`) rather than PKCS#8. | Fix the `ssl.*` keys; convert the key with `openssl pkcs8 -topk8 -nocrypt`. |
 | Worker fails on every record | `behaviorOnError=FAIL` + a non-Apicurio record snuck through | Switch to `WARN` or narrow `applyToTopics`. |

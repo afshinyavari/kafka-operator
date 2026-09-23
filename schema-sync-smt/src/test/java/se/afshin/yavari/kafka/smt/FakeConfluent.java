@@ -33,17 +33,34 @@ public class FakeConfluent implements HttpHandler {
     /** When set, requests lacking this exact Authorization header get 401. */
     volatile String requireAuthorization;
 
+    /** When > 0, the next N requests fail with {@link #failStatus}. */
+    final AtomicInteger failNextRequests = new AtomicInteger();
+    volatile int failStatus = 503;
+
     /** Registers a schema under {@code subject} and returns its id. Identical content
-     *  under the same subject returns the existing id (Confluent semantics). */
+     *  under the same subject returns the existing version; identical content under a
+     *  different subject gets a new version there but reuses the id (Confluent assigns
+     *  ids per content, globally). */
     public synchronized Schema register(String subject, String type, String schema, List<Ref> refs) {
         List<Schema> versions = bySubject.computeIfAbsent(subject, s -> new ArrayList<>());
         for (Schema s : versions) {
             if (s.schema().equals(schema)) return s;
         }
-        Schema s = new Schema(nextId++, subject, versions.size() + 1, type, schema, refs);
+        int id = byId.values().stream().filter(x -> x.schema().equals(schema)).map(Schema::id)
+                .findFirst().orElseGet(() -> nextId++);
+        Schema s = new Schema(id, subject, versions.size() + 1, type, schema, refs);
         versions.add(s);
-        byId.put(s.id(), s);
+        byId.putIfAbsent(s.id(), s);
         return s;
+    }
+
+    /** All (subject, version) pairs that carry {@code id}, in registration order. */
+    private synchronized List<Schema> owners(int id) {
+        List<Schema> out = new ArrayList<>();
+        for (List<Schema> versions : bySubject.values()) {
+            for (Schema s : versions) if (s.id() == id) out.add(s);
+        }
+        return out;
     }
 
     public void assignNextId(int id) { nextId = id; }
@@ -56,6 +73,10 @@ public class FakeConfluent implements HttpHandler {
             if (requireAuthorization != null
                     && !requireAuthorization.equals(ex.getRequestHeaders().getFirst("Authorization"))) {
                 ex.sendResponseHeaders(401, -1);
+                return;
+            }
+            if (failNextRequests.getAndUpdate(x -> x > 0 ? x - 1 : 0) > 0) {
+                sendJson(ex, failStatus, "{\"error_code\":" + failStatus + "00,\"message\":\"injected\"}");
                 return;
             }
             // GET /schemas/ids/{id}
@@ -72,9 +93,14 @@ public class FakeConfluent implements HttpHandler {
             }
             // GET /schemas/ids/{id}/versions
             if (method.equals("GET") && path.matches("^/schemas/ids/\\d+/versions$")) {
-                Schema s = byId.get(Integer.parseInt(path.split("/")[3]));
-                if (s == null) { sendJson(ex, 404, "{\"error_code\":40403}"); return; }
-                sendJson(ex, 200, "[{\"subject\":\"" + s.subject() + "\",\"version\":" + s.version() + "}]");
+                List<Schema> owners = owners(Integer.parseInt(path.split("/")[3]));
+                if (owners.isEmpty()) { sendJson(ex, 404, "{\"error_code\":40403}"); return; }
+                StringBuilder sb = new StringBuilder("[");
+                for (Schema o : owners) {
+                    if (sb.length() > 1) sb.append(',');
+                    sb.append("{\"subject\":\"").append(o.subject()).append("\",\"version\":").append(o.version()).append('}');
+                }
+                sendJson(ex, 200, sb.append(']').toString());
                 return;
             }
             // GET /subjects/{subject}/versions/{version}

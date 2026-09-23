@@ -36,6 +36,9 @@ public class FakeApicurio implements HttpHandler {
     volatile String requireBearer;
     /** Number of upcoming POSTs to reject with 401 (simulates a stale token). */
     final AtomicInteger rejectPostsRemaining = new AtomicInteger();
+    /** When > 0, the next N requests (any method) fail with {@link #failStatus}. */
+    final AtomicInteger failNextRequests = new AtomicInteger();
+    volatile int failStatus = 503;
 
     public void register(long globalId, String groupId, String artifactId, String type, String content) {
         register(globalId, groupId, artifactId, type, content, List.of());
@@ -60,6 +63,10 @@ public class FakeApicurio implements HttpHandler {
             if (requireBearer != null
                     && !("Bearer " + requireBearer).equals(ex.getRequestHeaders().getFirst("Authorization"))) {
                 ex.sendResponseHeaders(401, -1);
+                return;
+            }
+            if (failNextRequests.getAndUpdate(x -> x > 0 ? x - 1 : 0) > 0) {
+                sendJson(ex, failStatus, "{\"message\":\"injected failure\"}");
                 return;
             }
             // GET /apis/registry/v2/ids/globalIds/{id} — raw schema content.
@@ -108,8 +115,11 @@ public class FakeApicurio implements HttpHandler {
                     gid = v.get(v.size() - 1);
                 }
                 if (gid == null) { ex.sendResponseHeaders(404, -1); return; }
-                sendJson(ex, 200, "{\"globalId\":" + gid + ",\"version\":\""
-                        + byGlobalId.get(gid).version() + "\"}");
+                // Tolerate an artifact whose content was removed (tests simulate a
+                // registry whose metadata still lists a vanished version).
+                Artifact meta = byGlobalId.get(gid);
+                String version = meta != null ? meta.version() : String.valueOf(v.indexOf(gid) + 1);
+                sendJson(ex, 200, "{\"globalId\":" + gid + ",\"version\":\"" + version + "\"}");
                 return;
             }
             // POST /apis/registry/v2/groups/{g}/artifacts — create; returns ArtifactMetaData.

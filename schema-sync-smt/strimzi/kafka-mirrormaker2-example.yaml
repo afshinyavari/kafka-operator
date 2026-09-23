@@ -69,6 +69,8 @@ spec:
           # --- target: Apicurio Registry (native v2 API), mTLS
           transforms.schemaSync.target.format: APICURIO
           transforms.schemaSync.target.url: https://apicurio.kafka.svc:8443
+          # SOURCE mode (default) + prefix. Alternative: target.subject.mode: TOPIC, which
+          # registers under "<mirrored topic>-value" and needs no prefix.
           transforms.schemaSync.target.subject.prefix: "prod."
           transforms.schemaSync.target.ssl.keystore.type: PEM
           transforms.schemaSync.target.ssl.keystore.location: /mnt/registry-tls/target/tls.crt
@@ -77,6 +79,8 @@ spec:
           transforms.schemaSync.target.ssl.truststore.location: /mnt/registry-tls/target/ca.crt
 
           # --- behaviour
+          # Only for ids the source registry doesn't know; outages/rejections always fail
+          # the record (retriably), see docs/api-reference.md "Error classes".
           transforms.schemaSync.behavior.on.error: WARN
           transforms.schemaSync.apply.to: VALUE
           transforms.schemaSync.apply.to.topics: "prod\\.orders\\..*,prod\\.payments\\..*"

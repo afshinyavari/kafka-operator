@@ -110,8 +110,27 @@ class Mm2ConfigBuilderTest {
         assertThat(props).contains(
                 "source->target.transforms.schemaSync.target.url=http://apicurio-rbac-proxy.dst.svc.cluster.local:8080");
         assertThat(props).contains("source->target.transforms.schemaSync.apply.to=VALUE");
+        assertThat(props).contains("source->target.transforms.schemaSync.target.subject.mode=SOURCE");
         assertThat(props).contains("source->target.transforms.schemaSync.behavior.on.error=WARN");
         assertThat(props).contains("source->target.transforms.schemaSync.apply.to.topics=events\\..*");
+    }
+
+    @Test
+    void schemaSyncTopicSubjectModeIsPassedToSmt() {
+        MirrorMaker2Spec spec = new MirrorMaker2Spec();
+        spec.setFlow(new Mm2FlowConfig());
+        Mm2SchemaSyncConfig sync = new Mm2SchemaSyncConfig();
+        sync.setEnabled(true);
+        sync.setSubjectMode(Mm2SchemaSyncConfig.SubjectMode.TOPIC);
+        spec.setSchemaSync(sync);
+        ResolvedKafkaEndpoint src = new ResolvedKafkaEndpoint("a:9094", "tls-src", null,
+                "http://apicurio.src:8080", null, false);
+        ResolvedKafkaEndpoint tgt = new ResolvedKafkaEndpoint("b:9094", "tls-dst", null,
+                "http://apicurio.dst:8080", null, false);
+
+        String props = builder.build(cr(spec), src, tgt);
+
+        assertThat(props).contains("source->target.transforms.schemaSync.target.subject.mode=TOPIC");
     }
 
     @Test

@@ -35,12 +35,12 @@ public class ConfluentClient extends RestRegistryClient {
     @Override
     public RegistrySchema fetchById(long id) throws RegistryException {
         JsonNode s = getJsonOrNull("/schemas/ids/" + id);
-        if (s == null) throw new RegistryException("No schema found for id " + id);
+        if (s == null) throw RegistryException.notFound("No schema for id " + id + " at " + baseUrl);
         JsonNode owners = getJson("/schemas/ids/" + id + "/versions");
         if (!owners.isArray() || owners.isEmpty()) {
-            throw new RegistryException("No subject owns schema id " + id);
+            throw RegistryException.notFound("No subject owns schema id " + id + " at " + baseUrl);
         }
-        String subject = owners.get(0).get("subject").asText();
+        String subject = owningSubject(owners);
         List<SchemaRef> refs = new ArrayList<>();
         JsonNode refNode = s.get("references");
         if (refNode != null && refNode.isArray()) {
@@ -73,6 +73,20 @@ public class ConfluentClient extends RestRegistryClient {
         String version = ref.version() == null ? "latest" : ref.version();
         JsonNode n = getJsonOrNull("/subjects/" + pathSegment(ref.artifactId()) + "/versions/" + version);
         return n == null || !n.has("id") ? null : n.get("id").asLong();
+    }
+
+    /** A Confluent schema id can be registered under many subjects (a shared key schema,
+     *  RecordNameStrategy). The registry lists them in no documented order, so pick the
+     *  lexicographically smallest subject: deterministic across workers and restarts.
+     *  Use {@code target.subject.mode=TOPIC} when the record's topic should decide instead. */
+    static String owningSubject(JsonNode owners) {
+        String best = null;
+        for (JsonNode o : owners) {
+            String subject = textOrNull(o.get("subject"));
+            if (subject != null && (best == null || subject.compareTo(best) < 0)) best = subject;
+        }
+        if (best == null) throw new IllegalStateException("owners list carries no subject: " + owners);
+        return best;
     }
 
     private static byte[] registerBody(RegistrySchema schema) throws RegistryException {
