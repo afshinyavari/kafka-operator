@@ -5,6 +5,7 @@ import org.apache.kafka.common.config.ConfigException;
 import org.apache.kafka.common.config.types.Password;
 import org.apache.kafka.connect.connector.ConnectRecord;
 import org.apache.kafka.connect.errors.ConnectException;
+import org.apache.kafka.connect.errors.RetriableException;
 import org.apache.kafka.connect.transforms.Transformation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -44,8 +45,22 @@ import java.util.ArrayList;
  *   <li>Re-frames the envelope with the target codec and id, leaves payload unchanged.
  * </ol>
  *
- * <p>Errors (source 404, target 5xx, network) route through {@code behavior.on.error}:
- * FAIL re-throws, WARN logs and passes through, IGNORE drops the record.
+ * <p>Only a <em>not-found</em> on the record's own id (the source registry has no such
+ * schema — typically a payload that merely starts with {@code 0x00}) routes through
+ * {@code behavior.on.error}: FAIL re-throws, WARN logs and passes through, IGNORE drops
+ * the record. Such ids are remembered by the negative cache. Every other failure is
+ * re-thrown regardless of the setting: transient ones (network, timeout, 408/429/5xx) as
+ * {@link RetriableException} so Connect's {@code errors.retry.timeout} applies, permanent
+ * ones (incompatible schema, auth rejected, reference cycle) as {@link ConnectException}.
+ * Passing a record through after such a failure would ship it with an id that means
+ * something else on the target, which is silent data corruption.
+ *
+ * <p>The subject a record's schema is registered under on the target is chosen by
+ * {@code target.subject.mode}: {@code SOURCE} keeps the source subject (optionally with
+ * {@code target.subject.prefix}); {@code TOPIC} derives it from the record's topic as
+ * {@code <topic>-key} / {@code <topic>-value} (Confluent TopicNameStrategy). TOPIC is
+ * the right choice when one schema is shared by many subjects, since SOURCE then has to
+ * pick one of them. Referenced schemas always keep their source subject.
  *
  * <p>Reference resolution is DFS with cycle guard ({@code HashSet<Long> visiting}) and
  * a configurable {@code maxDepth} (default 16).
@@ -69,6 +84,7 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
     public static final String TARGET_FORMAT = "target.format";
     public static final String NEGATIVE_CACHE_TTL_MS = "cache.negative.ttl.ms";
     public static final String TARGET_SUBJECT_PREFIX = "target.subject.prefix";
+    public static final String TARGET_SUBJECT_MODE = "target.subject.mode";
 
     /** Suffixes of the per-side {@code <side>.ssl.*} keys. */
     static final String SSL_KEYSTORE_LOCATION = ".ssl.keystore.location";
@@ -81,6 +97,13 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
 
     public enum OnError { FAIL, WARN, IGNORE }
     public enum ApplyTo { VALUE, KEY, BOTH }
+    /** How the target subject of a record's top-level schema is chosen. */
+    public enum SubjectMode {
+        /** The source subject, with {@code target.subject.prefix} prepended. */
+        SOURCE,
+        /** {@code <record topic>-key} / {@code <record topic>-value}; the prefix is ignored. */
+        TOPIC
+    }
 
     private static final ConfigDef CONFIG_DEF = new ConfigDef()
             .define(SOURCE_URL, ConfigDef.Type.STRING, ConfigDef.NO_DEFAULT_VALUE, ConfigDef.Importance.HIGH,
@@ -117,7 +140,14 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
             .define(TARGET_SUBJECT_PREFIX, ConfigDef.Type.STRING, "", ConfigDef.Importance.MEDIUM,
                     "Prefix prepended to the subject/artifactId when registering a record's schema on "
                             + "the target, so subjects mirror MirrorMaker's topic prefix (e.g. 'prod.'). "
-                            + "Referenced schemas keep their source subject. Empty keeps the source subject.");
+                            + "Referenced schemas keep their source subject. Empty keeps the source subject. "
+                            + "Ignored when target.subject.mode=TOPIC.")
+            .define(TARGET_SUBJECT_MODE, ConfigDef.Type.STRING, "SOURCE",
+                    ConfigDef.CaseInsensitiveValidString.in("SOURCE", "TOPIC"), ConfigDef.Importance.MEDIUM,
+                    "SOURCE | TOPIC — SOURCE registers a record's schema under its source subject "
+                            + "(plus target.subject.prefix); TOPIC derives the subject from the record's "
+                            + "topic as <topic>-key / <topic>-value, which is deterministic when one schema "
+                            + "is shared by many subjects. Referenced schemas keep their source subject.");
 
     static {
         defineSsl(CONFIG_DEF, "source");
@@ -166,6 +196,7 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
     private LruCache cache;
     private NegativeCache negativeCache;
     private String targetSubjectPrefix = "";
+    private SubjectMode subjectMode = SubjectMode.SOURCE;
 
     @Override
     public void configure(Map<String, ?> configs) {
@@ -182,6 +213,7 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
                 RegistryTls.build(sslSettings(parsed, "target")));
         this.negativeCache = new NegativeCache((Long) parsed.get(NEGATIVE_CACHE_TTL_MS));
         this.targetSubjectPrefix = ((String) parsed.get(TARGET_SUBJECT_PREFIX)).trim();
+        this.subjectMode = SubjectMode.valueOf(((String) parsed.get(TARGET_SUBJECT_MODE)).trim().toUpperCase());
         this.onError = OnError.valueOf(((String) parsed.get(BEHAVIOR_ON_ERROR)).toUpperCase());
         this.applyTo = ApplyTo.valueOf(((String) parsed.get(APPLY_TO)).toUpperCase());
         this.maxRefDepth = (Integer) parsed.get(MAX_REF_DEPTH);
@@ -191,10 +223,15 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
         List<String> patterns = (List<String>) parsed.get(APPLY_TO_TOPICS);
         this.topicPatterns = patterns.stream().map(Pattern::compile).toList();
         LOG.info("ApicurioSchemaTransferSmt configured: source={} ({}), target={} ({}), applyTo={}, onError={}, "
-                        + "cacheSize={}, negativeTtlMs={}, topics={}",
-                srcUrl, sourceCodec, tgtUrl, targetCodec, applyTo, onError, cacheSize,
+                        + "subjectMode={}, cacheSize={}, negativeTtlMs={}, topics={}",
+                srcUrl, sourceCodec, tgtUrl, targetCodec, applyTo, onError, subjectMode, cacheSize,
                 parsed.get(NEGATIVE_CACHE_TTL_MS), patterns);
-        if (!targetSubjectPrefix.isEmpty()) {
+        if (subjectMode == SubjectMode.TOPIC) {
+            if (!targetSubjectPrefix.isEmpty()) {
+                LOG.warn("target.subject.prefix='{}' is ignored because target.subject.mode=TOPIC",
+                        targetSubjectPrefix);
+            }
+        } else if (!targetSubjectPrefix.isEmpty()) {
             LOG.info("Target subjects will be prefixed with '{}'", targetSubjectPrefix);
         }
     }
@@ -297,38 +334,55 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
     }
 
     /** Returns the (possibly rewritten) bytes, the original array if not an envelope,
-     *  or the {@link #DROP} sentinel when {@code behavior.on.error=IGNORE} fired. */
+     *  or the {@link #DROP} sentinel when {@code behavior.on.error=IGNORE} fired on a
+     *  not-found. Transient and permanent registry failures are thrown, never passed
+     *  through — see the class javadoc. */
     private byte[] maybeRewrite(byte[] bytes, String topic, String which) {
         EnvelopeCodec.Parsed parsed = sourceCodec.parse(bytes);
         if (parsed == null) return bytes;
         long sourceId = parsed.id();
         RegistryException remembered = negativeCache.get(sourceId);
         if (remembered != null) {
-            return handleError(topic, which, sourceId, remembered, bytes);
+            return handleNotFound(topic, which, sourceId, remembered, bytes);
         }
+        String targetSubject = subjectMode == SubjectMode.TOPIC ? topicSubject(topic, which) : null;
         try {
-            long targetId = resolveTargetGlobalId(sourceId);
+            long targetId = resolveTargetGlobalId(sourceId, targetSubject);
             return targetCodec.encode(targetId, bytes, parsed.payloadOffset());
         } catch (RegistryException e) {
-            negativeCache.put(sourceId, e);
-            return handleError(topic, which, sourceId, e, bytes);
+            if (e.isNotFound()) {
+                negativeCache.put(sourceId, e);
+                return handleNotFound(topic, which, sourceId, e, bytes);
+            }
+            throw failure(topic, which, sourceId, e);
+        } catch (IllegalArgumentException e) {
+            // Target id doesn't fit the target envelope (e.g. Apicurio globalId > 2^31 into
+            // a Confluent header). Permanent.
+            throw failure(topic, which, sourceId, new RegistryException(e.getMessage(), e));
         }
     }
 
-    private long resolveTargetGlobalId(long sourceGlobalId) throws RegistryException {
-        Long cached = cache.get(sourceGlobalId);
+    /** Confluent TopicNameStrategy: {@code <topic>-key} or {@code <topic>-value}. */
+    static String topicSubject(String topic, String which) {
+        return topic + ("key".equals(which) ? "-key" : "-value");
+    }
+
+    private long resolveTargetGlobalId(long sourceGlobalId, String targetSubject) throws RegistryException {
+        CacheKey key = new CacheKey(sourceGlobalId, targetSubject);
+        Long cached = cache.get(key);
         if (cached != null) return cached;
-        long resolved = ensureOnTarget(sourceGlobalId, new HashSet<>(), 0).id();
-        cache.put(sourceGlobalId, resolved);
+        long resolved = ensureOnTarget(sourceGlobalId, targetSubject, new HashSet<>(), 0).id();
+        cache.put(key, resolved);
         return resolved;
     }
 
     /** DFS over schema references. Each referenced schema is upserted to the target before
      *  its parent, and the parent's reference is rewritten to the version the target
      *  assigned (registries number versions independently). Returns the target's
-     *  registration for the source id. */
-    private Registered ensureOnTarget(long sourceGlobalId, HashSet<Long> visiting, int depth)
-            throws RegistryException {
+     *  registration for the source id. {@code targetSubject} overrides the top-level
+     *  subject (TOPIC mode); references always keep their source subject. */
+    private Registered ensureOnTarget(long sourceGlobalId, String targetSubject,
+                                      HashSet<Long> visiting, int depth) throws RegistryException {
         if (depth > maxRefDepth) {
             throw new RegistryException("Schema reference DFS exceeded maxDepth=" + maxRefDepth
                     + " at globalId=" + sourceGlobalId);
@@ -337,7 +391,18 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
             throw new RegistryException("Schema reference cycle detected at globalId=" + sourceGlobalId);
         }
         try {
-            RegistrySchema schema = source.fetchById(sourceGlobalId);
+            RegistrySchema schema;
+            try {
+                schema = source.fetchById(sourceGlobalId);
+            } catch (RegistryException e) {
+                if (depth > 0 && e.isNotFound()) {
+                    // The parent's reference resolved to this id a moment ago, yet the schema
+                    // is gone: a source-registry inconsistency, not a false-positive envelope.
+                    throw new RegistryException("Referenced schema globalId=" + sourceGlobalId
+                            + " is missing from the source registry", e);
+                }
+                throw e;
+            }
             List<SchemaRef> rewritten = new ArrayList<>(schema.references().size());
             for (SchemaRef ref : schema.references()) {
                 Long refSourceId = source.lookupId(ref);
@@ -347,18 +412,22 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
                     rewritten.add(ref);
                     continue;
                 }
-                Registered onTarget = ensureOnTarget(refSourceId, visiting, depth + 1);
-                if (targetSubjectPrefix.isEmpty()) {
+                Registered onTarget = ensureOnTarget(refSourceId, null, visiting, depth + 1);
+                if (subjectMode == SubjectMode.SOURCE && targetSubjectPrefix.isEmpty()) {
                     // A reference is registered under its source subject; the same schema seen
-                    // top-level must go under the prefixed subject, so only seed the cache when
-                    // both registrations would coincide.
-                    cache.put(refSourceId, onTarget.id());
+                    // top-level must go under the prefixed/topic subject, so only seed the cache
+                    // when both registrations would coincide.
+                    cache.put(new CacheKey(refSourceId, null), onTarget.id());
                 }
                 rewritten.add(onTarget.version() != null ? ref.withVersion(onTarget.version()) : ref);
             }
             RegistrySchema toRegister = schema.withReferences(rewritten);
-            if (depth == 0 && !targetSubjectPrefix.isEmpty()) {
-                toRegister = toRegister.withArtifactId(targetSubjectPrefix + schema.artifactId());
+            if (depth == 0) {
+                if (targetSubject != null) {
+                    toRegister = toRegister.withArtifactId(targetSubject);
+                } else if (!targetSubjectPrefix.isEmpty()) {
+                    toRegister = toRegister.withArtifactId(targetSubjectPrefix + schema.artifactId());
+                }
             }
             return target.upsert(toRegister);
         } finally {
@@ -366,8 +435,10 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
         }
     }
 
-    private byte[] handleError(String topic, String which, long sourceGlobalId,
-                                RegistryException e, byte[] bytes) {
+    /** {@code behavior.on.error} applies here and only here: the source registry has no
+     *  schema for the id in the record. */
+    private byte[] handleNotFound(String topic, String which, long sourceGlobalId,
+                                  RegistryException e, byte[] bytes) {
         switch (onError) {
             case FAIL:
                 throw new ConnectException("ApicurioSchemaTransferSmt failed on topic=" + topic
@@ -383,6 +454,21 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
             default:
                 return bytes;
         }
+    }
+
+    /** Transient → {@link RetriableException} (Connect retries per {@code errors.retry.timeout}),
+     *  permanent → {@link ConnectException}. Never a passthrough. */
+    private static ConnectException failure(String topic, String which, long sourceGlobalId,
+                                            RegistryException e) {
+        String msg = "ApicurioSchemaTransferSmt " + (e.isTransient() ? "transient" : "permanent")
+                + " registry failure on topic=" + topic + " " + which + " globalId=" + sourceGlobalId
+                + ": " + e.getMessage();
+        if (e.isTransient()) {
+            LOG.warn(msg);
+            return new RetriableException(msg, e);
+        }
+        LOG.error(msg);
+        return new ConnectException(msg, e);
     }
 
     private boolean topicMatches(String topic) {
@@ -416,9 +502,9 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
         if (target != null) target.close();
     }
 
-    /** Remembers failed source-id lookups for a TTL so records whose payload merely looks
-     *  like an envelope (0x00 prefix, no such schema) don't trigger a registry call each.
-     *  Bounded to the same size as the positive cache. */
+    /** Remembers <em>not-found</em> source ids for a TTL so records whose payload merely
+     *  looks like an envelope (0x00 prefix, no such schema) don't trigger a registry call
+     *  each. Transient and permanent failures are never remembered. Bounded to 10k. */
     static class NegativeCache {
         private final long ttlMs;
         private final LinkedHashMap<Long, Failure> map;
@@ -451,20 +537,25 @@ public class ApicurioSchemaTransferSmt<R extends ConnectRecord<R>> implements Tr
         }
     }
 
+    /** Positive-cache key: the source id plus, in TOPIC mode, the target subject the id
+     *  was registered under. In SOURCE mode the subject is a function of the id, so it
+     *  is {@code null}. */
+    record CacheKey(long sourceId, String targetSubject) {}
+
     static class LruCache {
         private final int max;
-        private final LinkedHashMap<Long, Long> map;
+        private final LinkedHashMap<CacheKey, Long> map;
         LruCache(int max) {
             this.max = max;
             this.map = new LinkedHashMap<>(16, 0.75f, true) {
                 @Override
-                protected boolean removeEldestEntry(Map.Entry<Long, Long> eldest) {
+                protected boolean removeEldestEntry(Map.Entry<CacheKey, Long> eldest) {
                     return size() > LruCache.this.max;
                 }
             };
         }
-        synchronized Long get(long k) { return map.get(k); }
-        synchronized void put(long k, long v) { map.put(k, v); }
+        synchronized Long get(CacheKey k) { return map.get(k); }
+        synchronized void put(CacheKey k, long v) { map.put(k, v); }
         synchronized int size() { return map.size(); }
     }
 }

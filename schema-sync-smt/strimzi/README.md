@@ -53,6 +53,13 @@ Apicurio envelope; their schemas appear in Apicurio as `prod.<topic>-value`.
 
 - `target.subject.prefix` should equal the source alias plus a dot when using
   Strimzi's default replication policy. Drop it with `IdentityReplicationPolicy`.
+  Or set `target.subject.mode: TOPIC` and skip the prefix: the subject is then
+  `<mirrored topic>-value` / `-key`, which also gives every topic its own subject
+  when several source subjects share one schema id.
+- `behavior.on.error` only decides what happens when the source registry has no
+  schema for a record's id. A registry outage or a rejected write always fails the
+  record — transiently, as a Connect `RetriableException` — so set
+  `errors.retry.timeout: -1` on the connector if the task should wait outages out.
 - Every `auth.*` / `ssl.*` key is optional per side; only `url` and `format` are needed.
 - The full key reference is in `docs/api-reference.md` ("SMT configuration keys");
   behaviour on non-schema topics in `docs/operations.md`.

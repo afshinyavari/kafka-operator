@@ -1114,8 +1114,9 @@ Shared discriminated union describing one Kafka attachment, reused by MirrorMake
 |-------|------|---------|-------------|
 | `enabled` | bool | `false` | Master switch. |
 | `cacheSize` | integer | `10000` | LRU cache size for source→target globalId mappings per worker. |
-| `behaviorOnError` | enum | `WARN` | `FAIL` re-throws (worker dies); `WARN` logs + passes through; `IGNORE` drops. Default WARN for false-positive resilience. |
+| `behaviorOnError` | enum | `WARN` | What to do when the **source registry has no schema for a record's id** (a false-positive envelope): `FAIL` re-throws (task fails); `WARN` logs + passes through; `IGNORE` drops. Default WARN for false-positive resilience. Registry outages and rejected writes are *not* governed by this: they always fail the record (transient ones as a Connect `RetriableException`), never pass it through — see [Error classes](#smt-error-classes). |
 | `applyTo` | enum | `VALUE` | `VALUE`, `KEY`, or `BOTH`. |
+| `subjectMode` | enum | `SOURCE` | Target subject for a record's schema. `SOURCE` keeps the source subject. `TOPIC` derives `<mirrored topic>-key` / `-value` from the record (Confluent TopicNameStrategy) — deterministic when one schema is shared by many subjects, and it follows MM2's topic rename. |
 | `applyToTopics` | string[] | `[".*"]` | Topic regex allowlist. Tighten in mixed-format clusters. |
 
 ### SMT configuration keys
@@ -1127,10 +1128,11 @@ The keys `ApicurioSchemaTransferSmt` accepts directly (prefixed `transforms.<nam
 |-----|---------|-------------|
 | `source.url` / `target.url` | — | Registry base URL. Apicurio: the host (the client appends `/apis/registry/v2`). Confluent: the REST root; for Apicurio's compatibility API use `…/apis/ccompat/v7`. |
 | `source.format` / `target.format` | `APICURIO` | `APICURIO` (9-byte envelope, Apicurio v2 REST) or `CONFLUENT` (5-byte envelope, Confluent REST). Independent per side; a `CONFLUENT` source with an `APICURIO` target re-frames the header and maps subject → `artifactId` in group `default`, `schemaType` → artifact type. |
-| `target.subject.prefix` | _(empty)_ | Prepended to the subject/artifactId when a record's schema is registered on the target, so subjects mirror MirrorMaker's topic prefix: with `"prod."`, `orders-value` becomes `prod.orders-value`. Include the trailing dot. Referenced schemas keep their source subject. Empty keeps the source subject. |
+| `target.subject.mode` | `SOURCE` | `SOURCE` registers a record's schema under its source subject (plus `target.subject.prefix`). `TOPIC` derives the subject from the record's topic as `<topic>-key` / `<topic>-value`; the prefix is ignored. Referenced schemas always keep their source subject. See [Subject choice](#smt-subject-choice). |
+| `target.subject.prefix` | _(empty)_ | `SOURCE` mode only. Prepended to the subject/artifactId when a record's schema is registered on the target, so subjects mirror MirrorMaker's topic prefix: with `"prod."`, `orders-value` becomes `prod.orders-value`. Include the trailing dot. Referenced schemas keep their source subject. Empty keeps the source subject. |
 | `cache.size` | `10000` | LRU size for source-id → target-id mappings. |
-| `cache.negative.ttl.ms` | `60000` | How long a failed source-id lookup is remembered before the registry is asked again. `0` disables. |
-| `behavior.on.error` | `WARN` | `FAIL` / `WARN` / `IGNORE`. |
+| `cache.negative.ttl.ms` | `60000` | How long a *not-found* source id is remembered before the registry is asked again. `0` disables. Transient and permanent failures are never remembered. |
+| `behavior.on.error` | `WARN` | `FAIL` / `WARN` / `IGNORE` — applies to *not-found* only; see [Error classes](#smt-error-classes). |
 | `apply.to` | `VALUE` | `VALUE` / `KEY` / `BOTH`. |
 | `apply.to.topics` | `.*` | Comma-separated topic regexes. |
 | `max.ref.depth` | `16` | Reference DFS depth limit. |
@@ -1144,7 +1146,30 @@ The keys `ApicurioSchemaTransferSmt` accepts directly (prefixed `transforms.<nam
 | `<side>.ssl.truststore.password` | — | Truststore password (PKCS12/JKS). |
 | `<side>.ssl.truststore.type` | `PKCS12` | `PKCS12` / `JKS` / `PEM`. |
 
-`<side>` is `source` or `target`. With `target.subject.prefix` set, a schema that appears both as a reference and as a record's top-level schema is registered twice on the target (once under its source subject as a reference, once under the prefixed subject); content is identical, so this is harmless. Reference handling is registry-aware: registries number versions independently, so each referenced schema is registered on the target first and the parent's reference is rewritten to the version the target actually assigned before the parent is registered.
+`<side>` is `source` or `target`. Reference handling is registry-aware: registries number versions independently, so each referenced schema is registered on the target first and the parent's reference is rewritten to the version the target actually assigned before the parent is registered.
+
+#### Error classes
+<a id="smt-error-classes"></a>
+
+A registry call can fail three ways, and only the first is a matter of taste:
+
+| Class | Examples | What the SMT does |
+|-------|----------|-------------------|
+| **Not found** | The source registry has no schema for the id parsed from the record — a payload that merely starts with `0x00` (raw Protobuf, UTF-16BE text), or a genuinely orphaned id. | Routed through `behavior.on.error` (`WARN` passthrough by default) and remembered by the negative cache for `cache.negative.ttl.ms`. |
+| **Transient** | Connection refused, DNS, TLS handshake, timeout, HTTP 408/429/5xx from either registry, IdP down during an OAuth token fetch. | Thrown as a Connect `RetriableException` — the task retries per `errors.retry.timeout` / `errors.retry.delay.max.ms`, or fails if those are 0 (the default). Never cached, never passed through. |
+| **Permanent** | Target rejects the schema (409 incompatible, 422 invalid), 401/403 after a token refresh, a referenced schema missing from the source, a reference cycle, an id that doesn't fit the target envelope. | Thrown as `ConnectException`; the task fails until the cause is fixed. Never cached, never passed through. |
+
+Why passthrough is limited to *not found*: a record that leaves the SMT unrewritten still carries the **source** id in its header. On the target that id belongs to some other schema, or to none, so consumers either decode garbage or fail — and the record is on the target topic for good. A not-found id was undecodable on the source too, so passing it through changes nothing; an outage or a rejected write is a different situation, and a `RetriableException` lets Connect hold the offset and try again.
+
+#### Subject choice
+<a id="smt-subject-choice"></a>
+
+A record's schema is registered on the target under a subject picked by `target.subject.mode`:
+
+- **`SOURCE`** (default) — the subject the schema has on the source, with `target.subject.prefix` prepended. A Confluent schema id can be owned by several subjects (a shared key schema, `RecordNameStrategy`); the SMT then picks the **lexicographically smallest** subject so the choice is the same on every worker and restart. Apicurio globalIds map to exactly one artifact version, so no choice arises.
+- **`TOPIC`** — `<record topic>-key` / `<record topic>-value`, i.e. Confluent's TopicNameStrategy applied to the topic as MM2 named it (already prefixed with the source alias under `DefaultReplicationPolicy`). A shared schema is registered under every topic it is seen on, and the positive cache is keyed by (source id, subject). `target.subject.prefix` is ignored. Prefer this when source topics share schemas, or when source and target should end up with matching TopicNameStrategy subjects without guessing the prefix.
+
+In both modes referenced schemas keep their source subject, so a schema that appears both as a reference and as a record's top-level schema can be registered twice on the target (once under its source subject, once under the prefixed/topic subject); content is identical, so this is harmless.
 
 ### Schema-registry authentication
 
@@ -1181,7 +1206,7 @@ The schema-sync SMT coexists with topics that don't use Apicurio. Six layers of 
 2. **Tombstones (null values)** pass through untouched.
 3. **`applyTo`** keeps the SMT off the side you didn't intend to process (default `VALUE`).
 4. **`applyToTopics`** allowlist skips non-Apicurio topics entirely.
-5. **`behaviorOnError=WARN` (default)** swallows a source-404 (false positive) or target write failure and passes the record through. `FAIL` is available for strict environments. Failed ids are remembered by the negative cache (`cache.negative.ttl.ms`, 60 s) so a false positive costs one registry call per TTL, not one per record.
+5. **`behaviorOnError=WARN` (default)** passes a record through when the source registry has no schema for its id (a false positive). `FAIL` is available for strict environments. Not-found ids are remembered by the negative cache (`cache.negative.ttl.ms`, 60 s) so a false positive costs one registry call per TTL, not one per record. Registry outages and rejected writes are *not* swallowed — see [Error classes](#smt-error-classes).
 6. **Per-record evaluation** — mixed-format topics (some records schema'd, some not) are handled per record.
 
 Edge case: UTF-16BE-encoded XML without a BOM starts with `0x00 0x3C` — the envelope check fires, source registry returns 404, default behavior logs and passes through.

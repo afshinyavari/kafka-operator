@@ -20,7 +20,10 @@ import java.util.Map;
  * Shared HTTP plumbing for the registry clients: JDK {@link HttpClient} with an optional
  * mTLS {@link SSLContext}, {@code Authorization} from an
  * {@link ApicurioClient.AuthProvider}, and a single retry after a 401/403 once the
- * provider has refreshed its credentials.
+ * provider has refreshed its credentials. Failures are classified into
+ * {@link RegistryException.Kind}s: I/O errors and 408/429/5xx are transient, other
+ * non-2xx statuses permanent. Only the subclasses' id lookups produce
+ * {@link RegistryException.Kind#NOT_FOUND}.
  */
 abstract class RestRegistryClient implements SchemaRegistryClient {
 
@@ -41,27 +44,31 @@ abstract class RestRegistryClient implements SchemaRegistryClient {
 
     protected JsonNode getJson(String path) throws RegistryException {
         HttpResponse<byte[]> resp = exchange("GET", path, null, null);
-        if (resp.statusCode() / 100 != 2) {
-            throw new RegistryException("GET " + path + " → " + resp.statusCode());
-        }
+        if (resp.statusCode() / 100 != 2) throw failure("GET", path, resp);
         return parse(resp.body(), path);
     }
 
-    /** Like {@link #getJson} but maps a 404 to {@code null}. */
+    /** Like {@link #getJson} but maps a 404 to {@code null}. The caller decides whether
+     *  that null is a {@link RegistryException.Kind#NOT_FOUND} (the record's own id) or a
+     *  config error (a target endpoint that doesn't exist). */
     protected JsonNode getJsonOrNull(String path) throws RegistryException {
         HttpResponse<byte[]> resp = exchange("GET", path, null, null);
         if (resp.statusCode() == 404) return null;
-        if (resp.statusCode() / 100 != 2) {
-            throw new RegistryException("GET " + path + " → " + resp.statusCode());
-        }
+        if (resp.statusCode() / 100 != 2) throw failure("GET", path, resp);
         return parse(resp.body(), path);
     }
 
     protected byte[] getRaw(String path) throws RegistryException {
         HttpResponse<byte[]> resp = exchange("GET", path, null, null);
-        if (resp.statusCode() / 100 != 2) {
-            throw new RegistryException("GET " + path + " → " + resp.statusCode());
-        }
+        if (resp.statusCode() / 100 != 2) throw failure("GET", path, resp);
+        return resp.body();
+    }
+
+    /** Like {@link #getRaw} but maps a 404 to {@code null}. */
+    protected byte[] getRawOrNull(String path) throws RegistryException {
+        HttpResponse<byte[]> resp = exchange("GET", path, null, null);
+        if (resp.statusCode() == 404) return null;
+        if (resp.statusCode() / 100 != 2) throw failure("GET", path, resp);
         return resp.body();
     }
 
@@ -69,10 +76,7 @@ abstract class RestRegistryClient implements SchemaRegistryClient {
     protected JsonNode postJson(String path, byte[] body, Map<String, String> headers)
             throws RegistryException {
         HttpResponse<byte[]> resp = exchange("POST", path, body, headers);
-        if (resp.statusCode() / 100 != 2) {
-            throw new RegistryException("POST " + path + " → " + resp.statusCode()
-                    + " body=" + new String(resp.body(), StandardCharsets.UTF_8));
-        }
+        if (resp.statusCode() / 100 != 2) throw failure("POST", path, resp);
         return parse(resp.body(), path);
     }
 
@@ -81,11 +85,20 @@ abstract class RestRegistryClient implements SchemaRegistryClient {
             throws RegistryException {
         HttpResponse<byte[]> resp = exchange("POST", path, body, headers);
         if (resp.statusCode() == 404) return null;
-        if (resp.statusCode() / 100 != 2) {
-            throw new RegistryException("POST " + path + " → " + resp.statusCode()
-                    + " body=" + new String(resp.body(), StandardCharsets.UTF_8));
-        }
+        if (resp.statusCode() / 100 != 2) throw failure("POST", path, resp);
         return parse(resp.body(), path);
+    }
+
+    /** Non-2xx → exception classified by status: 408/429/5xx transient, other 4xx permanent. */
+    private RegistryException failure(String method, String path, HttpResponse<byte[]> resp) {
+        String body = resp.body() == null ? "" : new String(resp.body(), StandardCharsets.UTF_8);
+        String msg = method + " " + baseUrl + path + " → " + resp.statusCode();
+        if (!body.isBlank()) msg += " body=" + abbreviate(body);
+        return RegistryException.forStatus(resp.statusCode(), msg);
+    }
+
+    private static String abbreviate(String s) {
+        return s.length() <= 500 ? s : s.substring(0, 500) + "…";
     }
 
     private static JsonNode parse(byte[] body, String path) throws RegistryException {
@@ -124,8 +137,13 @@ abstract class RestRegistryClient implements SchemaRegistryClient {
         if (header != null) b.header("Authorization", header);
         try {
             return http.send(b.build(), BodyHandlers.ofByteArray());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw RegistryException.transientError("Interrupted: " + method + " " + baseUrl + path, e);
         } catch (Exception e) {
-            throw new RegistryException("HTTP request failed: " + method + " " + baseUrl + path, e);
+            // Connection refused, DNS, TLS handshake, read timeout — all worth a retry.
+            throw RegistryException.transientError("HTTP request failed: " + method + " " + baseUrl + path
+                    + ": " + e.getMessage(), e);
         }
     }
 

@@ -101,14 +101,18 @@ public class ApicurioClient extends RestRegistryClient {
 
     @Override
     public RegistrySchema fetchById(long globalId) throws RegistryException {
-        byte[] content = getRaw(V2 + "/ids/globalIds/" + globalId);
+        byte[] content = getRawOrNull(V2 + "/ids/globalIds/" + globalId);
+        if (content == null) {
+            throw RegistryException.notFound("No schema for globalId " + globalId + " at " + baseUrl);
+        }
         // Identity — v2 has no metadata-by-globalId endpoint, so search for the artifact
-        // owning the version with this globalId. The result carries `id` and `type`;
-        // `groupId` is omitted for the default group.
+        // owning the version with this globalId. A globalId belongs to exactly one
+        // artifact version in Apicurio, so the hit is unambiguous. The result carries
+        // `id` and `type`; `groupId` is omitted for the default group.
         JsonNode search = getJson(V2 + "/search/artifacts?globalId=" + globalId);
         JsonNode artifacts = search.get("artifacts");
         if (artifacts == null || !artifacts.isArray() || artifacts.isEmpty()) {
-            throw new RegistryException("No artifact found for globalId " + globalId);
+            throw RegistryException.notFound("No artifact owns globalId " + globalId + " at " + baseUrl);
         }
         JsonNode a = artifacts.get(0);
         String groupId = textOrDefault(a.get("groupId"), "default");

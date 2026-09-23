@@ -95,12 +95,16 @@ public class OAuthTokenProvider {
         HttpResponse<byte[]> resp;
         try {
             resp = http.send(req, BodyHandlers.ofByteArray());
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw RegistryException.transientError("OAuth token request interrupted: " + tokenUrl, e);
         } catch (Exception e) {
-            throw new RegistryException("OAuth token request failed: " + tokenUrl, e);
+            throw RegistryException.transientError("OAuth token request failed: " + tokenUrl, e);
         }
         if (resp.statusCode() / 100 != 2) {
-            throw new RegistryException("OAuth token endpoint " + tokenUrl + " → " + resp.statusCode()
-                    + " body=" + new String(resp.body(), StandardCharsets.UTF_8));
+            // 5xx: the IdP is down, retry later. 4xx: bad client credentials — permanent.
+            throw RegistryException.forStatus(resp.statusCode(), "OAuth token endpoint " + tokenUrl
+                    + " → " + resp.statusCode() + " body=" + new String(resp.body(), StandardCharsets.UTF_8));
         }
         try {
             JsonNode json = MAPPER.readTree(resp.body());

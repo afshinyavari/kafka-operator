@@ -23,11 +23,19 @@ public class Mm2SchemaSyncConfig {
     @ValidationRule(value = "self >= 16", message = "cacheSize must be at least 16")
     private int cacheSize = 10_000;
 
-    /** Behavior when the SMT encounters an error (e.g. source returns 404 for what
-     *  looked like a globalId, or target registry write fails). WARN (default) logs
-     *  and passes the record through unchanged — safer in mixed-format clusters. FAIL
-     *  bubbles the exception (Connect worker dies). IGNORE drops the record. */
+    /** Behavior when the source registry has no schema for the id in a record (a
+     *  payload that merely starts with {@code 0x00}). WARN (default) logs and passes the
+     *  record through unchanged — safer in mixed-format clusters. FAIL bubbles the
+     *  exception (Connect task fails). IGNORE drops the record. Registry outages and
+     *  rejected writes are never subject to this setting: they always fail the record
+     *  (transient ones retriably), since passing it through would ship a wrong id. */
     private OnError behaviorOnError = OnError.WARN;
+
+    /** Which target subject a record's schema is registered under. SOURCE (default)
+     *  keeps the source subject. TOPIC derives it from the mirrored topic as
+     *  {@code <topic>-key} / {@code <topic>-value}, which follows MM2's topic rename and
+     *  is deterministic when one schema is shared by many subjects. */
+    private SubjectMode subjectMode = SubjectMode.SOURCE;
 
     /** Which record component to process. Default VALUE matches the common case
      *  where only the value is schema'd. */
@@ -38,6 +46,7 @@ public class Mm2SchemaSyncConfig {
 
     public enum OnError { FAIL, WARN, IGNORE }
     public enum ApplyTo { VALUE, KEY, BOTH }
+    public enum SubjectMode { SOURCE, TOPIC }
 
     public boolean isEnabled() { return enabled; }
     public void setEnabled(boolean enabled) { this.enabled = enabled; }
@@ -50,6 +59,9 @@ public class Mm2SchemaSyncConfig {
 
     public ApplyTo getApplyTo() { return applyTo; }
     public void setApplyTo(ApplyTo applyTo) { this.applyTo = applyTo; }
+
+    public SubjectMode getSubjectMode() { return subjectMode; }
+    public void setSubjectMode(SubjectMode subjectMode) { this.subjectMode = subjectMode; }
 
     public List<String> getApplyToTopics() { return applyToTopics; }
     public void setApplyToTopics(List<String> applyToTopics) { this.applyToTopics = applyToTopics; }

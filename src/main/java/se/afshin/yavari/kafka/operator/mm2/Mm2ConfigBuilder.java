@@ -98,6 +98,7 @@ public class Mm2ConfigBuilder {
             p.put(prefix + "transforms.schemaSync.cache.size", String.valueOf(schemaSync.getCacheSize()));
             p.put(prefix + "transforms.schemaSync.behavior.on.error", schemaSync.getBehaviorOnError().name());
             p.put(prefix + "transforms.schemaSync.apply.to", schemaSync.getApplyTo().name());
+            p.put(prefix + "transforms.schemaSync.target.subject.mode", schemaSync.getSubjectMode().name());
             p.put(prefix + "transforms.schemaSync.apply.to.topics",
                     String.join(",", schemaSync.getApplyToTopics()));
             // Schema-registry auth — OAuth2 client-credentials read from a mounted Secret dir.
