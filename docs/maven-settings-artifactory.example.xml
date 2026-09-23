@@ -1,0 +1,111 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Maven settings skeleton for an Artifactory setup WITHOUT virtual repositories:
+  one remote for Maven Central, one remote for packages.confluent.io, and two local
+  repositories (releases, snapshots).
+
+  Usage: copy to ~/.m2/settings.xml, replace every <...> placeholder, and export
+  ARTIFACTORY_USER / ARTIFACTORY_TOKEN (identity/API token, not the password).
+  Alternatively use `mvn -encrypt-master-password` + `mvn -encrypt-password` and put
+  the encrypted values inline.
+
+  Verify with (in test-clients/kafka-client-app, which pulls from both Central and Confluent):
+    mvn -X dependency:resolve 2>&1 | grep -iE "artifactory|confluent.io|repo1.maven"
+  Only Artifactory URLs should appear.
+-->
+<settings xmlns="http://maven.apache.org/SETTINGS/1.2.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.2.0
+                              https://maven.apache.org/xsd/settings-1.2.0.xsd">
+
+  <!-- One server block per repository id Maven must authenticate against. -->
+  <servers>
+    <server>
+      <id>artifactory-central</id>
+      <username>${env.ARTIFACTORY_USER}</username>
+      <password>${env.ARTIFACTORY_TOKEN}</password>
+    </server>
+    <server>
+      <id>artifactory-confluent</id>
+      <username>${env.ARTIFACTORY_USER}</username>
+      <password>${env.ARTIFACTORY_TOKEN}</password>
+    </server>
+    <server>
+      <id>artifactory-releases</id>
+      <username>${env.ARTIFACTORY_USER}</username>
+      <password>${env.ARTIFACTORY_TOKEN}</password>
+    </server>
+    <server>
+      <id>artifactory-snapshots</id>
+      <username>${env.ARTIFACTORY_USER}</username>
+      <password>${env.ARTIFACTORY_TOKEN}</password>
+    </server>
+  </servers>
+
+  <!--
+    Mirrors match on repository id. Do NOT use mirrorOf=* here: that would send
+    Confluent requests to the Central remote. `central` is Maven's implicit id for
+    Maven Central; `confluent` must be the id the project poms use for
+    https://packages.confluent.io/maven/ (add more ids comma-separated if they differ).
+  -->
+  <mirrors>
+    <mirror>
+      <id>artifactory-central</id>
+      <name>Artifactory remote for Maven Central</name>
+      <url>https://<artifactory-host>/artifactory/<maven-central-remote></url>
+      <mirrorOf>central</mirrorOf>
+    </mirror>
+    <mirror>
+      <id>artifactory-confluent</id>
+      <name>Artifactory remote for packages.confluent.io</name>
+      <url>https://<artifactory-host>/artifactory/<confluent-remote></url>
+      <mirrorOf>confluent</mirrorOf>
+    </mirror>
+  </mirrors>
+
+  <profiles>
+    <profile>
+      <id>artifactory</id>
+      <repositories>
+        <!-- Confluent explicitly, so it resolves even in projects whose pom does not declare it. -->
+        <repository>
+          <id>artifactory-confluent</id>
+          <url>https://<artifactory-host>/artifactory/<confluent-remote></url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+        <!-- Local repositories. -->
+        <repository>
+          <id>artifactory-releases</id>
+          <url>https://<artifactory-host>/artifactory/<local-release-repo></url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>false</enabled></snapshots>
+        </repository>
+        <repository>
+          <id>artifactory-snapshots</id>
+          <url>https://<artifactory-host>/artifactory/<local-snapshot-repo></url>
+          <releases><enabled>false</enabled></releases>
+          <snapshots><enabled>true</enabled><updatePolicy>always</updatePolicy></snapshots>
+        </repository>
+      </repositories>
+      <pluginRepositories>
+        <!-- Plugins come from Central via the mirror above; add internal plugin repos here if needed. -->
+        <pluginRepository>
+          <id>artifactory-releases</id>
+          <url>https://<artifactory-host>/artifactory/<local-release-repo></url>
+          <releases><enabled>true</enabled></releases>
+          <snapshots><enabled>false</enabled></snapshots>
+        </pluginRepository>
+      </pluginRepositories>
+      <!-- For poms whose <distributionManagement> references these properties. -->
+      <properties>
+        <artifactory.releases.url>https://<artifactory-host>/artifactory/<local-release-repo></artifactory.releases.url>
+        <artifactory.snapshots.url>https://<artifactory-host>/artifactory/<local-snapshot-repo></artifactory.snapshots.url>
+      </properties>
+    </profile>
+  </profiles>
+
+  <activeProfiles>
+    <activeProfile>artifactory</activeProfile>
+  </activeProfiles>
+</settings>
