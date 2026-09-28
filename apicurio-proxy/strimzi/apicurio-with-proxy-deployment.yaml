@@ -1,17 +1,20 @@
 # Apicurio Registry with the RBAC proxy as a sidecar. Only the proxy's TLS port is exposed;
 # Apicurio listens on 127.0.0.1:8080 inside the pod.
 #
+# ConfigMap: apicurio-proxy-policy with key policy.yaml (role rules + certificate → role mapping).
 # Secrets expected in the namespace (all PKCS12; JKS/PEM work too, see README):
 #   apicurio-proxy-server-tls    server.p12 + password    proxy's own server certificate
 #   my-cluster-clients-ca-cert   ca.p12 + ca.password     Strimzi clients CA — trust anchor for client certs
 #   apicurio-proxy-kafka         user.p12 + user.password Strimzi KafkaUser secret for the proxy (kafkauser.yaml)
 #   my-cluster-cluster-ca-cert   ca.p12 + ca.password     Strimzi cluster CA — trust anchor for Kafka
-#   apicurio-proxy-policy        policy.yaml              role rules for OIDC users
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: apicurio-registry
   namespace: kafka
+  annotations:
+    # Stakater Reloader: roll the pods when the policy ConfigMap changes
+    configmap.reloader.stakater.com/reload: apicurio-proxy-policy
 spec:
   replicas: 1
   selector:
@@ -76,7 +79,7 @@ spec:
         - { name: clients-ca, secret: { secretName: my-cluster-clients-ca-cert } }
         - { name: kafka-user, secret: { secretName: apicurio-proxy-kafka } }
         - { name: cluster-ca, secret: { secretName: my-cluster-cluster-ca-cert } }
-        - { name: policy,     secret: { secretName: apicurio-proxy-policy } }
+        - { name: policy,     configMap: { name: apicurio-proxy-policy } }
 ---
 apiVersion: v1
 kind: Service

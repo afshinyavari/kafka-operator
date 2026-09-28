@@ -12,6 +12,7 @@ import org.junit.jupiter.api.Test;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static se.afshin.yavari.rbac.KafkaAclPolicySource.denies;
 import static se.afshin.yavari.rbac.KafkaAclPolicySource.evaluate;
 import static se.afshin.yavari.rbac.KafkaAclPolicySource.topicForArtifact;
 import static se.afshin.yavari.rbac.PolicyEngine.Action.*;
@@ -140,5 +141,31 @@ class KafkaAclPolicySourceTest {
     @Test
     void emptySnapshotDeniesEverything() {
         assertThat(evaluate(List.of(), SVC, "orders", READ)).isFalse();
+    }
+
+    // ── explicit DENY lookup (veto for policy-file grants) ───────────────────
+
+    private static AclBinding deny(String principal, String name, PatternType pattern, AclOperation op) {
+        return acl(principal, ResourceType.TOPIC, name, pattern, op, AclPermissionType.DENY);
+    }
+
+    @Test
+    void denyOnSameOperationOrAllIsFound() {
+        assertThat(denies(List.of(deny(SVC, "orders", PatternType.LITERAL, AclOperation.WRITE)), SVC, "orders", WRITE)).isTrue();
+        assertThat(denies(List.of(deny(SVC, "ord", PatternType.PREFIXED, AclOperation.ALL)), SVC, "orders", READ)).isTrue();
+        assertThat(denies(List.of(deny("*", "orders", PatternType.LITERAL, AclOperation.DELETE)), SVC, "orders", DELETE)).isTrue();
+    }
+
+    @Test
+    void denyOnOtherOperationTopicOrPrincipalIsNotFound() {
+        assertThat(denies(List.of(deny(SVC, "orders", PatternType.LITERAL, AclOperation.WRITE)), SVC, "orders", READ)).isFalse();
+        assertThat(denies(List.of(deny(SVC, "orders", PatternType.LITERAL, AclOperation.DESCRIBE)), SVC, "orders", READ)).isFalse();
+        assertThat(denies(List.of(deny(SVC, "payments", PatternType.LITERAL, AclOperation.ALL)), SVC, "orders", READ)).isFalse();
+        assertThat(denies(List.of(deny("CN=other", "orders", PatternType.LITERAL, AclOperation.ALL)), SVC, "orders", READ)).isFalse();
+    }
+
+    @Test
+    void allowEntriesAreNotDenies() {
+        assertThat(denies(List.of(allow("orders", PatternType.LITERAL, AclOperation.ALL)), SVC, "orders", WRITE)).isFalse();
     }
 }

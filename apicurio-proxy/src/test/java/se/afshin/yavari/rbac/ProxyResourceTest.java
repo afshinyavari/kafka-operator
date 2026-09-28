@@ -305,8 +305,18 @@ class ProxyResourceTest {
 
     @Test
     @TestSecurity(user = "CN=orders-service", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
-    void mtlsServiceIgnoresRoleFile() {
+    void mtlsServiceWithoutMappingIgnoresRoleFile() {
         aclSnapshot(); // no ACLs at all; "orders" is granted to orders-team in the role file
+        given().get("/apis/registry/v2/groups/default/artifacts/orders").then().statusCode(403);
+    }
+
+    @Test
+    @TestSecurity(user = "CN=payments-app", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
+    void mtlsServiceMappedToRoleGetsThatRolesRules() {
+        aclSnapshot(); // no ACLs; test-policy.yaml maps CN=payments-app → invoices-team
+        int status = given().get("/apis/registry/v2/groups/default/artifacts/invoices")
+            .then().extract().statusCode();
+        assertThat(status).isNotEqualTo(403);
         given().get("/apis/registry/v2/groups/default/artifacts/orders").then().statusCode(403);
     }
 

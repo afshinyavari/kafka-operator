@@ -4,8 +4,8 @@ Humans authenticate with OIDC bearer tokens and are authorized by `policy.yaml` 
 artifacts). Services authenticate with mTLS client certificates and are authorized by their
 **Kafka ACLs**: WRITE on topic `orders` ⇒ READ+WRITE on artifacts `orders-key` / `orders-value`;
 READ/DESCRIBE ⇒ READ; DELETE ⇒ DELETE; ALL ⇒ everything. DENY wins, PREFIXED and `*` patterns
-work as in Kafka. The two paths never mix: a certificate identity is never checked against the
-role file, and an OIDC identity never against ACLs.
+work as in Kafka. An OIDC identity is never checked against ACLs. A certificate identity can in
+addition be given roles in `policy.yaml` (see [Rules that are not Kafka ACLs](#rules-that-are-not-kafka-acls)).
 
 Both mechanisms are active on one HTTPS listener: a request with `Authorization: Bearer …`
 goes the OIDC way, a request presenting a trusted client certificate goes the mTLS way, a
@@ -39,6 +39,54 @@ docker push registry.example.com/apicurio-rbac-proxy:1.0
 
 The module builds standalone (no other part of this repository is needed).
 
+## Policy file
+
+`policy.yaml` is read at startup from `POLICY_FILE` (default `/opt/rbac/policy.yaml`). The
+manifests mount it from the ConfigMap `apicurio-proxy-policy`:
+
+```bash
+kubectl -n kafka create configmap apicurio-proxy-policy --from-file=policy.yaml \
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+The Deployments carry `configmap.reloader.stakater.com/reload: apicurio-proxy-policy`, so
+Stakater Reloader rolls the pods on a change. Without Reloader, run `kubectl rollout restart`;
+the proxy's own file watcher does not see ConfigMap updates (Kubernetes swaps a symlink). The
+image contains an example `policy.yaml` that is used only when nothing is mounted.
+
+```yaml
+principals:                         # certificate principal → roles (mTLS only)
+  "CN=ci-pipeline": [schema-admin]
+rules:                              # roles → artifacts and actions (OIDC and mapped certificates)
+  - roles: [orders-team]
+    resources:
+      - artifact: orders-value      # exact artifact id, or "*"
+        actions: [READ, WRITE]      # READ | WRITE | DELETE
+  - roles: [schema-admin]
+    resources:
+      - artifact: "*"
+        actions: [READ, WRITE, DELETE]
+```
+
+OIDC roles come from the token claim `OIDC_ROLE_CLAIM`. Rule artifacts are matched exactly:
+the `-value`/`-key` → topic mapping applies to Kafka ACLs only.
+
+### Rules that are not Kafka ACLs
+
+`principals` gives a client certificate roles, so it gets the same `rules` as an OIDC user
+with those roles. A certificate request is then allowed when **either** its Kafka ACLs **or**
+its mapped roles allow it, with two limits:
+
+- A Kafka `DENY` on the artifact's topic for the same operation (READ, WRITE, DELETE) or `ALL`
+  blocks the role grant too, so a DENY in Kafka always wins.
+- While the ACL source is enabled but has not loaded a snapshot yet, certificate requests are
+  denied (a DENY cannot be ruled out). With `PROXY_KAFKA_BOOTSTRAP` unset, only the mapping applies.
+
+Keys are the certificate principal as `PROXY_MTLS_PRINCIPAL` derives it: in `DN` mode the
+subject DN (`CN=<name>` for Strimzi `KafkaUser`s; spacing after commas does not matter), in
+`CN` mode the bare common name. A Kafka-style `User:` prefix is accepted. Roles carried by the
+identity itself are never used for certificates, only the mapping.
+
 ## Secrets
 
 | Secret | Keys | Source |
@@ -47,7 +95,6 @@ The module builds standalone (no other part of this repository is needed).
 | `my-cluster-clients-ca-cert` | `ca.p12`, `ca.password` | Created by Strimzi — trust anchor for client certificates |
 | `apicurio-proxy-kafka` | `user.p12`, `user.password` | Created by Strimzi from `kafkauser.yaml` |
 | `my-cluster-cluster-ca-cert` | `ca.p12`, `ca.password` | Created by Strimzi — trust anchor for Kafka |
-| `apicurio-proxy-policy` | `policy.yaml` | `kubectl -n kafka create secret generic apicurio-proxy-policy --from-file=policy.yaml` |
 
 All stores can be JKS (`*_TYPE=JKS`) or PEM (`*_TYPE=PEM`, with `PROXY_TLS_CERT` / `PROXY_TLS_KEY` /
 `PROXY_TLS_CA` and `PROXY_KAFKA_SSL_CERT` / `_KEY` / `_CA`). PEM private keys must be PKCS#8
@@ -61,7 +108,7 @@ kubectl apply -f apicurio-with-proxy-deployment.yaml     # or apicurio-operator-
 kubectl -n kafka logs deploy/apicurio-registry -c rbac-proxy | grep -E 'PolicyEngine|KafkaAclPolicySource|Listening'
 ```
 
-Expected on start: `[PolicyEngine] Loaded N rules`, `[KafkaAclPolicySource] Loaded N ACL bindings`
+Expected on start: `[PolicyEngine] Loaded N rules and M principal mappings`, `[KafkaAclPolicySource] Loaded N ACL bindings`
 and `Listening on: https://0.0.0.0:8443`. Readiness is down until both have happened.
 
 A service with a Strimzi `KafkaUser` certificate (Secret `orders-service`):
@@ -105,7 +152,7 @@ ship the audit stream to a Kafka topic.
 | `PROXY_TLS_KEYSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | Server identity. PEM: `PROXY_TLS_CERT` + `PROXY_TLS_KEY`. |
 | `PROXY_TLS_TRUSTSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | CAs client certificates must chain to. PEM: `PROXY_TLS_CA`. |
 | `PROXY_MTLS_PRINCIPAL` | `DN` | `DN` (RFC 2253 subject, Strimzi default) or `CN`. |
-| `PROXY_KAFKA_BOOTSTRAP` | — | Enables the Kafka ACL source. Without it certificate identities are denied. |
+| `PROXY_KAFKA_BOOTSTRAP` | — | Enables the Kafka ACL source. Without it certificate identities get only what `principals` in `policy.yaml` grants. |
 | `PROXY_KAFKA_SECURITY_PROTOCOL` | `SSL` | `SSL` or `PLAINTEXT`. |
 | `PROXY_KAFKA_SSL_KEYSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | Proxy's Kafka client identity. PEM: `PROXY_KAFKA_SSL_CERT` + `_KEY`. |
 | `PROXY_KAFKA_SSL_TRUSTSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | Kafka cluster CA. PEM: `PROXY_KAFKA_SSL_CA`. |

@@ -21,7 +21,8 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static se.afshin.yavari.rbac.PolicyEngine.Action.*;
 
-/** Either/or dispatch: OIDC identities → role file, certificate identities → Kafka ACLs. */
+/** Dispatch: OIDC identities → role file; certificate identities → Kafka ACLs, plus role
+ *  rules for roles mapped to the certificate principal in the policy file's {@code principals}. */
 class PolicyEngineDispatchTest {
 
     private PolicyEngine engine;
@@ -31,11 +32,24 @@ class PolicyEngineDispatchTest {
     void setUp() throws Exception {
         Path policy = Files.createTempFile("policy", ".yaml");
         Files.writeString(policy, """
+            principals:
+              "CN=payments-app": [payments-writer]
+              "CN=ci-pipeline, O=Acme": [schema-admin]
+              "User:CN=kafka-style": [payments-writer]
+              "orders-service": [payments-writer]
             rules:
               - roles: [orders-team]
                 resources:
                   - artifact: orders-value
                     actions: [READ, WRITE]
+              - roles: [payments-writer]
+                resources:
+                  - artifact: payments-value
+                    actions: [READ, WRITE]
+              - roles: [schema-admin]
+                resources:
+                  - artifact: "*"
+                    actions: [READ, WRITE, DELETE]
             """);
         engine = new PolicyEngine();
         engine.reload(policy);
@@ -77,7 +91,7 @@ class PolicyEngineDispatchTest {
     }
 
     @Test
-    void mtlsIdentityNeverConsultsRoleFile() {
+    void mtlsIdentityIgnoresRolesCarriedOnTheIdentity() {
         SecurityIdentity withRole = QuarkusSecurityIdentity.builder()
                 .setPrincipal(new QuarkusPrincipal("CN=nobody")).addRole("orders-team")
                 .addAttribute(MtlsPrincipal.AUTH_ATTRIBUTE, MtlsPrincipal.AUTH_MTLS).build();
@@ -88,6 +102,80 @@ class PolicyEngineDispatchTest {
     void mtlsIdentityDeniedWhenAclSourceDisabled() {
         engine.acls = new KafkaAclPolicySource(null, List.of("-value"));
         assertThat(engine.isAllowed(mtls("CN=orders-service"), "orders-value", WRITE)).isFalse();
+    }
+
+    // ── principals: certificate → roles ───────────────────────────────────────
+
+    @Test
+    void mappedPrincipalGetsRoleRulesWithoutAnyAcl() {
+        assertThat(engine.isAllowed(mtls("CN=payments-app"), "payments-value", WRITE)).isTrue();
+        assertThat(engine.isAllowed(mtls("CN=payments-app"), "payments-value", DELETE)).isFalse();
+        assertThat(engine.isAllowed(mtls("CN=payments-app"), "orders-value", READ)).isFalse();
+    }
+
+    @Test
+    void mappingAddsToKafkaAcls() {
+        // orders-service: WRITE on topic orders from Kafka; its CN-mode mapping is not active in DN mode
+        assertThat(engine.isAllowed(mtls("CN=orders-service"), "orders-value", WRITE)).isTrue();
+        assertThat(engine.isAllowed(mtls("CN=orders-service"), "payments-value", READ)).isFalse();
+    }
+
+    @Test
+    void mappingKeysAreNormalizedDnsWithOptionalUserPrefix() {
+        assertThat(engine.isAllowed(mtls("CN=ci-pipeline,O=Acme"), "anything", DELETE)).isTrue();
+        assertThat(engine.isAllowed(mtls("CN=kafka-style"), "payments-value", WRITE)).isTrue();
+    }
+
+    @Test
+    void mappingKeysMatchBareCnInCnMode() {
+        engine.principalMode = MtlsPrincipal.Mode.CN;
+        assertThat(engine.isAllowed(mtls("CN=orders-service,O=Acme"), "payments-value", WRITE)).isTrue();
+    }
+
+    @Test
+    void mappingNeverAppliesToOidcIdentities() {
+        assertThat(engine.isAllowed(oidc("CN=payments-app"), "payments-value", READ)).isFalse();
+    }
+
+    @Test
+    void kafkaDenyVetoesPolicyGrant() {
+        acls.replaceSnapshot(List.of(new AclBinding(
+                new ResourcePattern(ResourceType.TOPIC, "payments", PatternType.LITERAL),
+                new AccessControlEntry("User:CN=payments-app", "*", AclOperation.WRITE, AclPermissionType.DENY))));
+        assertThat(engine.isAllowed(mtls("CN=payments-app"), "payments-value", WRITE)).isFalse();
+        // the DENY targets WRITE only
+        assertThat(engine.isAllowed(mtls("CN=payments-app"), "payments-value", READ)).isTrue();
+    }
+
+    @Test
+    void mappingWorksWhenAclSourceDisabled() {
+        engine.acls = new KafkaAclPolicySource(null, List.of("-value"));
+        assertThat(engine.isAllowed(mtls("CN=payments-app"), "payments-value", WRITE)).isTrue();
+    }
+
+    @Test
+    void mappingDeniedWhileEnabledAclSourceHasNoSnapshot() {
+        // Enabled but never loaded: a Kafka DENY cannot be ruled out, so fail closed.
+        KafkaAclPolicySource failing = new KafkaAclPolicySource(() -> {
+            throw new IllegalStateException("kafka down");
+        }, List.of("-value"));
+        failing.refresh();
+        engine.acls = failing;
+        assertThat(engine.isAllowed(mtls("CN=payments-app"), "payments-value", WRITE)).isFalse();
+    }
+
+    @Test
+    void reloadReplacesMappings() throws Exception {
+        Path policy = Files.createTempFile("policy", ".yaml");
+        Files.writeString(policy, """
+            rules:
+              - roles: [payments-writer]
+                resources:
+                  - artifact: payments-value
+                    actions: [READ, WRITE]
+            """);
+        engine.reload(policy);
+        assertThat(engine.isAllowed(mtls("CN=payments-app"), "payments-value", WRITE)).isFalse();
     }
 
     @Test

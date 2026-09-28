@@ -1,3 +1,5 @@
+principals:
+  "CN=payments-app": [invoices-team]
 rules:
   - roles: [orders-team]
     resources:

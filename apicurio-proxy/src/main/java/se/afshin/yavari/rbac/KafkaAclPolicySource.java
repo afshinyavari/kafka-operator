@@ -39,7 +39,8 @@ import java.util.function.Supplier;
  *
  * <p>The bean keeps a snapshot of all ACL bindings from {@code Admin.describeAcls}, refreshed
  * every {@code proxy.kafka.acl.refresh-seconds}. It is enabled by {@code PROXY_KAFKA_BOOTSTRAP};
- * without it, certificate identities are denied. A failed refresh keeps the last snapshot.
+ * without it, certificate identities get only what the policy file's {@code principals} mapping
+ * grants. A failed refresh keeps the last snapshot.
  */
 @ApplicationScoped
 public class KafkaAclPolicySource {
@@ -72,7 +73,7 @@ public class KafkaAclPolicySource {
         this.suffixes = Arrays.stream(suffixCsv.split(",")).map(String::trim).filter(x -> !x.isEmpty()).toList();
         String bootstrap = System.getenv("PROXY_KAFKA_BOOTSTRAP");
         if (bootstrap == null || bootstrap.isBlank()) {
-            System.out.println("[KafkaAclPolicySource] PROXY_KAFKA_BOOTSTRAP unset — mTLS identities will be denied");
+            System.out.println("[KafkaAclPolicySource] PROXY_KAFKA_BOOTSTRAP unset — mTLS identities are authorized by policy-file principal mappings only");
             return;
         }
         this.admin = Admin.create(adminProps(System::getenv));
@@ -134,6 +135,16 @@ public class KafkaAclPolicySource {
         return evaluate(acls, principal, topicForArtifact(artifact, suffixes), action);
     }
 
+    /** True when the snapshot holds a DENY for this principal and artifact's topic on the
+     *  action's own operation (or ALL). Vetoes grants from the policy file's principal→role
+     *  mapping, so a DENY in Kafka always wins. No snapshot → {@code false}; callers gate on
+     *  {@link #isLoaded()}. */
+    public boolean isDenied(String principal, String artifact, PolicyEngine.Action action) {
+        List<AclBinding> acls = snapshot.get();
+        if (acls == null) return false;
+        return denies(acls, principal, topicForArtifact(artifact, suffixes), action);
+    }
+
     /** Admin client config from {@code PROXY_KAFKA_*}: bootstrap, security protocol
      *  (SSL default | PLAINTEXT) and PKCS12/JKS/PEM stores via {@link KafkaSslProps}. */
     static Properties adminProps(Function<String, String> env) {
@@ -191,6 +202,23 @@ public class KafkaAclPolicySource {
                 else if (e.permissionType() == AclPermissionType.ALLOW) allowed = true;
             }
             if (allowed && !denied) return true;
+        }
+        return false;
+    }
+
+    /** Explicit-DENY lookup behind {@link #isDenied}: READ/WRITE/DELETE map to the Kafka
+     *  operation of the same name. A DENY on DESCRIBE does not veto READ (as in Kafka). */
+    public static boolean denies(Collection<AclBinding> acls, String principal, String topic,
+                                 PolicyEngine.Action action) {
+        String kafkaPrincipal = "User:" + principal;
+        AclOperation op = AclOperation.valueOf(action.name());
+        for (AclBinding b : acls) {
+            if (!matches(b, kafkaPrincipal, topic)) continue;
+            AccessControlEntry e = b.entry();
+            if (e.permissionType() == AclPermissionType.DENY
+                    && (e.operation() == op || e.operation() == AclOperation.ALL)) {
+                return true;
+            }
         }
         return false;
     }

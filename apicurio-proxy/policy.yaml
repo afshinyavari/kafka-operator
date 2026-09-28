@@ -7,8 +7,17 @@
 #   Auth0:     PRINCIPAL_CLAIM=https://example.com/roles
 #
 # Each rule grants listed roles access to listed artifacts with listed actions.
-# artifact: "*" is a wildcard matching any artifact.
+# artifact: exact artifact id (e.g. "orders-value"), or "*" matching any artifact.
 # Actions: READ, WRITE, DELETE
+#
+# principals: gives mTLS client certificates roles, so they can use the same rules as OIDC
+# users on top of their Kafka ACLs. Key = the certificate principal as PROXY_MTLS_PRINCIPAL
+# derives it (DN mode: "CN=<name>" for Strimzi KafkaUsers; CN mode: the bare CN). A "User:"
+# prefix is accepted. A Kafka DENY on the same topic and operation still wins.
+#
+# principals:
+#   "CN=ci-pipeline": [schema-admin]
+#   "CN=payments-app": [orders-team]
 
 rules:
   - roles:

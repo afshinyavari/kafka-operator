@@ -19,11 +19,14 @@ import java.nio.file.WatchService;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import javax.security.auth.x500.X500Principal;
 
 @ApplicationScoped
 public class PolicyEngine {
@@ -32,6 +35,8 @@ public class PolicyEngine {
 
     record Resource(String artifact, List<Action> actions) {}
     record Rule(List<String> roles, List<Resource> resources) {}
+    /** One loaded policy file: role rules plus certificate principal → roles. Swapped atomically. */
+    record Policy(List<Rule> rules, Map<String, Set<String>> principalRoles) {}
 
     @ConfigProperty(name = "proxy.policy.file")
     String policyFilePath;
@@ -50,7 +55,7 @@ public class PolicyEngine {
         return principalMode == null ? MtlsPrincipal.Mode.DN : principalMode;
     }
 
-    private final AtomicReference<List<Rule>> rules = new AtomicReference<>(List.of());
+    private final AtomicReference<Policy> policy = new AtomicReference<>(new Policy(List.of(), Map.of()));
     private volatile boolean initialized = false;
     private volatile boolean running = true;
     private Thread watchThread;
@@ -72,16 +77,45 @@ public class PolicyEngine {
     boolean isInitialized() { return initialized; }
 
     /**
-     * Either/or dispatch: a certificate-authenticated identity is judged only by Kafka
-     * ACLs; any other (OIDC) identity only by the role rules. No fallback between them.
+     * An OIDC identity is judged only by the role rules, with the roles from its token. A
+     * certificate identity is allowed by its Kafka ACLs, or by the role rules for the roles
+     * the policy file's {@code principals} section maps its principal to. A Kafka DENY on the
+     * action vetoes such a role grant. With the ACL source enabled but no snapshot yet, a
+     * certificate identity is denied outright, since a DENY cannot be ruled out.
      */
     public boolean isAllowed(SecurityIdentity identity, String artifact, Action action) {
-        if (MtlsPrincipal.isCertificateIdentity(identity)) {
-            // Denied until an ACL snapshot exists (source disabled, or not yet loaded).
-            if (acls == null || !acls.isLoaded()) return false;
-            return acls.isAllowed(MtlsPrincipal.principalOf(identity, principalMode), artifact, action);
+        if (!MtlsPrincipal.isCertificateIdentity(identity)) {
+            return isAllowed(identity.getRoles(), artifact, action);
         }
-        return isAllowed(identity.getRoles(), artifact, action);
+        String principal = MtlsPrincipal.principalOf(identity, principalMode());
+        boolean aclsLoaded = acls != null && acls.isLoaded();
+        if (!aclsLoaded && acls != null && acls.isEnabled()) return false;
+        if (aclsLoaded && acls.isAllowed(principal, artifact, action)) return true;
+        Set<String> mapped = rolesForPrincipal(principal);
+        if (mapped.isEmpty()) return false;
+        if (aclsLoaded && acls.isDenied(principal, artifact, action)) return false;
+        return isAllowed(mapped, artifact, action);
+    }
+
+    /** Roles the policy file maps a certificate principal to; empty when unmapped. */
+    Set<String> rolesForPrincipal(String principal) {
+        return policy.get().principalRoles().getOrDefault(normalizePrincipal(principal), Set.of());
+    }
+
+    /**
+     * Mapping-key form of a principal: an optional Kafka-style {@code User:} prefix is dropped
+     * and a distinguished name is rewritten to RFC 2253 (so {@code "CN=a, O=b"} equals the
+     * certificate's {@code "CN=a,O=b"}). Anything that is not a DN (a bare CN) is kept as is.
+     */
+    static String normalizePrincipal(String principal) {
+        String p = principal.strip();
+        if (p.startsWith("User:")) p = p.substring("User:".length()).strip();
+        if (!p.contains("=")) return p;
+        try {
+            return new X500Principal(p).getName();
+        } catch (IllegalArgumentException notADn) {
+            return p;
+        }
     }
 
     /** Identity → "user:<name>" (certificate subject per mode for mTLS) or "anonymous". */
@@ -94,9 +128,9 @@ public class PolicyEngine {
                 ? "user:" + identity.getPrincipal().getName() : "anonymous";
     }
 
-    /** Role-file rules only (OIDC path). */
+    /** Role-file rules for a set of roles (token roles, or roles mapped to a certificate). */
     public boolean isAllowed(Set<String> callerRoles, String artifact, Action action) {
-        for (Rule rule : rules.get()) {
+        for (Rule rule : policy.get().rules()) {
             if (!Collections.disjoint(callerRoles, rule.roles())) {
                 for (Resource res : rule.resources()) {
                     if (("*".equals(res.artifact()) || res.artifact().equals(artifact))
@@ -131,10 +165,27 @@ public class PolicyEngine {
                     parsed.add(new Rule(roles, resources));
                 }
             }
-            rules.set(parsed);
+            Map<String, Set<String>> principalRoles = parsePrincipals(root.get("principals"));
+            policy.set(new Policy(List.copyOf(parsed), principalRoles));
             initialized = true;
-            System.out.println("[PolicyEngine] Loaded " + parsed.size() + " rules from " + path);
+            System.out.println("[PolicyEngine] Loaded " + parsed.size() + " rules and "
+                    + principalRoles.size() + " principal mappings from " + path);
         }
+    }
+
+    /** {@code principals:} is a map of certificate principal → role name or list of roles. */
+    private static Map<String, Set<String>> parsePrincipals(Object raw) {
+        if (raw == null) return Map.of();
+        if (!(raw instanceof Map<?, ?> map)) {
+            throw new IllegalArgumentException("'principals' must be a map of principal -> roles");
+        }
+        Map<String, Set<String>> out = new HashMap<>();
+        for (Map.Entry<?, ?> e : map.entrySet()) {
+            String key = normalizePrincipal(String.valueOf(e.getKey()));
+            out.computeIfAbsent(key, k -> new HashSet<>()).addAll(toStringList(e.getValue()));
+        }
+        out.replaceAll((k, v) -> Set.copyOf(v));
+        return Map.copyOf(out);
     }
 
     private void watchLoop(Path policyFile) {

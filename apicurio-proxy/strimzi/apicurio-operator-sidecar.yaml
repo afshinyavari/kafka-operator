@@ -6,7 +6,10 @@
 # and a separate Service exposes the proxy's :8443. Verify the field name and the pod labels
 # against your operator version (`kubectl get pods -l app=<cr-name> --show-labels`).
 #
-# Secrets: same as apicurio-with-proxy-deployment.yaml.
+# Secrets and the policy ConfigMap: same as apicurio-with-proxy-deployment.yaml.
+# Reloader: the Deployment is created by the Apicurio operator, so there is no place here for
+# the configmap.reloader.stakater.com/reload annotation. Annotate the operator's Deployment if
+# the operator leaves the annotation alone; otherwise restart the pods after a policy change.
 apiVersion: registry.apicur.io/v1
 kind: ApicurioRegistry
 metadata:
@@ -66,7 +69,7 @@ spec:
           - { name: clients-ca, secret: { secretName: my-cluster-clients-ca-cert } }
           - { name: kafka-user, secret: { secretName: apicurio-proxy-kafka } }
           - { name: cluster-ca, secret: { secretName: my-cluster-cluster-ca-cert } }
-          - { name: policy,     secret: { secretName: apicurio-proxy-policy } }
+          - { name: policy,     configMap: { name: apicurio-proxy-policy } }
 ---
 # Exposes only the proxy. The operator's own Service (registry-service, port 8080) still exists
 # but is closed by the NetworkPolicy below.
