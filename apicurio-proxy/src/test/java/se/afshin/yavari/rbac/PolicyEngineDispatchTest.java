@@ -13,8 +13,7 @@ import org.apache.kafka.common.resource.ResourceType;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.Set;
 
@@ -30,8 +29,8 @@ class PolicyEngineDispatchTest {
 
     @BeforeEach
     void setUp() throws Exception {
-        Path policy = Files.createTempFile("policy", ".yaml");
-        Files.writeString(policy, """
+        engine = new PolicyEngine();
+        engine.load("""
             principals:
               "CN=payments-app": [payments-writer]
               "CN=ci-pipeline, O=Acme": [schema-admin]
@@ -50,9 +49,7 @@ class PolicyEngineDispatchTest {
                 resources:
                   - artifact: "*"
                     actions: [READ, WRITE, DELETE]
-            """);
-        engine = new PolicyEngine();
-        engine.reload(policy);
+            """.getBytes(StandardCharsets.UTF_8));
         acls = new KafkaAclPolicySource(() -> List.of(new AclBinding(
                 new ResourcePattern(ResourceType.TOPIC, "orders", PatternType.LITERAL),
                 new AccessControlEntry("User:CN=orders-service", "*", AclOperation.WRITE, AclPermissionType.ALLOW))),
@@ -166,15 +163,13 @@ class PolicyEngineDispatchTest {
 
     @Test
     void reloadReplacesMappings() throws Exception {
-        Path policy = Files.createTempFile("policy", ".yaml");
-        Files.writeString(policy, """
+        engine.load("""
             rules:
               - roles: [payments-writer]
                 resources:
                   - artifact: payments-value
                     actions: [READ, WRITE]
-            """);
-        engine.reload(policy);
+            """.getBytes(StandardCharsets.UTF_8));
         assertThat(engine.isAllowed(mtls("CN=payments-app"), "payments-value", WRITE)).isFalse();
     }
 

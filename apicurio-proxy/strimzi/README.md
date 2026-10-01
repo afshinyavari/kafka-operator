@@ -41,17 +41,28 @@ The module builds standalone (no other part of this repository is needed).
 
 ## Policy file
 
-`policy.yaml` is read at startup from `POLICY_FILE` (default `/opt/rbac/policy.yaml`). The
-manifests mount it from the ConfigMap `apicurio-proxy-policy`:
+`policy.yaml` is read from `POLICY_FILE` (default `/opt/rbac/policy.yaml`) at startup and
+re-read whenever its content changes. The manifests mount it from the ConfigMap
+`apicurio-proxy-policy`:
 
 ```bash
 kubectl -n kafka create configmap apicurio-proxy-policy --from-file=policy.yaml \
   --dry-run=client -o yaml | kubectl apply -f -
 ```
 
-The Deployments carry `configmap.reloader.stakater.com/reload: apicurio-proxy-policy`, so
-Stakater Reloader rolls the pods on a change. Without Reloader, run `kubectl rollout restart`;
-the proxy's own file watcher does not see ConfigMap updates (Kubernetes swaps a symlink). The
+Re-applying the ConfigMap is enough; the pods are not restarted. The proxy polls the file
+every `POLICY_RELOAD_SECONDS` (default 5) and loads it when the content differs:
+
+- **Delay.** Kubelet syncs a ConfigMap volume periodically, so a change usually reaches the
+  pod within about a minute. The poll interval adds at most a few seconds on top.
+- **Replicas** reload independently and can briefly enforce different policies.
+- **A broken file** (invalid YAML, unknown action, empty) is rejected: the proxy keeps the
+  policy it has and logs `[PolicyFileWatcher] Reload of … failed, keeping current policy`.
+  At startup a broken file fails the pod instead.
+- **`subPath` mounts are never updated** by Kubernetes. Mount the ConfigMap as a directory, as
+  the manifests do.
+
+Confirm a reload in the log: `[PolicyEngine] Loaded N rules and M principal mappings`. The
 image contains an example `policy.yaml` that is used only when nothing is mounted.
 
 ```yaml
@@ -158,4 +169,5 @@ ship the audit stream to a Kafka topic.
 | `PROXY_KAFKA_SSL_TRUSTSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | Kafka cluster CA. PEM: `PROXY_KAFKA_SSL_CA`. |
 | `PROXY_KAFKA_ACL_REFRESH_SECONDS` | `30` | ACL snapshot refresh interval. |
 | `PROXY_ARTIFACT_SUFFIXES` | `-value,-key` | Suffixes stripped from an artifact id to find its topic. |
+| `POLICY_RELOAD_SECONDS` | `5` | How often `policy.yaml` is checked for changed content (minimum 1). |
 | `OIDC_ISSUER_URL`, `OIDC_ROLE_CLAIM`, `POLICY_FILE`, `APICURIO_URL`, `XML_SCHEMA_URL`, `KAFKA_AUDIT_*` | as before | Unchanged. `KAFKA_AUDIT_TLS_KEYSTORE*` / `_TRUSTSTORE*` are accepted in addition to the PEM variables. |

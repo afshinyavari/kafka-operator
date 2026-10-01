@@ -702,7 +702,7 @@ spec:
 
 ## ApicurioRegistry
 
-Manages an Apicurio Registry deployment and an optional HTTP RBAC proxy that enforces artifact-level access control using JWT roles from `spec.oidc`. When `rbacRef` is set, the operator mounts `{rbacRef}-apicurio-policy` into the proxy pod and hot-reloads it on change.
+Manages an Apicurio Registry deployment and an optional HTTP RBAC proxy that enforces artifact-level access control using JWT roles from `spec.oidc`. When `rbacRef` is set, the operator mounts `{rbacRef}-apicurio-policy` into the proxy pod; the proxy reloads it on change without a restart (allow about a minute for kubelet to sync the ConfigMap volume).
 
 ### spec
 

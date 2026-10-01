@@ -7,9 +7,7 @@
 # against your operator version (`kubectl get pods -l app=<cr-name> --show-labels`).
 #
 # Secrets and the policy ConfigMap: same as apicurio-with-proxy-deployment.yaml.
-# Reloader: the Deployment is created by the Apicurio operator, so there is no place here for
-# the configmap.reloader.stakater.com/reload annotation. Annotate the operator's Deployment if
-# the operator leaves the annotation alone; otherwise restart the pods after a policy change.
+# A change to the policy ConfigMap is picked up by the running proxy; no restart is needed.
 apiVersion: registry.apicur.io/v1
 kind: ApicurioRegistry
 metadata:

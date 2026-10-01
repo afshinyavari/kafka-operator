@@ -434,9 +434,11 @@ make -C kind apicurio-rbac-test
 
 ### Policy hot-reload
 
-Editing `KafkaRbac` triggers the operator to update `{name}-apicurio-policy`. The proxy's
-`PolicyEngine` watches the mounted file and reloads within ~1 second — no proxy restart
-required.
+Editing `KafkaRbac` triggers the operator to update `{name}-apicurio-policy`. The proxy polls
+the mounted file every `POLICY_RELOAD_SECONDS` (default 5) and reloads it when the content
+changes — no proxy restart required. Kubelet syncs ConfigMap volumes periodically, so the
+change usually reaches the pod within about a minute. A broken policy is rejected and the
+previous one stays in force (`[PolicyFileWatcher] Reload of … failed` in the proxy log).
 
 ```bash
 # Verify the current policy
@@ -1205,7 +1207,7 @@ If non-empty and not progressing:
 | ConfigMap `kafka-proxy-config` not updated after `KafkaRbac` change | Field manager conflict from prior manual `kubectl apply` | Delete and recreate the ConfigMap, or let the operator manage it exclusively via `createOrReplace` |
 | Schema registry proxy returns 502 Bad Gateway | `apicurio-registry` service not reachable from proxy pod | Verify `apicurio-registry` Service exists and registry pod is Running |
 | Schema registry proxy throws `IllegalArgumentException: :status` | HTTP/2 pseudo-headers forwarded into HTTP/1 response | Fixed in `ProxyResource.forward()` — skip headers starting with `:`. Rebuild proxy image if on an old version. |
-| Schema registry: 403 Forbidden for an expected-allowed call | RBAC policy not yet reloaded after `KafkaRbac` update | Wait ~1–2 s for `PolicyEngine` watcher to hot-reload; check proxy logs for `[PolicyEngine] Loaded N rules` |
+| Schema registry: 403 Forbidden for an expected-allowed call | RBAC policy not yet reloaded after `KafkaRbac` update | Kubelet takes up to about a minute to sync the ConfigMap volume, then the proxy reloads within `POLICY_RELOAD_SECONDS`; check proxy logs for `[PolicyEngine] Loaded N rules`, or `[PolicyFileWatcher] Reload of … failed` if the new policy was rejected |
 
 ### Checking generated server.properties
 

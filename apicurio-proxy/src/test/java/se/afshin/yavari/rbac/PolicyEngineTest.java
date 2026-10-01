@@ -1,35 +1,26 @@
 package se.afshin.yavari.rbac;
 
-import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
+import java.nio.charset.StandardCharsets;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static se.afshin.yavari.rbac.PolicyEngine.Action.*;
 
 class PolicyEngineTest {
 
     private PolicyEngine engine;
-    private Path policyFile;
 
     @BeforeEach
-    void setUp() throws Exception {
+    void setUp() {
         engine = new PolicyEngine();
-        policyFile = Files.createTempFile("test-policy", ".yaml");
-    }
-
-    @AfterEach
-    void tearDown() throws Exception {
-        Files.deleteIfExists(policyFile);
     }
 
     private void load(String yaml) throws Exception {
-        Files.writeString(policyFile, yaml);
-        engine.reload(policyFile);
+        engine.load(yaml.getBytes(StandardCharsets.UTF_8));
     }
 
     @Test
@@ -130,5 +121,43 @@ class PolicyEngineTest {
         // Reload with stricter policy: orders-team loses access
         load("rules: []");
         assertThat(engine.isAllowed(Set.of("orders-team"), "orders", READ)).isFalse();
+    }
+
+    @Test
+    void invalidPolicyKeepsPreviousRules() throws Exception {
+        load("""
+            rules:
+              - roles: [orders-team]
+                resources:
+                  - artifact: orders
+                    actions: [READ]
+            """);
+
+        assertThatThrownBy(() -> load("""
+            rules:
+              - roles: [orders-team]
+                resources:
+                  - artifact: orders
+                    actions: [NO_SUCH_ACTION]
+            """)).isInstanceOf(IllegalArgumentException.class);
+
+        assertThat(engine.isAllowed(Set.of("orders-team"), "orders", READ)).isTrue();
+    }
+
+    @Test
+    void emptyPolicyIsRejectedAndKeepsPreviousRules() throws Exception {
+        load("""
+            rules:
+              - roles: [orders-team]
+                resources:
+                  - artifact: orders
+                    actions: [READ]
+            """);
+
+        assertThatThrownBy(() -> load(""))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("empty");
+
+        assertThat(engine.isAllowed(Set.of("orders-team"), "orders", READ)).isTrue();
     }
 }

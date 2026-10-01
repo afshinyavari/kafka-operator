@@ -9,13 +9,9 @@ import jakarta.inject.Inject;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.yaml.snakeyaml.Yaml;
 
-import java.io.InputStream;
-import java.nio.file.FileSystems;
-import java.nio.file.Files;
+import java.io.ByteArrayInputStream;
 import java.nio.file.Path;
-import java.nio.file.StandardWatchEventKinds;
-import java.nio.file.WatchKey;
-import java.nio.file.WatchService;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -24,7 +20,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.security.auth.x500.X500Principal;
 
@@ -40,6 +35,9 @@ public class PolicyEngine {
 
     @ConfigProperty(name = "proxy.policy.file")
     String policyFilePath;
+
+    @ConfigProperty(name = "proxy.policy.reload-seconds", defaultValue = "5")
+    long reloadSeconds;
 
     /** Kafka-ACL source for certificate identities (package-private for tests). */
     @Inject
@@ -57,21 +55,19 @@ public class PolicyEngine {
 
     private final AtomicReference<Policy> policy = new AtomicReference<>(new Policy(List.of(), Map.of()));
     private volatile boolean initialized = false;
-    private volatile boolean running = true;
-    private Thread watchThread;
+    private PolicyFileWatcher watcher;
 
+    /** Loads the policy file (a broken file fails startup), then polls it for changes every
+     *  {@code proxy.policy.reload-seconds}; a broken change keeps the policy already loaded. */
     void onStart(@Observes StartupEvent event) throws Exception {
-        Path path = Path.of(policyFilePath);
-        reload(path);
-        watchThread = new Thread(() -> watchLoop(path), "policy-watcher");
-        watchThread.setDaemon(true);
-        watchThread.start();
+        watcher = new PolicyFileWatcher(Path.of(policyFilePath), this::load);
+        watcher.loadInitial();
+        watcher.start(Duration.ofSeconds(Math.max(1, reloadSeconds)));
     }
 
     @PreDestroy
     void onStop() {
-        running = false;
-        if (watchThread != null) watchThread.interrupt();
+        if (watcher != null) watcher.stop();
     }
 
     boolean isInitialized() { return initialized; }
@@ -143,34 +139,34 @@ public class PolicyEngine {
         return false;
     }
 
+    /** Parses policy YAML and swaps it in. Any failure throws and leaves the current policy in place. */
     @SuppressWarnings("unchecked")
-    void reload(Path path) throws Exception {
-        try (InputStream in = Files.newInputStream(path)) {
-            Map<String, Object> root = new Yaml().load(in);
-            List<Map<String, Object>> rawRules = (List<Map<String, Object>>) root.get("rules");
-            List<Rule> parsed = new ArrayList<>();
-            if (rawRules != null) {
-                for (Map<String, Object> rawRule : rawRules) {
-                    List<String> roles = toStringList(rawRule.get("roles"));
-                    List<Resource> resources = new ArrayList<>();
-                    List<Map<String, Object>> rawResources = (List<Map<String, Object>>) rawRule.get("resources");
-                    if (rawResources != null) {
-                        for (Map<String, Object> rawRes : rawResources) {
-                            String artifact = (String) rawRes.get("artifact");
-                            List<Action> actions = toStringList(rawRes.get("actions"))
-                                .stream().map(Action::valueOf).toList();
-                            resources.add(new Resource(artifact, actions));
-                        }
+    void load(byte[] content) {
+        Map<String, Object> root = new Yaml().load(new ByteArrayInputStream(content));
+        if (root == null) throw new IllegalArgumentException("policy file is empty");
+        List<Map<String, Object>> rawRules = (List<Map<String, Object>>) root.get("rules");
+        List<Rule> parsed = new ArrayList<>();
+        if (rawRules != null) {
+            for (Map<String, Object> rawRule : rawRules) {
+                List<String> roles = toStringList(rawRule.get("roles"));
+                List<Resource> resources = new ArrayList<>();
+                List<Map<String, Object>> rawResources = (List<Map<String, Object>>) rawRule.get("resources");
+                if (rawResources != null) {
+                    for (Map<String, Object> rawRes : rawResources) {
+                        String artifact = (String) rawRes.get("artifact");
+                        List<Action> actions = toStringList(rawRes.get("actions"))
+                            .stream().map(Action::valueOf).toList();
+                        resources.add(new Resource(artifact, actions));
                     }
-                    parsed.add(new Rule(roles, resources));
                 }
+                parsed.add(new Rule(roles, resources));
             }
-            Map<String, Set<String>> principalRoles = parsePrincipals(root.get("principals"));
-            policy.set(new Policy(List.copyOf(parsed), principalRoles));
-            initialized = true;
-            System.out.println("[PolicyEngine] Loaded " + parsed.size() + " rules and "
-                    + principalRoles.size() + " principal mappings from " + path);
         }
+        Map<String, Set<String>> principalRoles = parsePrincipals(root.get("principals"));
+        policy.set(new Policy(List.copyOf(parsed), principalRoles));
+        initialized = true;
+        System.out.println("[PolicyEngine] Loaded " + parsed.size() + " rules and "
+                + principalRoles.size() + " principal mappings");
     }
 
     /** {@code principals:} is a map of certificate principal → role name or list of roles. */
@@ -186,32 +182,6 @@ public class PolicyEngine {
         }
         out.replaceAll((k, v) -> Set.copyOf(v));
         return Map.copyOf(out);
-    }
-
-    private void watchLoop(Path policyFile) {
-        try (WatchService watcher = FileSystems.getDefault().newWatchService()) {
-            policyFile.getParent().register(watcher, StandardWatchEventKinds.ENTRY_MODIFY);
-            while (running) {
-                WatchKey key = watcher.poll(1, TimeUnit.SECONDS);
-                if (key == null) continue;
-                boolean relevant = key.pollEvents().stream()
-                    .anyMatch(e -> policyFile.getFileName().equals(e.context()));
-                key.reset();
-                if (relevant) {
-                    try {
-                        Thread.sleep(50);
-                        reload(policyFile);
-                    } catch (InterruptedException ex) {
-                        Thread.currentThread().interrupt();
-                        break;
-                    } catch (Exception ex) {
-                        System.err.println("[PolicyEngine] Reload failed: " + ex.getMessage());
-                    }
-                }
-            }
-        } catch (Exception e) {
-            if (running) System.err.println("[PolicyEngine] Watch loop error: " + e.getMessage());
-        }
     }
 
     @SuppressWarnings("unchecked")

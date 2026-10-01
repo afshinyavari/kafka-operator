@@ -12,9 +12,6 @@ kind: Deployment
 metadata:
   name: apicurio-registry
   namespace: kafka
-  annotations:
-    # Stakater Reloader: roll the pods when the policy ConfigMap changes
-    configmap.reloader.stakater.com/reload: apicurio-proxy-policy
 spec:
   replicas: 1
   selector:

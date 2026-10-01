@@ -216,7 +216,8 @@ kafka-operator/
 ├── apicurio-proxy/   # Apicurio RBAC proxy — standalone Quarkus service (apicurio-rbac-proxy:dev)
 │   └── src/main/java/se/afshin/yavari/rbac/
 │   │   ├── ProxyResource.java      # JAX-RS proxy with OIDC auth + RBAC check
-│   │   ├── PolicyEngine.java       # YAML policy loader with hot-reload; OIDC→roles / mTLS→Kafka ACLs dispatch
+│   │   ├── PolicyEngine.java       # YAML policy parser; OIDC→roles / mTLS→Kafka ACLs dispatch
+│   │   ├── PolicyFileWatcher.java  # polls policy.yaml, hot-reloads on changed content (ConfigMap-safe)
 │   │   ├── KafkaAclPolicySource.java  # describeAcls snapshot + Kafka-semantics evaluation
 │   │   └── ProxyTlsConfigSource.java  # PROXY_TLS_* → HTTPS listener with optional client certs
 │   └── strimzi/          # sidecar Deployment + KafkaUser + README for Strimzi (mTLS + Kafka-ACL mode)

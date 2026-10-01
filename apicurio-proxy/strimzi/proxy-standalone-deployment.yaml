@@ -8,9 +8,6 @@ kind: Deployment
 metadata:
   name: apicurio-rbac-proxy
   namespace: kafka
-  annotations:
-    # Stakater Reloader: roll the pods when the policy ConfigMap changes
-    configmap.reloader.stakater.com/reload: apicurio-proxy-policy
 spec:
   replicas: 2
   selector:

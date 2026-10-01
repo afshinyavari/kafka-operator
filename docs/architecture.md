@@ -301,7 +301,8 @@ Downgrade protection: `CrValidator` rejects a `targetMetadataVersion` lower than
 | `KroxyliciousConfigBuilder` | `proxy` | Generates Kroxylicious `config.yaml` from `KafkaProxy` spec |
 | `KafkaRbacConfigMapBuilder` | `proxy` | Generates `rbac-rules.yaml` and `policy.yaml` from `KafkaRbac` spec |
 | `GroupAwareAuthorizerService` | `filters/…/rbac` | Kroxylicious `AuthorizerService` plugin; enforces topic RBAC |
-| `PolicyEngine` | `apicurio-proxy/…/rbac` | YAML policy loader with `WatchService` hot-reload; enforces artifact RBAC |
+| `PolicyEngine` | `apicurio-proxy/…/rbac` | YAML policy parser; enforces artifact RBAC |
+| `PolicyFileWatcher` | `apicurio-proxy/…/rbac` | Polls `policy.yaml` and hot-reloads it into `PolicyEngine` when the content changes |
 | `KafkaTopicService` | `topic` | AdminClient ops + pure diff logic (`computeConfigDiff`, `computePartitionAction`) |
 | `BrokerBootstrapResolver` | `topic` | Picks the alphabetically-first broker `KafkaNodePool` and builds its headless bootstrap address |
 | `TopicReconcileLeader` / `StaticPrimaryClusterLeader` | `topic` | Cross-cluster single-writer gate. v1 impl returns `localClusterId == spec.clusters[0].id`; v2 will swap in a Kafka consumer-group leader implementation |
@@ -448,8 +449,13 @@ apicurio-registry:8080     (Apicurio Registry, no auth)
 ### PolicyEngine
 
 - Loads `policy.yaml` (mounted from `{rbacRef}-apicurio-policy` ConfigMap) at startup.
-- Watches the file with `java.nio.file.WatchService` and hot-reloads within ~1 s on change
-  (no pod restart required when `KafkaRbac` is updated).
+- `PolicyFileWatcher` polls the file every `POLICY_RELOAD_SECONDS` (default 5) and reloads it
+  when the content changes (no pod restart required when `KafkaRbac` is updated). It compares
+  content instead of using `WatchService`, because kubelet updates a ConfigMap volume by
+  swapping the `..data` symlink and never writes to the mounted file. Allow about a minute for
+  kubelet to sync the volume.
+- A changed file that fails to parse is rejected and the previous policy stays in force; a
+  broken file at startup fails the pod.
 - `isAllowed(callerRoles, artifact, action)` returns `true` if any rule's `roles` intersect
   `callerRoles` and that rule grants `action` on `artifact` or `"*"`.
 
