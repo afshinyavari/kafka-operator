@@ -1,8 +1,16 @@
-# Proxy as its own Deployment in front of an operator-managed (or any) Apicurio Registry.
-# Nothing in the registry's CR changes; the proxy talks to the registry's Service, and a
-# NetworkPolicy makes the registry accept traffic only from the proxy pods.
+# Proxy as its own Deployment in front of a registry managed by the Apicurio Registry 3 operator
+# (checked with 3.3.3), or any other Apicurio 3.x registry. mTLS only: no OIDC provider is involved.
+# The proxy talks to the registry's Service, and a NetworkPolicy makes the registry accept
+# traffic only from the proxy pods.
 #
-# Secrets and the policy ConfigMap: same as apicurio-with-proxy-deployment.yaml.
+# Two fields in the ApicurioRegistry3 CR must be set for that to hold:
+#   spec.app.networkPolicy.enabled: false   the operator's own policy opens 8080 to everyone, and
+#                                           NetworkPolicies add up, so ours could not close it
+#   spec.ui.enabled: false                  the UI calls the API from the browser, past the proxy
+# The CNI must enforce NetworkPolicy; without that the registry stays reachable on 8080.
+#
+# Secrets and the policy ConfigMap: same as apicurio-with-proxy-deployment.yaml (without
+# apicurio-registry-kafka, which the registry's CR references itself).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -22,11 +30,13 @@ spec:
           ports:
             - { name: https, containerPort: 8443 }
           env:
-            - { name: APICURIO_URL, value: "http://registry-service.kafka.svc:8080" }   # operator's Service
-            - { name: XML_SCHEMA_URL, value: "http://registry-service.kafka.svc:8080" }
+            # The operator's Service for CR "registry" is <cr-name>-app-service.
+            - { name: APICURIO_URL, value: "http://registry-app-service.kafka.svc:8080" }
+            - { name: XML_SCHEMA_URL, value: "http://registry-app-service.kafka.svc:8080" }
             - { name: POLICY_FILE, value: /opt/rbac/policy.yaml }
-            - { name: OIDC_ISSUER_URL, value: https://keycloak.example.com/realms/kafka }
-            - { name: OIDC_ROLE_CLAIM, value: realm_access/roles }
+            # mTLS only. Without this the proxy refuses to start when OIDC_ISSUER_URL is unset.
+            # To add OIDC for humans later, remove it and set OIDC_ISSUER_URL (+ OIDC_ROLE_CLAIM).
+            - { name: QUARKUS_OIDC_TENANT_ENABLED, value: "false" }
             - { name: PROXY_TLS_ENABLED, value: "true" }
             - { name: PROXY_TLS_PORT, value: "8443" }
             - { name: PROXY_TLS_KEYSTORE, value: /tls/server/server.p12 }
@@ -75,8 +85,9 @@ spec:
   ports:
     - { name: https, port: 8443, targetPort: 8443 }
 ---
-# The registry accepts traffic only from the proxy pods. Adjust the podSelector to the labels
-# your registry pods carry (the Apicurio operator uses app=<ApicurioRegistry name>).
+# The registry accepts traffic only from the proxy pods. The podSelector matches the labels the
+# 3.x operator puts on the app pods of CR "registry"; adjust it for a registry you deploy yourself.
+# To scrape registry metrics, also allow port 9000 from your monitoring namespace.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -84,7 +95,10 @@ metadata:
   namespace: kafka
 spec:
   podSelector:
-    matchLabels: { app: registry }
+    matchLabels:
+      app.kubernetes.io/name: apicurio-registry
+      app.kubernetes.io/component: app
+      app.kubernetes.io/instance: registry
   policyTypes: [Ingress]
   ingress:
     - from:

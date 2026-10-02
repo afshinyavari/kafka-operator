@@ -150,8 +150,12 @@ OIDC bearer tokens on the same listener, and authorize certificate identities
 from **Kafka topic ACLs**: artifact `orders-value` ⇒ topic `orders`; WRITE ⇒
 READ+WRITE, READ/DESCRIBE ⇒ READ, DELETE ⇒ DELETE, ALL ⇒ all, with DENY
 precedence and PREFIXED/`*` patterns as in Kafka. OIDC identities keep the
-role file; the two never mix. Built for running the proxy as an Apicurio
-sidecar in a Strimzi environment — see `apicurio-proxy/strimzi/README.md`.
+role file; the two never mix. On that branch the proxy targets Apicurio
+Registry 3.x: core API v3 is the primary dialect (v2 and `/apis/ccompat` are
+also authorized per artifact), and id-only requests are resolved against the
+registry instead of trusting client-supplied hints. Built for running the
+proxy as an Apicurio sidecar in a Strimzi environment — see
+`apicurio-proxy/strimzi/README.md`.
 
 ### Why no UI-driven ACL editing?
 

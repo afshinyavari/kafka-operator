@@ -452,7 +452,10 @@ A generic Apicurio consumer — including the Kafka UI — fetches a schema **by
 content from `GET /apis/registry/v2/ids/globalIds/{id}` (or `/ids/contentIds/{id}`) and
 the artifact type from `GET /apis/registry/v2/search/artifacts?globalId={id}`. Neither
 form names an artifact, so the rbac-proxy resolves the owning artifact via the registry's
-search API and authorizes against that real name. A role granted `mm2-orders-value` can
+search API and authorizes against that real name. On branch `feat/apicurio-proxy-mtls-acl`
+the lookup runs on the API the request came in on (v3, v2 or ccompat) and, because one
+content id can be shared by several artifacts, access to any one of them is enough — see
+`apicurio-proxy/strimzi/README.md`. A role granted `mm2-orders-value` can
 therefore decode messages on a topic carrying that schema **without** a wildcard
 (`artifacts: ["*"]`) grant. A *general* search (e.g. `?name=`) stays a registry-wide
 operation and still requires `"*"`.

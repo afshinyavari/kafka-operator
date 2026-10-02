@@ -8,7 +8,7 @@ import jakarta.ws.rs.*;
 import jakarta.ws.rs.core.*;
 import org.eclipse.microprofile.config.inject.ConfigProperty;
 import org.slf4j.MDC;
-import org.yaml.snakeyaml.Yaml;
+import se.afshin.yavari.rbac.RegistryRequestClassifier.Classified;
 import se.afshin.yavari.rbac.audit.AuditEmitter;
 import se.afshin.yavari.rbac.audit.AuditEvent;
 
@@ -18,7 +18,7 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Instant;
 import java.util.List;
-import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 
 @Path("{path: .*}")
@@ -32,8 +32,12 @@ public class ProxyResource {
         "te", "trailers", "transfer-encoding", "upgrade", "host"
     );
 
+    /** Carries the artifact id of a v2 create; v3 has it in the JSON body. */
+    private static final String ARTIFACT_ID_HEADER = "X-Registry-ArtifactId";
+
     @Inject SecurityIdentity identity;
     @Inject PolicyEngine policy;
+    @Inject ArtifactIdResolver resolver;
     @Inject AuditEmitter audit;
 
     @ConfigProperty(name = "proxy.apicurio.url")   String apicurioUrl;
@@ -43,49 +47,57 @@ public class ProxyResource {
 
     @GET
     @RunOnVirtualThread
-    public Response get(@PathParam("path") String path, @Context UriInfo uriInfo,
-                        @Context HttpHeaders headers) {
-        return proxy("GET", path, uriInfo, headers, null);
+    public Response get(@Context UriInfo uriInfo, @Context HttpHeaders headers) {
+        return proxy("GET", uriInfo, headers, null);
     }
 
     @POST
     @RunOnVirtualThread
-    public Response post(@PathParam("path") String path, @Context UriInfo uriInfo,
-                         @Context HttpHeaders headers, byte[] body) {
-        return proxy("POST", path, uriInfo, headers, body);
+    public Response post(@Context UriInfo uriInfo, @Context HttpHeaders headers, byte[] body) {
+        return proxy("POST", uriInfo, headers, body);
     }
 
     @PUT
     @RunOnVirtualThread
-    public Response put(@PathParam("path") String path, @Context UriInfo uriInfo,
-                        @Context HttpHeaders headers, byte[] body) {
-        return proxy("PUT", path, uriInfo, headers, body);
+    public Response put(@Context UriInfo uriInfo, @Context HttpHeaders headers, byte[] body) {
+        return proxy("PUT", uriInfo, headers, body);
     }
 
     @DELETE
     @RunOnVirtualThread
-    public Response delete(@PathParam("path") String path, @Context UriInfo uriInfo,
-                           @Context HttpHeaders headers) {
-        return proxy("DELETE", path, uriInfo, headers, null);
+    public Response delete(@Context UriInfo uriInfo, @Context HttpHeaders headers) {
+        return proxy("DELETE", uriInfo, headers, null);
     }
 
-    private Response proxy(String method, String pathParam, UriInfo uriInfo,
-                           HttpHeaders requestHeaders, byte[] body) {
-        String fullPath = "/" + pathParam;
-        String artifact      = resolveArtifact(fullPath, uriInfo.getRequestUri().getRawQuery());
-        PolicyEngine.Action action = resolveAction(method, fullPath);
+    private Response proxy(String method, UriInfo uriInfo, HttpHeaders requestHeaders, byte[] body) {
+        // The path stays percent-encoded end to end: the classifier decodes it per segment and
+        // the registry receives exactly what the client sent.
+        String rawPath = uriInfo.getRequestUri().getRawPath();
+        String rawQuery = uriInfo.getRequestUri().getRawQuery();
+        Classified request = RegistryRequestClassifier.classify(method, rawPath, rawQuery,
+                requestHeaders.getHeaderString(HttpHeaders.CONTENT_TYPE),
+                requestHeaders.getHeaderString(ARTIFACT_ID_HEADER), body);
+        PolicyEngine.Action action = request.action();
+
+        // An id-only request is allowed when the caller may use any artifact holding that
+        // content. An id the registry cannot resolve stays registry-wide ("*").
+        List<String> artifacts = request.lookup() == null ? List.of() : resolver.resolve(request.lookup());
+        if (artifacts.isEmpty()) artifacts = List.of(request.artifact());
+        Optional<String> allowed = policy.firstAllowed(identity, artifacts, action);
+        String artifact = allowed.orElse(artifacts.get(0));
 
         // Audit every request — allow, deny, or upstream error. Recorded in a try/finally so a
         // thrown exception from forward() is still captured as decision=error.
         long t0 = System.nanoTime();
         String decision = "error";
         try {
-            if (!policy.isAllowed(identity, artifact, action)) {
+            if (allowed.isEmpty()) {
                 decision = "deny";
-                return Response.status(403).entity("Forbidden").build();
+                return RegistryErrors.forbidden(request.api(), action + " on artifact '" + artifact
+                        + "' is not permitted for " + auditPrincipal());
             }
-            String upstreamBase = fullPath.startsWith("/apis/registry/") ? apicurioUrl : xmlSchemaUrl;
-            Response r = forward(method, upstreamBase, fullPath, uriInfo, requestHeaders, body);
+            String upstreamBase = upstreamBase(rawPath, apicurioUrl, xmlSchemaUrl);
+            Response r = forward(request, method, upstreamBase, rawPath, rawQuery, requestHeaders, body);
             int status = r.getStatus();
             decision = status >= 500 ? "error" : status >= 400 ? "deny" : "allow";
             return r;
@@ -96,17 +108,22 @@ public class ProxyResource {
         }
     }
 
+    /** Every Apicurio API (core v2/v3, ccompat) lives under {@code /apis/}; anything else is
+     *  the XML schema service. */
+    static String upstreamBase(String rawPath, String apicurioUrl, String xmlSchemaUrl) {
+        return rawPath.startsWith("/apis/") ? apicurioUrl : xmlSchemaUrl;
+    }
+
     /** Audit principal for the current identity ({@code user:<name>} or {@code anonymous}). */
     String auditPrincipal() {
         return PolicyEngine.principalOf(identity, policy.principalMode());
     }
 
-    private Response forward(String method, String upstreamBase, String path,
-                             UriInfo uriInfo, HttpHeaders requestHeaders, byte[] body) {
+    private Response forward(Classified request, String method, String upstreamBase, String rawPath,
+                             String rawQuery, HttpHeaders requestHeaders, byte[] body) {
         try {
-            String query = uriInfo.getRequestUri().getRawQuery();
-            String upstreamUri = upstreamBase.replaceAll("/$", "") + path
-                + (query != null ? "?" + query : "");
+            String upstreamUri = upstreamBase.replaceAll("/$", "") + rawPath
+                + (rawQuery != null ? "?" + rawQuery : "");
 
             HttpRequest.Builder reqBuilder = HttpRequest.newBuilder(URI.create(upstreamUri));
 
@@ -138,128 +155,7 @@ public class ProxyResource {
             return rb.build();
 
         } catch (Exception e) {
-            return Response.status(502).entity("Bad gateway: " + e.getMessage()).build();
+            return RegistryErrors.badGateway(request.api(), "Bad gateway: " + e.getMessage());
         }
-    }
-
-    static PolicyEngine.Action resolveAction(String method, String path) {
-        return switch (method.toUpperCase()) {
-            case "GET", "HEAD" -> PolicyEngine.Action.READ;
-            case "DELETE"      -> PolicyEngine.Action.DELETE;
-            default            -> PolicyEngine.Action.WRITE;
-        };
-    }
-
-    static String extractArtifact(String path) {
-        // Apicurio: /apis/registry/v2/groups/default/artifacts/orders -> orders
-        // Apicurio by-id: /apis/registry/v2/ids/globalIds/1 -> * here; resolveArtifact()
-        //   resolves the real artifact from the registry before this fallback applies.
-        // XML: /schemas/orders -> orders
-        // XML list: /schemas -> *
-        String[] parts = path.split("/");
-        if (path.startsWith("/apis/registry/")) {
-            if (path.contains("/ids/")) return "*";
-            for (int i = 0; i < parts.length - 1; i++) {
-                if ("artifacts".equals(parts[i])) return parts[i + 1];
-            }
-            return "*";
-        }
-        if (path.startsWith("/schemas/") && parts.length > 2) {
-            return parts[2];
-        }
-        return "*";
-    }
-
-    /**
-     * Resolves the policy artifact for a request. For most paths this is just
-     * {@link #extractArtifact}. Two id-based forms carry no artifact name and are
-     * resolved from the registry's search API so RBAC applies against the real name:
-     * a by-id lookup ({@code /ids/{globalIds,contentIds}/{id}}) and a search-by-id
-     * query ({@code search/artifacts?globalId=} / {@code ?contentId=}) — together
-     * these are how a generic consumer/UI fetches a schema's content and its type.
-     * Falls back to {@link #extractArtifact} ({@code "*"}) when the id can't resolve.
-     */
-    String resolveArtifact(String fullPath, String rawQuery) {
-        IdLookup lookup = parseIdLookup(fullPath);
-        if (lookup == null) lookup = parseSearchByIdQuery(fullPath, rawQuery);
-        if (lookup != null) {
-            String resolved = lookupArtifactId(lookup);
-            if (resolved != null) return resolved;
-        }
-        return extractArtifact(fullPath);
-    }
-
-    /** A by-id schema lookup and the registry search parameter that resolves it. */
-    record IdLookup(String queryParam, String id) {}
-
-    /**
-     * Parses an Apicurio by-id lookup path. {@code /apis/registry/v2/ids/globalIds/{id}}
-     * and {@code .../ids/contentIds/{id}} (incl. trailing sub-paths like
-     * {@code /references}) name a schema without an artifact. Returns {@code null} for
-     * any other path, including content-hash lookups (no single search param for them).
-     */
-    static IdLookup parseIdLookup(String path) {
-        if (!path.startsWith("/apis/registry/")) return null;
-        String[] parts = path.split("/");
-        for (int i = 0; i + 2 < parts.length; i++) {
-            if (!"ids".equals(parts[i])) continue;
-            String id = parts[i + 2];
-            if (id.isBlank()) return null;
-            return switch (parts[i + 1]) {
-                case "globalIds"  -> new IdLookup("globalId", id);
-                case "contentIds" -> new IdLookup("contentId", id);
-                default           -> null;
-            };
-        }
-        return null;
-    }
-
-    /**
-     * Parses a {@code search/artifacts?globalId={id}} (or {@code ?contentId={id}})
-     * query — how a generic Apicurio consumer / the Kafka UI resolves a schema's
-     * type by id. Authorizing it against the resolved artifact (not {@code "*"})
-     * lets a scoped role look up the type of a schema it is already granted.
-     * Returns {@code null} for a general search (e.g. {@code ?name=}), which stays
-     * a registry-wide operation requiring a wildcard grant.
-     */
-    static IdLookup parseSearchByIdQuery(String path, String rawQuery) {
-        if (rawQuery == null || !path.startsWith("/apis/registry/")
-                || !path.endsWith("/search/artifacts")) {
-            return null;
-        }
-        for (String param : rawQuery.split("&")) {
-            int eq = param.indexOf('=');
-            if (eq <= 0 || eq == param.length() - 1) continue;
-            String key = param.substring(0, eq);
-            String val = param.substring(eq + 1);
-            if ("globalId".equals(key))  return new IdLookup("globalId", val);
-            if ("contentId".equals(key)) return new IdLookup("contentId", val);
-        }
-        return null;
-    }
-
-    /** Resolves the owning artifact id for a by-id lookup via the registry search API. */
-    private String lookupArtifactId(IdLookup lookup) {
-        try {
-            String uri = apicurioUrl.replaceAll("/$", "")
-                + "/apis/registry/v2/search/artifacts?" + lookup.queryParam() + "=" + lookup.id();
-            HttpResponse<String> resp = http.send(
-                HttpRequest.newBuilder(URI.create(uri)).GET().build(),
-                HttpResponse.BodyHandlers.ofString());
-            return resp.statusCode() == 200 ? firstArtifactId(resp.body()) : null;
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    /** Extracts the first artifact id from an Apicurio v2 {@code search/artifacts} response. */
-    static String firstArtifactId(String json) {
-        Object root = new Yaml().load(json);   // JSON is valid YAML — reuse snakeyaml
-        if (root instanceof Map<?, ?> map && map.get("artifacts") instanceof List<?> artifacts
-                && !artifacts.isEmpty() && artifacts.get(0) instanceof Map<?, ?> first) {
-            Object id = first.get("id");
-            return id != null ? id.toString() : null;
-        }
-        return null;
     }
 }

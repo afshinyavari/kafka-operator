@@ -19,6 +19,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicReference;
 import javax.security.auth.x500.X500Principal;
@@ -91,6 +92,11 @@ public class PolicyEngine {
         if (mapped.isEmpty()) return false;
         if (aclsLoaded && acls.isDenied(principal, artifact, action)) return false;
         return isAllowed(mapped, artifact, action);
+    }
+
+    /** The first of {@code artifacts} the identity may perform {@code action} on. */
+    public Optional<String> firstAllowed(SecurityIdentity identity, Collection<String> artifacts, Action action) {
+        return artifacts.stream().filter(artifact -> isAllowed(identity, artifact, action)).findFirst();
     }
 
     /** Roles the policy file maps a certificate principal to; empty when unmapped. */

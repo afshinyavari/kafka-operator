@@ -174,6 +174,22 @@ class PolicyEngineDispatchTest {
     }
 
     @Test
+    void firstAllowedPicksTheArtifactTheIdentityMayUse() {
+        // One content id shared by several artifacts: access to any of them is enough.
+        assertThat(engine.firstAllowed(mtls("CN=orders-service"), List.of("payments-key", "orders-key"), READ))
+                .contains("orders-key");
+        assertThat(engine.firstAllowed(oidc("alice", "orders-team"), List.of("orders-value", "payments-value"), READ))
+                .contains("orders-value");
+    }
+
+    @Test
+    void firstAllowedIsEmptyWhenNoArtifactIsPermitted() {
+        assertThat(engine.firstAllowed(mtls("CN=orders-service"), List.of("payments-key", "invoices-key"), READ))
+                .isEmpty();
+        assertThat(engine.firstAllowed(mtls("CN=orders-service"), List.of(), READ)).isEmpty();
+    }
+
+    @Test
     void mtlsPrincipalRespectsCnMode() {
         engine.principalMode = MtlsPrincipal.Mode.CN;
         acls.replaceSnapshot(List.of(new AclBinding(

@@ -1,11 +1,13 @@
-# Apicurio Registry with the RBAC proxy as a sidecar. Only the proxy's TLS port is exposed;
-# Apicurio listens on 127.0.0.1:8080 inside the pod.
+# Apicurio Registry 3.x with the RBAC proxy as a sidecar (checked with registry 3.3.3). Only the
+# proxy's TLS port is exposed; the registry API listens on 127.0.0.1:8080 inside the pod.
+# mTLS only: no OIDC provider is involved.
 #
 # ConfigMap: apicurio-proxy-policy with key policy.yaml (role rules + certificate → role mapping).
-# Secrets expected in the namespace (all PKCS12; JKS/PEM work too, see README):
+# Secrets expected in the namespace (all PKCS12; the proxy also takes JKS/PEM, see README):
 #   apicurio-proxy-server-tls    server.p12 + password    proxy's own server certificate
 #   my-cluster-clients-ca-cert   ca.p12 + ca.password     Strimzi clients CA — trust anchor for client certs
 #   apicurio-proxy-kafka         user.p12 + user.password Strimzi KafkaUser secret for the proxy (kafkauser.yaml)
+#   apicurio-registry-kafka      user.p12 + user.password Strimzi KafkaUser secret for the registry's kafkasql storage
 #   my-cluster-cluster-ca-cert   ca.p12 + ca.password     Strimzi cluster CA — trust anchor for Kafka
 apiVersion: apps/v1
 kind: Deployment
@@ -22,12 +24,32 @@ spec:
     spec:
       containers:
         - name: registry
-          image: quay.io/apicurio/apicurio-registry-kafkasql:2.6.5.Final
+          image: quay.io/apicurio/apicurio-registry:3.3.3      # one image in 3.x; storage is chosen by env
+          ports:
+            - { name: management, containerPort: 9000 }        # health and metrics, not the API
           env:
-            - { name: QUARKUS_HTTP_HOST, value: "127.0.0.1" }   # not reachable from outside the pod
-            - { name: QUARKUS_HTTP_PORT, value: "8080" }
-            - { name: KAFKA_BOOTSTRAP_SERVERS, value: my-cluster-kafka-bootstrap:9093 }
-            # ... your existing kafkasql TLS settings ...
+            - { name: QUARKUS_HTTP_HOST, value: "127.0.0.1" }   # API not reachable from outside the pod
+            - { name: APICURIO_STORAGE_KIND, value: kafkasql }
+            - { name: APICURIO_KAFKASQL_BOOTSTRAP_SERVERS, value: my-cluster-kafka-bootstrap:9093 }
+            # Kafka over mTLS with the registry's own KafkaUser
+            - { name: APICURIO_KAFKA_COMMON_SECURITY_PROTOCOL, value: SSL }
+            - { name: APICURIO_KAFKA_COMMON_SSL_KEYSTORE_TYPE, value: PKCS12 }
+            - { name: APICURIO_KAFKA_COMMON_SSL_KEYSTORE_LOCATION, value: /tls/registry-kafka/user.p12 }
+            - name: APICURIO_KAFKA_COMMON_SSL_KEYSTORE_PASSWORD
+              valueFrom: { secretKeyRef: { name: apicurio-registry-kafka, key: user.password } }
+            - { name: APICURIO_KAFKA_COMMON_SSL_TRUSTSTORE_TYPE, value: PKCS12 }
+            - { name: APICURIO_KAFKA_COMMON_SSL_TRUSTSTORE_LOCATION, value: /tls/cluster-ca/ca.p12 }
+            - name: APICURIO_KAFKA_COMMON_SSL_TRUSTSTORE_PASSWORD
+              valueFrom: { secretKeyRef: { name: my-cluster-cluster-ca-cert, key: ca.password } }
+          volumeMounts:
+            - { name: registry-kafka, mountPath: /tls/registry-kafka, readOnly: true }
+            - { name: cluster-ca,     mountPath: /tls/cluster-ca,     readOnly: true }
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 9000 }
+            initialDelaySeconds: 5
+          livenessProbe:
+            httpGet: { path: /health/live, port: 9000 }
+            initialDelaySeconds: 15
         - name: rbac-proxy
           image: registry.example.com/apicurio-rbac-proxy:1.0
           ports:
@@ -36,10 +58,10 @@ spec:
             - { name: APICURIO_URL, value: "http://127.0.0.1:8080" }
             - { name: XML_SCHEMA_URL, value: "http://127.0.0.1:8080" }
             - { name: POLICY_FILE, value: /opt/rbac/policy.yaml }
-            # OIDC for humans (role rules from policy.yaml)
-            - { name: OIDC_ISSUER_URL, value: https://keycloak.example.com/realms/kafka }
-            - { name: OIDC_ROLE_CLAIM, value: realm_access/roles }
-            # TLS listener + optional client certificates (mTLS for services)
+            # mTLS only. Without this the proxy refuses to start when OIDC_ISSUER_URL is unset.
+            # To add OIDC for humans later, remove it and set OIDC_ISSUER_URL (+ OIDC_ROLE_CLAIM).
+            - { name: QUARKUS_OIDC_TENANT_ENABLED, value: "false" }
+            # TLS listener; a request without a trusted client certificate gets 401
             - { name: PROXY_TLS_ENABLED, value: "true" }
             - { name: PROXY_TLS_PORT, value: "8443" }
             - { name: PROXY_TLS_KEYSTORE, value: /tls/server/server.p12 }
@@ -76,6 +98,7 @@ spec:
         - { name: clients-ca, secret: { secretName: my-cluster-clients-ca-cert } }
         - { name: kafka-user, secret: { secretName: apicurio-proxy-kafka } }
         - { name: cluster-ca, secret: { secretName: my-cluster-cluster-ca-cert } }
+        - { name: registry-kafka, secret: { secretName: apicurio-registry-kafka } }
         - { name: policy,     configMap: { name: apicurio-proxy-policy } }
 ---
 apiVersion: v1

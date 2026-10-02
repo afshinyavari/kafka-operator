@@ -21,137 +21,22 @@ import static se.afshin.yavari.rbac.PolicyEngine.Action.*;
 @QuarkusTest
 class ProxyResourceTest {
 
-    // ── extractArtifact ───────────────────────────────────────────────────────
+    // ── upstream routing ──────────────────────────────────────────────────────
 
     @Test
-    void extractArtifactFromApicurioPath() {
-        assertThat(ProxyResource.extractArtifact("/apis/registry/v2/groups/default/artifacts/orders"))
-            .isEqualTo("orders");
-        assertThat(ProxyResource.extractArtifact("/apis/registry/v2/groups/default/artifacts/invoices"))
-            .isEqualTo("invoices");
+    void everyApicurioApiIsRoutedToTheRegistry() {
+        assertThat(ProxyResource.upstreamBase("/apis/registry/v3/system/info", "http://apicurio", "http://xml"))
+            .isEqualTo("http://apicurio");
+        assertThat(ProxyResource.upstreamBase("/apis/registry/v2/search/artifacts", "http://apicurio", "http://xml"))
+            .isEqualTo("http://apicurio");
+        assertThat(ProxyResource.upstreamBase("/apis/ccompat/v7/subjects", "http://apicurio", "http://xml"))
+            .isEqualTo("http://apicurio");
     }
 
     @Test
-    void extractArtifactFromApicurioListPath() {
-        // Listing artifacts — no specific artifact, return wildcard
-        assertThat(ProxyResource.extractArtifact("/apis/registry/v2/groups/default/artifacts"))
-            .isEqualTo("*");
-    }
-
-    @Test
-    void extractArtifactFromApicurioGlobalIdPath() {
-        assertThat(ProxyResource.extractArtifact("/apis/registry/v2/ids/globalIds/1"))
-            .isEqualTo("*");
-    }
-
-    @Test
-    void extractArtifactFromXmlSchemaPath() {
-        assertThat(ProxyResource.extractArtifact("/schemas/orders")).isEqualTo("orders");
-        assertThat(ProxyResource.extractArtifact("/schemas/invoices")).isEqualTo("invoices");
-    }
-
-    @Test
-    void extractArtifactFromXmlSchemaListPath() {
-        assertThat(ProxyResource.extractArtifact("/schemas")).isEqualTo("*");
-    }
-
-    // ── resolveAction ─────────────────────────────────────────────────────────
-
-    @Test
-    void resolveActionFromHttpMethod() {
-        assertThat(ProxyResource.resolveAction("GET",    "/anything")).isEqualTo(READ);
-        assertThat(ProxyResource.resolveAction("HEAD",   "/anything")).isEqualTo(READ);
-        assertThat(ProxyResource.resolveAction("DELETE", "/anything")).isEqualTo(DELETE);
-        assertThat(ProxyResource.resolveAction("POST",   "/anything")).isEqualTo(WRITE);
-        assertThat(ProxyResource.resolveAction("PUT",    "/anything")).isEqualTo(WRITE);
-    }
-
-    // ── parseIdLookup ─────────────────────────────────────────────────────────
-
-    @Test
-    void parseIdLookupGlobalId() {
-        ProxyResource.IdLookup l = ProxyResource.parseIdLookup("/apis/registry/v2/ids/globalIds/7");
-        assertThat(l).isNotNull();
-        assertThat(l.queryParam()).isEqualTo("globalId");
-        assertThat(l.id()).isEqualTo("7");
-    }
-
-    @Test
-    void parseIdLookupContentId() {
-        ProxyResource.IdLookup l = ProxyResource.parseIdLookup("/apis/registry/v2/ids/contentIds/42");
-        assertThat(l).isNotNull();
-        assertThat(l.queryParam()).isEqualTo("contentId");
-        assertThat(l.id()).isEqualTo("42");
-    }
-
-    @Test
-    void parseIdLookupGlobalIdWithReferencesSubpath() {
-        ProxyResource.IdLookup l =
-            ProxyResource.parseIdLookup("/apis/registry/v2/ids/globalIds/7/references");
-        assertThat(l).isNotNull();
-        assertThat(l.queryParam()).isEqualTo("globalId");
-        assertThat(l.id()).isEqualTo("7");
-    }
-
-    @Test
-    void parseIdLookupReturnsNullForNonByIdPaths() {
-        assertThat(ProxyResource.parseIdLookup(
-            "/apis/registry/v2/groups/default/artifacts/orders")).isNull();
-        assertThat(ProxyResource.parseIdLookup("/schemas/orders")).isNull();
-        // content-hash lookups have no single search param — not resolvable here
-        assertThat(ProxyResource.parseIdLookup(
-            "/apis/registry/v2/ids/contentHashes/abc123")).isNull();
-    }
-
-    // ── parseSearchByIdQuery ──────────────────────────────────────────────────
-
-    @Test
-    void parseSearchByIdQueryGlobalId() {
-        ProxyResource.IdLookup l = ProxyResource.parseSearchByIdQuery(
-            "/apis/registry/v2/search/artifacts", "globalId=11");
-        assertThat(l).isNotNull();
-        assertThat(l.queryParam()).isEqualTo("globalId");
-        assertThat(l.id()).isEqualTo("11");
-    }
-
-    @Test
-    void parseSearchByIdQueryContentId() {
-        ProxyResource.IdLookup l = ProxyResource.parseSearchByIdQuery(
-            "/apis/registry/v2/search/artifacts", "limit=1&contentId=5");
-        assertThat(l).isNotNull();
-        assertThat(l.queryParam()).isEqualTo("contentId");
-        assertThat(l.id()).isEqualTo("5");
-    }
-
-    @Test
-    void parseSearchByIdQueryReturnsNullForGeneralSearch() {
-        assertThat(ProxyResource.parseSearchByIdQuery(
-            "/apis/registry/v2/search/artifacts", "name=orders")).isNull();
-        assertThat(ProxyResource.parseSearchByIdQuery(
-            "/apis/registry/v2/search/artifacts", null)).isNull();
-        // not a search path
-        assertThat(ProxyResource.parseSearchByIdQuery(
-            "/apis/registry/v2/groups/default/artifacts/orders", "globalId=1")).isNull();
-    }
-
-    // ── firstArtifactId ───────────────────────────────────────────────────────
-
-    @Test
-    void firstArtifactIdFromSearchResponse() {
-        String json = "{\"artifacts\":[{\"id\":\"mm2-orders-value\",\"name\":\"order\","
-            + "\"type\":\"JSON\"}],\"count\":1}";
-        assertThat(ProxyResource.firstArtifactId(json)).isEqualTo("mm2-orders-value");
-    }
-
-    @Test
-    void firstArtifactIdReturnsNullWhenNoArtifacts() {
-        assertThat(ProxyResource.firstArtifactId("{\"artifacts\":[],\"count\":0}")).isNull();
-    }
-
-    @Test
-    void firstArtifactIdReturnsNullForMalformedBody() {
-        assertThat(ProxyResource.firstArtifactId("not-json")).isNull();
-        assertThat(ProxyResource.firstArtifactId("")).isNull();
+    void otherPathsAreRoutedToTheXmlSchemaService() {
+        assertThat(ProxyResource.upstreamBase("/schemas/orders", "http://apicurio", "http://xml"))
+            .isEqualTo("http://xml");
     }
 
     // ── RBAC enforcement via HTTP ─────────────────────────────────────────────
@@ -160,7 +45,7 @@ class ProxyResourceTest {
     @TestSecurity(user = "alice", roles = {"orders-team"})
     void ordersTeamIsBlockedFromInvoices() {
         given()
-            .get("/apis/registry/v2/groups/default/artifacts/invoices")
+            .get("/apis/registry/v3/groups/default/artifacts/invoices")
             .then()
             .statusCode(403);
     }
@@ -169,7 +54,7 @@ class ProxyResourceTest {
     @TestSecurity(user = "bob", roles = {"invoices-team"})
     void invoicesTeamIsBlockedFromOrders() {
         given()
-            .get("/apis/registry/v2/groups/default/artifacts/orders")
+            .get("/apis/registry/v3/groups/default/artifacts/orders")
             .then()
             .statusCode(403);
     }
@@ -179,7 +64,7 @@ class ProxyResourceTest {
     void ordersTeamPassesPolicyForOrders() {
         // Upstream not running → 502, but crucially not 403 (policy allowed)
         int status = given()
-            .get("/apis/registry/v2/groups/default/artifacts/orders")
+            .get("/apis/registry/v3/groups/default/artifacts/orders")
             .then()
             .extract().statusCode();
         assertThat(status).isNotEqualTo(403);
@@ -189,7 +74,7 @@ class ProxyResourceTest {
     @TestSecurity(user = "bob", roles = {"invoices-team"})
     void invoicesTeamPassesPolicyForInvoices() {
         int status = given()
-            .get("/apis/registry/v2/groups/default/artifacts/invoices")
+            .get("/apis/registry/v3/groups/default/artifacts/invoices")
             .then()
             .extract().statusCode();
         assertThat(status).isNotEqualTo(403);
@@ -199,10 +84,10 @@ class ProxyResourceTest {
     @TestSecurity(user = "schemadmin", roles = {"schema-admin"})
     void schemaAdminPassesPolicyForAnything() {
         int ordersStatus = given()
-            .get("/apis/registry/v2/groups/default/artifacts/orders")
+            .get("/apis/registry/v3/groups/default/artifacts/orders")
             .then().extract().statusCode();
         int invoicesStatus = given()
-            .get("/apis/registry/v2/groups/default/artifacts/invoices")
+            .get("/apis/registry/v3/groups/default/artifacts/invoices")
             .then().extract().statusCode();
         assertThat(ordersStatus).isNotEqualTo(403);
         assertThat(invoicesStatus).isNotEqualTo(403);
@@ -213,7 +98,7 @@ class ProxyResourceTest {
     void ordersTeamCannotDeleteOrders() {
         // DELETE = DELETE action; orders-team only has READ, WRITE
         given()
-            .delete("/apis/registry/v2/groups/default/artifacts/orders")
+            .delete("/apis/registry/v3/groups/default/artifacts/orders")
             .then()
             .statusCode(403);
     }
@@ -245,7 +130,7 @@ class ProxyResourceTest {
         // cannot resolve globalId 7 and falls back to "*". orders-team has no "*"
         // schema grant -> 403. (With a live registry it resolves to the real artifact.)
         given()
-            .get("/apis/registry/v2/ids/globalIds/7")
+            .get("/apis/registry/v3/ids/globalIds/7")
             .then()
             .statusCode(403);
     }
@@ -256,7 +141,7 @@ class ProxyResourceTest {
         // schema-admin holds artifacts: ["*"], so the by-id lookup passes policy
         // (non-403; 502 because the upstream registry is not running in tests).
         int status = given()
-            .get("/apis/registry/v2/ids/globalIds/7")
+            .get("/apis/registry/v3/ids/globalIds/7")
             .then().extract().statusCode();
         assertThat(status).isNotEqualTo(403);
     }
@@ -279,20 +164,123 @@ class ProxyResourceTest {
     void mtlsServiceWithWriteAclPassesPolicyForItsSubjects() {
         aclSnapshot(topicAcl("CN=orders-service", "orders", AclOperation.WRITE, AclPermissionType.ALLOW));
         int put = given().body("{}").contentType("application/json")
-            .put("/apis/registry/v2/groups/default/artifacts/orders-value")
+            .put("/apis/registry/v3/groups/default/artifacts/orders-value")
             .then().extract().statusCode();
         assertThat(put).isNotEqualTo(403);
-        // Creating without an artifact id in the path is a "*" (registry-wide) operation.
+    }
+
+    @Test
+    @TestSecurity(user = "CN=orders-service", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
+    void v3CreateIsAuthorizedOnTheArtifactIdInTheBody() {
+        aclSnapshot(topicAcl("CN=orders-service", "orders", AclOperation.WRITE, AclPermissionType.ALLOW));
+        int own = given().body("{\"artifactId\":\"orders-value\",\"artifactType\":\"AVRO\"}")
+            .contentType("application/json")
+            .post("/apis/registry/v3/groups/default/artifacts?ifExists=FIND_OR_CREATE_VERSION")
+            .then().extract().statusCode();
+        assertThat(own).isNotEqualTo(403);
+        given().body("{\"artifactId\":\"invoices-value\",\"artifactType\":\"AVRO\"}")
+            .contentType("application/json")
+            .post("/apis/registry/v3/groups/default/artifacts")
+            .then().statusCode(403);
+        // No artifact id in the body: the registry would pick one, so this is registry-wide.
+        given().body("{}").contentType("application/json")
+            .post("/apis/registry/v3/groups/default/artifacts")
+            .then().statusCode(403);
+    }
+
+    @Test
+    @TestSecurity(user = "CN=orders-service", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
+    void v2CreateIsAuthorizedOnTheArtifactIdHeader() {
+        aclSnapshot(topicAcl("CN=orders-service", "orders", AclOperation.WRITE, AclPermissionType.ALLOW));
+        int own = given().body("{}").contentType("application/json").header("X-Registry-ArtifactId", "orders-value")
+            .post("/apis/registry/v2/groups/default/artifacts")
+            .then().extract().statusCode();
+        assertThat(own).isNotEqualTo(403);
         given().body("{}").contentType("application/json")
             .post("/apis/registry/v2/groups/default/artifacts")
             .then().statusCode(403);
     }
 
     @Test
+    @TestSecurity(user = "CN=orders-reader", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
+    void v3SearchByContentNeedsOnlyReadOnTheArtifact() {
+        aclSnapshot(topicAcl("CN=orders-reader", "orders", AclOperation.READ, AclPermissionType.ALLOW));
+        int own = given().body("{}").contentType("application/json")
+            .post("/apis/registry/v3/search/versions?artifactId=orders-value&groupId=default")
+            .then().extract().statusCode();
+        assertThat(own).isNotEqualTo(403);
+        given().body("{}").contentType("application/json")
+            .post("/apis/registry/v3/search/versions?artifactId=invoices-value&groupId=default")
+            .then().statusCode(403);
+    }
+
+    // ── ccompat (Confluent serdes): subject = artifact ────────────────────────
+
+    @Test
+    @TestSecurity(user = "CN=orders-service", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
+    void ccompatRegisterIsAuthorizedOnTheSubject() {
+        aclSnapshot(topicAcl("CN=orders-service", "orders", AclOperation.WRITE, AclPermissionType.ALLOW));
+        int own = given().body("{\"schema\":\"{}\"}").contentType("application/vnd.schemaregistry.v1+json")
+            .post("/apis/ccompat/v7/subjects/orders-value/versions")
+            .then().extract().statusCode();
+        assertThat(own).isNotEqualTo(403);
+        given().body("{\"schema\":\"{}\"}").contentType("application/vnd.schemaregistry.v1+json")
+            .post("/apis/ccompat/v7/subjects/invoices-value/versions")
+            .then().statusCode(403);
+    }
+
+    @Test
+    @TestSecurity(user = "CN=orders-reader", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
+    void ccompatSchemaLookupNeedsOnlyReadOnTheSubject() {
+        aclSnapshot(topicAcl("CN=orders-reader", "orders", AclOperation.READ, AclPermissionType.ALLOW));
+        int lookup = given().body("{\"schema\":\"{}\"}").contentType("application/vnd.schemaregistry.v1+json")
+            .post("/apis/ccompat/v7/subjects/orders-value")
+            .then().extract().statusCode();
+        assertThat(lookup).isNotEqualTo(403);
+        given().body("{\"schema\":\"{}\"}").contentType("application/vnd.schemaregistry.v1+json")
+            .post("/apis/ccompat/v7/subjects/orders-value/versions")
+            .then().statusCode(403);
+    }
+
+    @Test
+    @TestSecurity(user = "CN=orders-service", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
+    void ccompatSchemaIdIsNotAuthorizedByTheSubjectHint() {
+        // The registry is unreachable in tests, so id 7 resolves to nothing and needs "*".
+        aclSnapshot(topicAcl("CN=orders-service", "orders", AclOperation.WRITE, AclPermissionType.ALLOW));
+        given().get("/apis/ccompat/v7/schemas/ids/7?subject=orders-value").then().statusCode(403);
+    }
+
+    // ── denials are answered in the registry's own error format ───────────────
+
+    @Test
+    @TestSecurity(user = "alice", roles = {"orders-team"})
+    void v3DenialIsAProblemDetailsDocument() {
+        given()
+            .get("/apis/registry/v3/groups/default/artifacts/invoices")
+            .then()
+            .statusCode(403)
+            .contentType("application/json")
+            .body("status", is(403))
+            .body("title", is("Forbidden"))
+            .body("detail", is("READ on artifact 'invoices' is not permitted for user:alice"));
+    }
+
+    @Test
+    @TestSecurity(user = "alice", roles = {"orders-team"})
+    void ccompatDenialUsesSchemaRegistryErrorCode() {
+        given()
+            .get("/apis/ccompat/v7/subjects/invoices/versions/latest")
+            .then()
+            .statusCode(403)
+            .contentType("application/vnd.schemaregistry.v1+json")
+            .body("error_code", is(40301));
+    }
+
+    @Test
     @TestSecurity(user = "CN=orders-service", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
     void mtlsServiceIsBlockedFromOtherTopicsSubjects() {
         aclSnapshot(topicAcl("CN=orders-service", "orders", AclOperation.WRITE, AclPermissionType.ALLOW));
-        given().get("/apis/registry/v2/groups/default/artifacts/invoices-value").then().statusCode(403);
+        given().get("/apis/registry/v3/groups/default/artifacts/invoices-value").then().statusCode(403);
     }
 
     @Test
@@ -300,24 +288,24 @@ class ProxyResourceTest {
     void mtlsServiceWithDenyIsRefused() {
         aclSnapshot(topicAcl("*", "*", AclOperation.ALL, AclPermissionType.ALLOW),
                     topicAcl("CN=orders-service", "orders", AclOperation.ALL, AclPermissionType.DENY));
-        given().get("/apis/registry/v2/groups/default/artifacts/orders-value").then().statusCode(403);
+        given().get("/apis/registry/v3/groups/default/artifacts/orders-value").then().statusCode(403);
     }
 
     @Test
     @TestSecurity(user = "CN=orders-service", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
     void mtlsServiceWithoutMappingIgnoresRoleFile() {
         aclSnapshot(); // no ACLs at all; "orders" is granted to orders-team in the role file
-        given().get("/apis/registry/v2/groups/default/artifacts/orders").then().statusCode(403);
+        given().get("/apis/registry/v3/groups/default/artifacts/orders").then().statusCode(403);
     }
 
     @Test
     @TestSecurity(user = "CN=payments-app", attributes = @SecurityAttribute(key = "proxy.auth", value = "mtls"))
     void mtlsServiceMappedToRoleGetsThatRolesRules() {
         aclSnapshot(); // no ACLs; test-policy.yaml maps CN=payments-app → invoices-team
-        int status = given().get("/apis/registry/v2/groups/default/artifacts/invoices")
+        int status = given().get("/apis/registry/v3/groups/default/artifacts/invoices")
             .then().extract().statusCode();
         assertThat(status).isNotEqualTo(403);
-        given().get("/apis/registry/v2/groups/default/artifacts/orders").then().statusCode(403);
+        given().get("/apis/registry/v3/groups/default/artifacts/orders").then().statusCode(403);
     }
 
     // ── audit principal through the CDI proxy (regression: field access on a client proxy) ──
