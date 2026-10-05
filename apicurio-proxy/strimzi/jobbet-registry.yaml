@@ -208,6 +208,27 @@ spec:
         - protocol: TCP
           port: 8443
 ---
+# The proxy's Kafka identity: it reads ACLs with describeAcls, which needs Describe on Cluster.
+# tls-external: Strimzi issues no certificate and creates no Secret, it only manages the ACL of
+# principal "User:CN={{ .Values.name }}-proxy-kafka". The certificate in Secret
+# {{ .Values.name }}-proxy-kafka comes from cert-manager and its subject must be exactly that CN.
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: {{ .Values.name }}-proxy-kafka
+  labels:
+    strimzi.io/cluster: {{ .Values.kafka.cluster | default "kafka-dev" }}
+spec:
+  authentication:
+    type: tls-external
+  authorization:
+    type: simple
+    acls:
+      - resource:
+          type: cluster
+        operations:
+          - Describe
+---
 # The proxy's policy.yaml, rendered from .Values.proxy.rbac (same shape as the file itself; see
 # README, "Policy file"). It gives certificates more than their Kafka ACLs do. Without any values
 # it renders `rules: []`: Kafka ACLs only. The running proxy picks up a change without a restart.
