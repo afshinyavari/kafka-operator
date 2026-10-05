@@ -15,6 +15,7 @@ import org.junit.jupiter.api.Test;
 
 import java.nio.charset.StandardCharsets;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -187,6 +188,45 @@ class PolicyEngineDispatchTest {
         assertThat(engine.firstAllowed(mtls("CN=orders-service"), List.of("payments-key", "invoices-key"), READ))
                 .isEmpty();
         assertThat(engine.firstAllowed(mtls("CN=orders-service"), List.of(), READ)).isEmpty();
+    }
+
+    private static final String CN_ONLY_RULES = "RULE:^CN=([^,]+),.*$/CN=$1/,DEFAULT";
+
+    @Test
+    void mappingRulesDecideTheAclPrincipal() {
+        // The ACL is on User:CN=orders-service; the certificate also carries an organization.
+        assertThat(engine.isAllowed(mtls("CN=orders-service,O=Acme"), "orders-value", WRITE)).isFalse();
+        engine.principalMappingRules = Optional.of(CN_ONLY_RULES);
+        assertThat(engine.isAllowed(mtls("CN=orders-service,O=Acme"), "orders-value", WRITE)).isTrue();
+    }
+
+    @Test
+    void mappingRulesDecideThePolicyFilePrincipal() {
+        engine.principalMappingRules = Optional.of(CN_ONLY_RULES);
+        assertThat(engine.isAllowed(mtls("CN=payments-app,O=Acme"), "payments-value", WRITE)).isTrue();
+    }
+
+    @Test
+    void certificateNoRuleMatchesIsDenied() {
+        // In DN mode this certificate gets payments-writer from the policy file.
+        assertThat(engine.isAllowed(mtls("CN=payments-app"), "payments-value", WRITE)).isTrue();
+        engine.principalMappingRules = Optional.of("RULE:^CN=([^,]+),O=Acme$/CN=$1/");
+        assertThat(engine.isAllowed(mtls("CN=payments-app"), "payments-value", WRITE)).isFalse();
+    }
+
+    @Test
+    void blankMappingRulesFallBackToTheMode() {
+        engine.principalMappingRules = Optional.of(" ");
+        assertThat(engine.isAllowed(mtls("CN=orders-service"), "orders-value", WRITE)).isTrue();
+    }
+
+    @Test
+    void auditPrincipalFollowsTheMappingRules() {
+        var rules = MtlsPrincipal.Mapping.ofRules("RULE:^CN=([^,]+),O=Acme$/CN=$1/");
+        assertThat(PolicyEngine.principalOf(mtls("CN=orders-service,O=Acme"), rules)).isEqualTo("user:CN=orders-service");
+        // No rule matches: the audit line still names the certificate.
+        assertThat(PolicyEngine.principalOf(mtls("CN=orders-service,O=Other"), rules))
+                .isEqualTo("user:CN=orders-service,O=Other");
     }
 
     @Test

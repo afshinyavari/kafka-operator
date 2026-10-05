@@ -9,6 +9,14 @@ app.kubernetes.io/instance: {{ .Values.name }}
 {{- end -}}
 
 {{/*
+commonName i proxyns Kafka-klientcertifikat. Blir namnet på proxyns KafkaUser,
+eftersom Strimzi lägger ACL:erna på User:CN=<namnet på KafkaUser>.
+*/}}
+{{- define "registry.proxyKafkaCommonName" -}}
+{{- .Values.proxy.kafkaCommonName | default (printf "%s-proxy-kafka" .Values.name) -}}
+{{- end -}}
+
+{{/*
 Namnet på Kafka-topicen för en roll (journal/events/snapshots).
 
 Topicen under journal ÄR registryts databas när storage.type=kafkasql. Utan

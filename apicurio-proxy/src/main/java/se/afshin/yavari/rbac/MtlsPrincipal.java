@@ -3,9 +3,13 @@ package se.afshin.yavari.rbac;
 import io.quarkus.security.credential.CertificateCredential;
 import io.quarkus.security.identity.SecurityIdentity;
 
+import org.apache.kafka.common.security.ssl.SslPrincipalMapper;
+
 import javax.naming.ldap.LdapName;
 import javax.naming.ldap.Rdn;
+import java.io.IOException;
 import java.security.cert.X509Certificate;
+import java.util.Optional;
 
 /** Derives the Kafka principal name from an mTLS client certificate. */
 public final class MtlsPrincipal {
@@ -13,6 +17,43 @@ public final class MtlsPrincipal {
     /** {@code DN}: RFC 2253 subject (Strimzi KafkaUser default, e.g. {@code CN=orders-service}).
      *  {@code CN}: only the common name, for clusters using {@code ssl.principal.mapping.rules}. */
     public enum Mode { DN, CN }
+
+    /** How a certificate subject becomes a Kafka principal name: a fixed {@link Mode}, or the
+     *  brokers' own {@code ssl.principal.mapping.rules}, evaluated by Kafka's mapper so that the
+     *  proxy and the brokers derive the same name. */
+    public static final class Mapping {
+        private final Mode mode;
+        private final SslPrincipalMapper rules;
+
+        private Mapping(Mode mode, SslPrincipalMapper rules) {
+            this.mode = mode;
+            this.rules = rules;
+        }
+
+        public static Mapping of(Mode mode) {
+            return new Mapping(mode, null);
+        }
+
+        /** @throws IllegalArgumentException when {@code rules} is not a valid rule list */
+        public static Mapping ofRules(String rules) {
+            return new Mapping(null, SslPrincipalMapper.fromRules(rules));
+        }
+
+        /** Empty when no rule matches; Kafka fails authentication for such a certificate. */
+        public Optional<String> apply(String rfc2253Dn) {
+            if (rules == null) return Optional.of(MtlsPrincipal.of(rfc2253Dn, mode));
+            try {
+                return Optional.of(rules.getName(rfc2253Dn));
+            } catch (IOException noMatchingRule) {
+                return Optional.empty();
+            }
+        }
+
+        @Override
+        public String toString() {
+            return rules == null ? "mode " + mode : "rules " + rules;
+        }
+    }
 
     /** Attribute tests set on a {@code @TestSecurity} identity to mark it as mTLS. */
     static final String AUTH_ATTRIBUTE = "proxy.auth";
@@ -49,5 +90,10 @@ public final class MtlsPrincipal {
         CertificateCredential cc = id.getCredential(CertificateCredential.class);
         if (cc != null && cc.getCertificate() != null) return of(cc.getCertificate(), mode);
         return of(id.getPrincipal().getName(), mode);
+    }
+
+    /** Principal for an mTLS identity under {@code mapping}; empty when no rule matches. */
+    public static Optional<String> principalOf(SecurityIdentity id, Mapping mapping) {
+        return mapping.apply(principalOf(id, Mode.DN));
     }
 }

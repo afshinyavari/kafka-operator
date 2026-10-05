@@ -84,6 +84,7 @@ class.
 
 ```bash
 kubectl apply -f deploy/tls-secrets.example.yaml         # or cert-manager-issued Secrets
+kubectl apply -f deploy/kafkauser.yaml                   # SSL scenarios: ACLs for the client certificate
 kubectl apply -f deploy/configmaps/avro-apicurio-mtls-proxy.yaml   # pick a scenario
 kubectl apply -f deploy/producer-deployment.yaml
 kubectl apply -f deploy/consumer-deployment.yaml
@@ -101,6 +102,12 @@ kubectl logs -f deploy/kafka-client-app-producer
 | `kafka-oauth.yaml` | SASL_SSL | string | – |
 
 Secrets (`*_CLIENT_SECRET`) go in a Secret referenced from `envFrom`, not in the ConfigMap.
+
+`deploy/kafkauser.yaml` is a Strimzi `KafkaUser` (`tls-external`) for the certificate both
+Deployments share: Describe, Read and Write on topic `orders` and Read on group
+`kafka-client-app`. The brokers must see the certificate as `CN=kafka-client-app`: that is its
+whole subject, or what their `ssl.principal.mapping.rules` reduce it to. Through the RBAC proxy
+the same ACLs cover the Avro schema, so no registry permissions are set up separately.
 
 The `kafka-client-app-tls` Secret volume and the `kafka-client-app-tls-passwords` Secret in
 `envFrom` are both marked `optional: true`, so the Deployments apply standalone for

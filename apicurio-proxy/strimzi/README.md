@@ -138,9 +138,10 @@ its mapped roles allow it, with two limits:
 - While the ACL source is enabled but has not loaded a snapshot yet, certificate requests are
   denied (a DENY cannot be ruled out). With `PROXY_KAFKA_BOOTSTRAP` unset, only the mapping applies.
 
-Keys are the certificate principal as `PROXY_MTLS_PRINCIPAL` derives it: in `DN` mode the
-subject DN (`CN=<name>` for a certificate with only a common name; spacing after commas does
-not matter), in `CN` mode the bare common name. A Kafka-style `User:` prefix is accepted. Roles carried by the
+Keys are the certificate principal as the proxy derives it: in `DN` mode the subject DN
+(`CN=<name>` for a certificate with only a common name; spacing after commas does not matter),
+in `CN` mode the bare common name, and with `PROXY_MTLS_PRINCIPAL_MAPPING_RULES` whatever the
+rules produce. A Kafka-style `User:` prefix is accepted. Roles carried by the
 identity itself are never used for certificates, only the mapping.
 
 ## Registry APIs
@@ -203,6 +204,13 @@ that issues the client certificates; the Strimzi cluster CA and clients CA are n
   subject DN (`PROXY_MTLS_PRINCIPAL=DN`), so `CN=orders-service,O=Org` needs ACLs on exactly
   `User:CN=orders-service,O=Org`. A Strimzi `KafkaUser` (`tls` or `tls-external`) manages ACLs
   for `User:CN=<name>`, which matches a certificate whose subject is only that common name.
+- **Subjects with more than a CN need the brokers' mapping rules.** When your PKI adds fields
+  such as `O` or `C`, the brokers reduce the subject with `ssl.principal.mapping.rules`, e.g.
+  `RULE:^CN=([^,]+),.*$/CN=$1/,DEFAULT` to keep `CN=<name>`. Give the proxy the same string in
+  `PROXY_MTLS_PRINCIPAL_MAPPING_RULES`: it evaluates it with Kafka's own mapper, so both derive
+  the same principal, and `PROXY_MTLS_PRINCIPAL` is then ignored. A certificate no rule matches
+  is denied, as Kafka rejects it. The startup log shows the rules in use
+  (`[PolicyEngine] Certificate principals by rules …`).
 - **Renewed certificates need a restart.** The proxy and the registry read key material at
   startup, and the registry gets it through env. Restart the pods when cert-manager renews a
   Secret or the bundle changes (e.g. with Stakater Reloader on the four Secrets);
@@ -265,8 +273,8 @@ ship the audit stream to a Kafka topic.
   like any other 4xx from the registry.
 - The Kafka principal derived from a certificate must equal the principal in the ACLs. A
   certificate with subject `CN=<name>` and ACLs on `User:CN=<name>` (what a Strimzi `KafkaUser`
-  manages) match in `DN` mode. Use `PROXY_MTLS_PRINCIPAL=CN` only if your brokers map
-  principals to the bare CN.
+  manages) match in `DN` mode. If your brokers rewrite subjects with
+  `ssl.principal.mapping.rules`, set `PROXY_MTLS_PRINCIPAL_MAPPING_RULES` to the same rules.
 - ACLs are cached and refreshed every `PROXY_KAFKA_ACL_REFRESH_SECONDS`; a change in Kafka
   takes up to that long to apply. If Kafka is unreachable, the last snapshot stays in use.
 
@@ -280,7 +288,8 @@ ship the audit stream to a Kafka topic.
 | `PROXY_TLS_CA` | — | PEM file with the CAs client certificates must chain to; may hold several. |
 | `PROXY_TLS_KEYSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | Server identity as a PKCS12 or JKS store, instead of the PEM pair. |
 | `PROXY_TLS_TRUSTSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | Client CAs as a PKCS12 or JKS store, instead of `PROXY_TLS_CA`. |
-| `PROXY_MTLS_PRINCIPAL` | `DN` | `DN` (RFC 2253 subject, Kafka's default principal) or `CN`. |
+| `PROXY_MTLS_PRINCIPAL` | `DN` | `DN` (RFC 2253 subject, Kafka's default principal) or `CN` (bare common name). |
+| `PROXY_MTLS_PRINCIPAL_MAPPING_RULES` | — | The brokers' `ssl.principal.mapping.rules`, verbatim. Replaces `PROXY_MTLS_PRINCIPAL` when set; an invalid rule list fails startup. |
 | `PROXY_KAFKA_BOOTSTRAP` | — | Enables the Kafka ACL source. Without it certificate identities get only what `principals` in `policy.yaml` grants. |
 | `PROXY_KAFKA_SECURITY_PROTOCOL` | `SSL` | `SSL` or `PLAINTEXT`. |
 | `PROXY_KAFKA_SSL_CERT`, `PROXY_KAFKA_SSL_KEY` | — | Proxy's Kafka client identity as PEM files (PKCS#8 key). |

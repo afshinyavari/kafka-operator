@@ -1,0 +1,41 @@
+# Kafka identity of the test client, for the SSL scenarios (producer and consumer share one
+# client certificate, Secret kafka-client-app-tls). It may produce to and consume from topic
+# `orders` with consumer group `kafka-client-app`: the PRODUCER_TOPIC / CONSUMER_TOPIC /
+# CONSUMER_GROUP_ID of deploy/configmaps/avro-apicurio-mtls-proxy.yaml. Change them together.
+#
+# Avro needs no ACLs of its own: through the Apicurio RBAC proxy, Write on the topic lets the
+# producer register and read artifact `orders-value`, and Read lets the consumer read it.
+#
+# tls-external: Strimzi issues no certificate and creates no Secret, it only manages the ACLs of
+# principal "User:CN=kafka-client-app". The certificate comes from cert-manager with that common
+# name; the brokers must see its subject as exactly CN=kafka-client-app, either because that is
+# the whole subject or through their ssl.principal.mapping.rules (the RBAC proxy then needs the
+# same rules in PROXY_MTLS_PRINCIPAL_MAPPING_RULES). For a Strimzi-issued certificate use
+# `type: tls` instead.
+#
+# The topic must exist (or add Create to its operations when the brokers auto-create topics).
+apiVersion: kafka.strimzi.io/v1beta2
+kind: KafkaUser
+metadata:
+  name: kafka-client-app
+  namespace: kafka
+  labels:
+    strimzi.io/cluster: kafka-dev
+spec:
+  authentication:
+    type: tls-external
+  authorization:
+    type: simple
+    acls:
+      # Producer: Write. Consumer: Read. Describe is needed by both.
+      - resource:
+          type: topic
+          name: orders
+          patternType: literal
+        operations: [Describe, Read, Write]
+      # Consumer: join the group and commit offsets.
+      - resource:
+          type: group
+          name: kafka-client-app
+          patternType: literal
+        operations: [Read]

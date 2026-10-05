@@ -116,7 +116,7 @@ public class ProxyResource {
 
     /** Audit principal for the current identity ({@code user:<name>} or {@code anonymous}). */
     String auditPrincipal() {
-        return PolicyEngine.principalOf(identity, policy.principalMode());
+        return PolicyEngine.principalOf(identity, policy.principalMapping());
     }
 
     private Response forward(Classified request, String method, String upstreamBase, String rawPath,

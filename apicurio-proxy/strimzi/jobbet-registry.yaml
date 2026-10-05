@@ -95,6 +95,12 @@ spec:
                 value: /tls/trust/ca-bundle.crt
               - name: PROXY_MTLS_PRINCIPAL
                 value: DN
+              {{- with .Values.proxy.principalMappingRules }}
+              # The brokers' ssl.principal.mapping.rules, verbatim, so the proxy derives the same
+              # principal from a certificate as Kafka does. Replaces PROXY_MTLS_PRINCIPAL.
+              - name: PROXY_MTLS_PRINCIPAL_MAPPING_RULES
+                value: {{ . | quote }}
+              {{- end }}
               # Kafka ACL source: the proxy's own client certificate (needs Describe on Cluster).
               - name: PROXY_KAFKA_BOOTSTRAP
                 value: {{ .Values.kafka.bootstrap }}
@@ -210,12 +216,14 @@ spec:
 ---
 # The proxy's Kafka identity: it reads ACLs with describeAcls, which needs Describe on Cluster.
 # tls-external: Strimzi issues no certificate and creates no Secret, it only manages the ACL of
-# principal "User:CN={{ .Values.name }}-proxy-kafka". The certificate in Secret
-# {{ .Values.name }}-proxy-kafka comes from cert-manager and its subject must be exactly that CN.
+# principal "User:CN=<metadata.name>". The name must therefore be the commonName of the
+# certificate in Secret {{ .Values.name }}-proxy-kafka (the brokers' ssl.principal.mapping.rules
+# reduce its subject to the CN). Set .Values.proxy.kafkaCommonName when that commonName is not
+# just {{ .Values.name }}-proxy-kafka, e.g. when it carries a domain.
 apiVersion: kafka.strimzi.io/v1beta2
 kind: KafkaUser
 metadata:
-  name: {{ .Values.name }}-proxy-kafka
+  name: {{ include "registry.proxyKafkaCommonName" . }}
   labels:
     strimzi.io/cluster: {{ .Values.kafka.cluster | default "kafka-dev" }}
 spec:

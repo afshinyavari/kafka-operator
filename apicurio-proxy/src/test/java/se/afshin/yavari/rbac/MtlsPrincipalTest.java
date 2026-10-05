@@ -5,6 +5,7 @@ import io.quarkus.security.runtime.QuarkusSecurityIdentity;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 class MtlsPrincipalTest {
 
@@ -31,6 +32,43 @@ class MtlsPrincipalTest {
     void strimziKafkaUserSubjectIsJustCn() {
         // Strimzi issues "CN=<user>"; Kafka's principal is "User:CN=<user>" → DN mode matches.
         assertThat(MtlsPrincipal.of("CN=orders-service", MtlsPrincipal.Mode.DN)).isEqualTo("CN=orders-service");
+    }
+
+    @Test
+    void mappingRulesRewriteTheSubjectLikeTheBroker() {
+        // Certificates with mandatory O/C fields; the brokers reduce them to "CN=<name>".
+        var mapping = MtlsPrincipal.Mapping.ofRules("RULE:^CN=([^,]+),.*$/CN=$1/,DEFAULT");
+        assertThat(mapping.apply("CN=kafka-client-app,O=Org,C=SE")).contains("CN=kafka-client-app");
+        assertThat(mapping.apply("CN=plain")).contains("CN=plain");
+    }
+
+    @Test
+    void mappingRuleThatFindsTheCnAnywhereInTheSubject() {
+        var mapping = MtlsPrincipal.Mapping.ofRules("RULE:^.*CN=([^,]+).*$/CN=$1/,DEFAULT");
+        assertThat(mapping.apply("CN=kafka-client-app,OU=Team,O=Org,C=SE")).contains("CN=kafka-client-app");
+        assertThat(mapping.apply("O=Org,CN=kafka-client-app")).contains("CN=kafka-client-app");
+        assertThat(mapping.apply("CN=kafka-client-app")).contains("CN=kafka-client-app");
+        assertThat(mapping.apply("O=Org")).contains("O=Org");   // DEFAULT
+    }
+
+    @Test
+    void mappingRulesWithoutAMatchGiveNoPrincipal() {
+        var mapping = MtlsPrincipal.Mapping.ofRules("RULE:^CN=([^,]+),O=Org$/CN=$1/");
+        assertThat(mapping.apply("CN=kafka-client-app,O=Other")).isEmpty();
+    }
+
+    @Test
+    void invalidMappingRulesAreRejected() {
+        assertThatThrownBy(() -> MtlsPrincipal.Mapping.ofRules("not a rule"))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
+    @Test
+    void modeMappingBehavesLikeTheMode() {
+        assertThat(MtlsPrincipal.Mapping.of(MtlsPrincipal.Mode.CN).apply("CN=orders-service,O=Acme"))
+                .contains("orders-service");
+        assertThat(MtlsPrincipal.Mapping.of(MtlsPrincipal.Mode.DN).apply("CN=orders-service,O=Acme"))
+                .contains("CN=orders-service,O=Acme");
     }
 
     @Test

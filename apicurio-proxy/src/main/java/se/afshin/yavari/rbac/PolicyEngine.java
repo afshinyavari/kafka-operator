@@ -54,6 +54,23 @@ public class PolicyEngine {
         return principalMode == null ? MtlsPrincipal.Mode.DN : principalMode;
     }
 
+    /** The brokers' {@code ssl.principal.mapping.rules}; when set it replaces the mode. */
+    @ConfigProperty(name = "proxy.mtls.principal-mapping-rules")
+    Optional<String> principalMappingRules;
+
+    private volatile MtlsPrincipal.Mapping ruleMapping;
+
+    /** How certificate subjects become principal names. Read it through this accessor from
+     *  other beans, for the same reason as {@link #principalMode()}. */
+    public MtlsPrincipal.Mapping principalMapping() {
+        String rules = principalMappingRules == null ? null
+                : principalMappingRules.filter(r -> !r.isBlank()).orElse(null);
+        if (rules == null) return MtlsPrincipal.Mapping.of(principalMode());
+        MtlsPrincipal.Mapping m = ruleMapping;
+        if (m == null) ruleMapping = m = MtlsPrincipal.Mapping.ofRules(rules);
+        return m;
+    }
+
     private final AtomicReference<Policy> policy = new AtomicReference<>(new Policy(List.of(), Map.of()));
     private volatile boolean initialized = false;
     private PolicyFileWatcher watcher;
@@ -61,6 +78,7 @@ public class PolicyEngine {
     /** Loads the policy file (a broken file fails startup), then polls it for changes every
      *  {@code proxy.policy.reload-seconds}; a broken change keeps the policy already loaded. */
     void onStart(@Observes StartupEvent event) throws Exception {
+        System.out.println("[PolicyEngine] Certificate principals by " + principalMapping());
         watcher = new PolicyFileWatcher(Path.of(policyFilePath), this::load);
         watcher.loadInitial();
         watcher.start(Duration.ofSeconds(Math.max(1, reloadSeconds)));
@@ -84,14 +102,16 @@ public class PolicyEngine {
         if (!MtlsPrincipal.isCertificateIdentity(identity)) {
             return isAllowed(identity.getRoles(), artifact, action);
         }
-        String principal = MtlsPrincipal.principalOf(identity, principalMode());
+        Optional<String> mapped = MtlsPrincipal.principalOf(identity, principalMapping());
+        if (mapped.isEmpty()) return false;
+        String principal = mapped.get();
         boolean aclsLoaded = acls != null && acls.isLoaded();
         if (!aclsLoaded && acls != null && acls.isEnabled()) return false;
         if (aclsLoaded && acls.isAllowed(principal, artifact, action)) return true;
-        Set<String> mapped = rolesForPrincipal(principal);
-        if (mapped.isEmpty()) return false;
+        Set<String> roles = rolesForPrincipal(principal);
+        if (roles.isEmpty()) return false;
         if (aclsLoaded && acls.isDenied(principal, artifact, action)) return false;
-        return isAllowed(mapped, artifact, action);
+        return isAllowed(roles, artifact, action);
     }
 
     /** The first of {@code artifacts} the identity may perform {@code action} on. */
@@ -122,9 +142,16 @@ public class PolicyEngine {
 
     /** Identity → "user:<name>" (certificate subject per mode for mTLS) or "anonymous". */
     public static String principalOf(SecurityIdentity identity, MtlsPrincipal.Mode mode) {
+        return principalOf(identity, MtlsPrincipal.Mapping.of(mode));
+    }
+
+    /** Identity → "user:<name>" or "anonymous". A certificate is named by its mapped principal,
+     *  or by its subject when no mapping rule matches. */
+    public static String principalOf(SecurityIdentity identity, MtlsPrincipal.Mapping mapping) {
         if (identity == null || identity.isAnonymous()) return "anonymous";
         if (MtlsPrincipal.isCertificateIdentity(identity)) {
-            return "user:" + MtlsPrincipal.principalOf(identity, mode);
+            return "user:" + MtlsPrincipal.principalOf(identity, mapping)
+                    .orElseGet(() -> MtlsPrincipal.principalOf(identity, MtlsPrincipal.Mode.DN));
         }
         return identity.getPrincipal() != null && identity.getPrincipal().getName() != null
                 ? "user:" + identity.getPrincipal().getName() : "anonymous";
