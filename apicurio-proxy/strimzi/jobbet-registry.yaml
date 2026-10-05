@@ -1,0 +1,202 @@
+{{ $rhbkUrl := slice (splitList "/" .Values.keycloak.url ) 2 | first }}
+{{ $registryUrl := printf "%s.%s" .Values.name .Values.openshiftClusterDomain }}
+{{ $registryUiUrl := printf "%s-ui.%s" .Values.name .Values.openshiftClusterDomain }}
+apiVersion: registry.apicur.io/v1
+kind: ApicurioRegistry3
+metadata:
+  name: {{ .Values.name }}
+spec:
+  app:
+    env:
+      # The API listens on loopback only, so the rbac-proxy sidecar is the only way in.
+      - name: QUARKUS_HTTP_HOST
+        value: "127.0.0.1"
+      - name: QUARKUS_HTTP_CORS_ORIGINS
+        value: "http://{{ $registryUrl }},https://{{ $registryUrl }},https://{{ $rhbkUrl }},https://{{ $registryUiUrl }},http://{{ $registryUiUrl }}"
+      - name: APICURIO_KAFKASQL_TOPIC
+        value: {{ include "registry.topicName" (list . "journal") | quote }}
+      - name: APICURIO_EVENTS_KAFKA_TOPIC
+        value: {{ include "registry.topicName" (list . "events") | quote }}
+      - name: APICURIO_KAFKASQL_SNAPSHOTS_TOPIC
+        value: {{ include "registry.topicName" (list . "snapshots") | quote }}
+      - name: APICURIO_KAFKASQL_CONSUMER_GROUP-PREFIX
+        value: {{ .Values.kafka.groupId }}
+      - name: APICURIO_KAFKASQL_TOPIC_AUTO_CREATE
+        value: "true"
+      - name: APICURIO_URL_OVERRIDE_HOST
+        value: {{ $registryUrl }}
+      - name: APICURIO_URL_OVERRIDE_PORT
+        value: "443"
+      # Kafka over mTLS with the registry's own cert-manager certificate (the key must be PKCS#8:
+      # privateKey.encoding: PKCS8 on the Certificate) and the CA bundle.
+      - name: APICURIO_KAFKA_COMMON_SECURITY_PROTOCOL
+        value: SSL
+      - name: APICURIO_KAFKA_COMMON_SSL_KEYSTORE_TYPE
+        value: PEM
+      - name: APICURIO_KAFKA_COMMON_SSL_KEYSTORE_CERTIFICATE_CHAIN
+        valueFrom:
+          secretKeyRef:
+            name: {{ .Values.name }}
+            key: tls.crt
+      - name: APICURIO_KAFKA_COMMON_SSL_KEYSTORE_KEY
+        valueFrom:
+          secretKeyRef:
+            name: {{ .Values.name }}
+            key: tls.key
+      - name: APICURIO_KAFKA_COMMON_SSL_TRUSTSTORE_TYPE
+        value: PEM
+      - name: APICURIO_KAFKA_COMMON_SSL_TRUSTSTORE_CERTIFICATES
+        valueFrom:
+          secretKeyRef:
+            name: tls-trust-bundle
+            key: ca-bundle.crt
+    ingress:
+      enabled: false
+    # The operator's own NetworkPolicy opens 8080 and 9000 only; the one at the bottom opens 8443.
+    networkPolicy:
+      enabled: false
+    # No `tls` block here any more: the proxy terminates TLS on 8443 and talks plain HTTP to the
+    # registry on 127.0.0.1:8080. With it the registry would open its own HTTPS port in the same pod.
+    storage:
+      type: kafkasql
+      kafkasql:
+        bootstrapServers: {{ .Values.kafka.bootstrap }}
+        # No `tls` block: it takes PKCS12 files with a password. The PEM material is passed
+        # through the APICURIO_KAFKA_COMMON_SSL_* env above instead.
+    # Added next to the operator's own container (apicurio-registry-app).
+    podTemplateSpec:
+      spec:
+        containers:
+          - name: rbac-proxy
+            image: {{ .Values.proxy.image }}
+            ports:
+              - name: https
+                containerPort: 8443
+            env:
+              - name: APICURIO_URL
+                value: "http://127.0.0.1:8080"
+              - name: XML_SCHEMA_URL
+                value: "http://127.0.0.1:8080"
+              - name: POLICY_FILE
+                value: /opt/rbac/policy.yaml
+              # mTLS only. To add OIDC later, remove this and set OIDC_ISSUER_URL (+ OIDC_ROLE_CLAIM).
+              - name: QUARKUS_OIDC_TENANT_ENABLED
+                value: "false"
+              # HTTPS listener: the proxy's server certificate, and the CAs client certificates must chain to.
+              - name: PROXY_TLS_ENABLED
+                value: "true"
+              - name: PROXY_TLS_PORT
+                value: "8443"
+              - name: PROXY_TLS_CERT
+                value: /tls/server/tls.crt
+              - name: PROXY_TLS_KEY
+                value: /tls/server/tls.key
+              - name: PROXY_TLS_CA
+                value: /tls/trust/ca-bundle.crt
+              - name: PROXY_MTLS_PRINCIPAL
+                value: DN
+              # Kafka ACL source: the proxy's own client certificate (needs Describe on Cluster).
+              - name: PROXY_KAFKA_BOOTSTRAP
+                value: {{ .Values.kafka.bootstrap }}
+              - name: PROXY_KAFKA_SSL_CERT
+                value: /tls/kafka/tls.crt
+              - name: PROXY_KAFKA_SSL_KEY
+                value: /tls/kafka/tls.key
+              - name: PROXY_KAFKA_SSL_CA
+                value: /tls/trust/ca-bundle.crt
+            volumeMounts:
+              - name: proxy-server-tls
+                mountPath: /tls/server
+                readOnly: true
+              - name: proxy-kafka-tls
+                mountPath: /tls/kafka
+                readOnly: true
+              - name: trust-bundle
+                mountPath: /tls/trust
+                readOnly: true
+              - name: proxy-policy
+                mountPath: /opt/rbac
+                readOnly: true
+            readinessProbe:
+              httpGet:
+                path: /q/health/ready
+                port: 8443
+                scheme: HTTPS
+              initialDelaySeconds: 5
+            livenessProbe:
+              httpGet:
+                path: /q/health/live
+                port: 8443
+                scheme: HTTPS
+              initialDelaySeconds: 15
+            resources:
+              requests:
+                cpu: 100m
+                memory: 256Mi
+              limits:
+                memory: 512Mi
+        volumes:
+          - name: proxy-server-tls
+            secret:
+              secretName: {{ .Values.name }}-proxy-server-tls
+          - name: proxy-kafka-tls
+            secret:
+              secretName: {{ .Values.name }}-proxy-kafka
+          - name: trust-bundle
+            secret:
+              secretName: tls-trust-bundle
+          - name: proxy-policy
+            configMap:
+              name: {{ .Values.name }}-proxy-policy
+  # The UI calls the API from the browser, which has no client certificate: with an mTLS-only
+  # proxy in front of the API it gets 401 until OIDC is enabled on the proxy.
+  ui:
+    ingress:
+      host: {{ $registryUiUrl }}
+      annotations:
+        route.openshift.io/termination: edge
+        route.openshift.io/insecureEdgeTerminationPolicy: Redirect
+    env:
+      - name: REGISTRY_API_URL
+        value: "https://{{ $registryUrl }}/apis/registry/v3"
+---
+# Exposes only the proxy. A Route for {{ $registryUrl }} must point here with passthrough
+# termination (edge and reencrypt drop the client certificate).
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .Values.name }}-rbac
+spec:
+  selector:
+    {{- include "registry.appPodSelector" . | nindent 4 }}
+  ports:
+    - name: https
+      port: 8443
+      targetPort: 8443
+---
+# Only the proxy port is reachable from outside the pod. To scrape registry metrics, also
+# allow port 9000 from the monitoring namespace.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Values.name }}-only-via-proxy
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "registry.appPodSelector" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8443
+---
+# Roles for certificates that need more than their Kafka ACLs give (see README, "Policy file").
+# `rules: []` means: Kafka ACLs only.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.name }}-proxy-policy
+data:
+  policy.yaml: |
+    rules: []
