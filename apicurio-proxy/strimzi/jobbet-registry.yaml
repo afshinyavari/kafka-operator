@@ -160,8 +160,7 @@ spec:
       - name: REGISTRY_API_URL
         value: "https://{{ $registryUrl }}/apis/registry/v3"
 ---
-# Exposes only the proxy. A Route for {{ $registryUrl }} must point here with passthrough
-# termination (edge and reencrypt drop the client certificate).
+# Exposes only the proxy.
 apiVersion: v1
 kind: Service
 metadata:
@@ -173,6 +172,24 @@ spec:
     - name: https
       port: 8443
       targetPort: 8443
+---
+# The registry's external address, straight through to the proxy. Passthrough is required: edge
+# and reencrypt terminate TLS in the router and drop the client certificate. Clients therefore
+# see the proxy's own server certificate, which must carry {{ $registryUrl }} as a SAN.
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ .Values.name }}-rbac
+spec:
+  host: {{ $registryUrl }}
+  to:
+    kind: Service
+    name: {{ .Values.name }}-rbac
+  port:
+    targetPort: https
+  tls:
+    termination: passthrough
+    insecureEdgeTerminationPolicy: Redirect
 ---
 # Only the proxy port is reachable from outside the pod. To scrape registry metrics, also
 # allow port 9000 from the monitoring namespace.
