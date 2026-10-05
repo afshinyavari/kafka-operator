@@ -28,7 +28,10 @@ written for Apicurio Registry 3.x and for mTLS only (see [mTLS only](#mtls-only-
 | `proxy-standalone-deployment.yaml` | Proxy as its own Deployment (2 replicas) in front of the registry Service, plus a NetworkPolicy letting only proxy pods reach the registry. | The proxy should scale and roll independently of the registry. With the 3.x operator the CR needs `spec.app.networkPolicy.enabled: false` and `spec.ui.enabled: false`, and the CNI must enforce NetworkPolicy; otherwise the registry is reachable past the proxy. |
 
 `kafkauser.yaml` (the proxy's `KafkaUser` with `Describe` on `Cluster`, needed for `describeAcls`)
-applies to all three.
+and `certificates.yaml` (the cert-manager `Certificate`s the manifests mount) apply to all three.
+
+The manifests take every certificate from cert-manager and every trust anchor from one CA
+bundle; no Strimzi CA Secret is involved (see [Certificates and trust](#certificates-and-trust)).
 
 NetworkPolicy notes: kubelet probes are not blocked by NetworkPolicy in the common CNIs
 (Calico, Cilium, OVN); if yours differs, allow ingress from the node CIDR on the probe ports
@@ -136,8 +139,8 @@ its mapped roles allow it, with two limits:
   denied (a DENY cannot be ruled out). With `PROXY_KAFKA_BOOTSTRAP` unset, only the mapping applies.
 
 Keys are the certificate principal as `PROXY_MTLS_PRINCIPAL` derives it: in `DN` mode the
-subject DN (`CN=<name>` for Strimzi `KafkaUser`s; spacing after commas does not matter), in
-`CN` mode the bare common name. A Kafka-style `User:` prefix is accepted. Roles carried by the
+subject DN (`CN=<name>` for a certificate with only a common name; spacing after commas does
+not matter), in `CN` mode the bare common name. A Kafka-style `User:` prefix is accepted. Roles carried by the
 identity itself are never used for certificates, only the mapping.
 
 ## Registry APIs
@@ -176,24 +179,48 @@ policy is asked. GET is READ, DELETE is DELETE, everything else is WRITE unless 
   message, so serdes report them as an authorization error.
 - Everything under `/apis/` goes to `APICURIO_URL`; any other path goes to `XML_SCHEMA_URL`.
 
-## Secrets
+## Certificates and trust
 
-| Secret | Keys | Source |
+| Object | Keys | Source |
 |---|---|---|
-| `apicurio-proxy-server-tls` | `server.p12`, `password` | Your PKI / cert-manager: server certificate for the proxy's hostname |
-| `my-cluster-clients-ca-cert` | `ca.p12`, `ca.password` | Created by Strimzi — trust anchor for client certificates |
-| `apicurio-proxy-kafka` | `user.p12`, `user.password` | Created by Strimzi from `kafkauser.yaml` |
-| `my-cluster-cluster-ca-cert` | `ca.p12`, `ca.password` | Created by Strimzi — trust anchor for Kafka |
-| `apicurio-registry-kafka` | `user.p12`, `user.password` | The registry's own `KafkaUser` for kafkasql storage (your existing one); not used by the standalone proxy |
+| Secret `apicurio-proxy-server-tls` | `tls.crt`, `tls.key` | cert-manager: server certificate for the proxy's Service names |
+| Secret `apicurio-proxy-kafka` | `tls.crt`, `tls.key` | cert-manager: the proxy's Kafka client certificate, subject `CN=apicurio-proxy-kafka` |
+| Secret `apicurio-registry-kafka` | `tls.crt`, `tls.key` | cert-manager: the registry's Kafka client certificate for kafkasql storage; not used by the standalone proxy |
+| Secret `tls-trust-bundle` | `ca-bundle.crt` | Your CA bundle: trust anchor for client certificates **and** for Kafka |
 
-All stores can be JKS (`*_TYPE=JKS`) or PEM (`*_TYPE=PEM`, with `PROXY_TLS_CERT` / `PROXY_TLS_KEY` /
-`PROXY_TLS_CA` and `PROXY_KAFKA_SSL_CERT` / `_KEY` / `_CA`). PEM private keys must be PKCS#8
-(`-----BEGIN PRIVATE KEY-----`); convert with `openssl pkcs8 -topk8 -nocrypt`.
+`certificates.yaml` has the three `Certificate`s. The Kafka listener the proxy and the registry
+connect to must present a certificate that chains to a CA in the bundle and must trust the CA
+that issues the client certificates; the Strimzi cluster CA and clients CA are not used.
+
+- **Private keys must be PKCS#8** (`-----BEGIN PRIVATE KEY-----`) wherever a Kafka client reads
+  them: `apicurio-proxy-kafka` and `apicurio-registry-kafka`. cert-manager writes PKCS#1 unless
+  the `Certificate` sets `privateKey.encoding: PKCS8`; with a PKCS#1 key the proxy fails at
+  startup with `Invalid PEM keystore configs`. The proxy's server key may be either.
+- **The bundle decides who is authenticated.** A client certificate from *any* CA in
+  `ca-bundle.crt` passes the TLS handshake; what it may do is then decided by the Kafka ACLs of
+  its subject and by `principals` in `policy.yaml`. A certificate with neither gets 403.
+- **The certificate subject is the Kafka principal.** The proxy looks up ACLs for the full
+  subject DN (`PROXY_MTLS_PRINCIPAL=DN`), so `CN=orders-service,O=Org` needs ACLs on exactly
+  `User:CN=orders-service,O=Org`. A Strimzi `KafkaUser` (`tls` or `tls-external`) manages ACLs
+  for `User:CN=<name>`, which matches a certificate whose subject is only that common name.
+- **Renewed certificates need a restart.** The proxy and the registry read key material at
+  startup, and the registry gets it through env. Restart the pods when cert-manager renews a
+  Secret or the bundle changes (e.g. with Stakater Reloader on the four Secrets);
+  otherwise connections fail once the old certificate expires.
+- `tls-trust-bundle` is mounted as a Secret. If your bundle is a ConfigMap (the trust-manager
+  default), change the `trust-bundle` volume to `configMap:` and the registry's `secretKeyRef`
+  to `configMapKeyRef`.
+- The registry's `spec.app.storage.kafkasql.tls` block of the 3.x operator is not used: it takes
+  PKCS12 files with a password. The PEM material is passed as `APICURIO_KAFKA_COMMON_SSL_*` env.
+
+Stores can instead be PKCS12 (`PROXY_TLS_KEYSTORE` / `_PASSWORD`, `PROXY_TLS_TRUSTSTORE` /
+`_PASSWORD`, same for `PROXY_KAFKA_SSL_*`) or JKS (`*_TYPE=JKS`), e.g. for Strimzi-issued
+`KafkaUser` Secrets (`user.p12` / `user.password`) and CA Secrets (`ca.p12` / `ca.password`).
 
 ## Apply and verify
 
 ```bash
-kubectl apply -f kafkauser.yaml
+kubectl apply -f certificates.yaml -f kafkauser.yaml
 kubectl apply -f apicurio-with-proxy-deployment.yaml     # or apicurio-operator-sidecar.yaml / proxy-standalone-deployment.yaml
 kubectl -n kafka logs deploy/apicurio-registry -c rbac-proxy | grep -E 'PolicyEngine|KafkaAclPolicySource|Listening'
 ```
@@ -205,19 +232,20 @@ Deployment, `registry-app-deployment` and Service `registry-rbac` with the opera
 Expected on start: `[PolicyEngine] Loaded N rules and M principal mappings`, `[KafkaAclPolicySource] Loaded N ACL bindings`
 and `Listening on: https://0.0.0.0:8443`. Readiness is down until both have happened.
 
-A service with a Strimzi `KafkaUser` certificate (Secret `orders-service`):
+A service with a cert-manager client certificate (Secret `orders-service`):
 
 ```bash
-kubectl -n kafka get secret orders-service -o jsonpath='{.data.user\.p12}' | base64 -d > user.p12
-PW=$(kubectl -n kafka get secret orders-service -o jsonpath='{.data.user\.password}' | base64 -d)
-curl --cert-type P12 --cert user.p12:"$PW" --cacert proxy-ca.crt \
+kubectl -n kafka get secret orders-service -o jsonpath='{.data.tls\.crt}' | base64 -d > tls.crt
+kubectl -n kafka get secret orders-service -o jsonpath='{.data.tls\.key}' | base64 -d > tls.key
+kubectl -n kafka get secret tls-trust-bundle -o jsonpath='{.data.ca-bundle\.crt}' | base64 -d > ca-bundle.crt
+curl --cert tls.crt --key tls.key --cacert ca-bundle.crt \
      https://apicurio-registry.kafka.svc:8443/apis/registry/v3/groups/default/artifacts/orders-value
 ```
 
 A human with a token:
 
 ```bash
-curl -H "Authorization: Bearer $TOKEN" --cacert proxy-ca.crt \
+curl -H "Authorization: Bearer $TOKEN" --cacert ca-bundle.crt \
      https://apicurio-registry.kafka.svc:8443/apis/registry/v3/search/artifacts
 ```
 
@@ -235,9 +263,10 @@ ship the audit stream to a Kafka topic.
 - Confluent clients 8.x ask `associations/resources/-/{topic}` before every call. Apicurio
   answers 404, which the client expects, and the audit stream records that 404 as `deny`
   like any other 4xx from the registry.
-- The Kafka principal derived from a certificate must equal the principal in the ACLs. Strimzi
-  `KafkaUser` certificates have subject `CN=<name>` and ACLs `User:CN=<name>`, which `DN` mode
-  matches. Use `PROXY_MTLS_PRINCIPAL=CN` only if your brokers map principals to the bare CN.
+- The Kafka principal derived from a certificate must equal the principal in the ACLs. A
+  certificate with subject `CN=<name>` and ACLs on `User:CN=<name>` (what a Strimzi `KafkaUser`
+  manages) match in `DN` mode. Use `PROXY_MTLS_PRINCIPAL=CN` only if your brokers map
+  principals to the bare CN.
 - ACLs are cached and refreshed every `PROXY_KAFKA_ACL_REFRESH_SECONDS`; a change in Kafka
   takes up to that long to apply. If Kafka is unreachable, the last snapshot stays in use.
 
@@ -247,13 +276,17 @@ ship the audit stream to a Kafka topic.
 |---|---|---|
 | `PROXY_TLS_ENABLED` | `false` | Enable the HTTPS listener with optional client certificates. |
 | `PROXY_TLS_PORT` | `8443` | HTTPS port. Plain HTTP is disabled when TLS is enabled. |
-| `PROXY_TLS_KEYSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | Server identity. PEM: `PROXY_TLS_CERT` + `PROXY_TLS_KEY`. |
-| `PROXY_TLS_TRUSTSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | CAs client certificates must chain to. PEM: `PROXY_TLS_CA`. |
-| `PROXY_MTLS_PRINCIPAL` | `DN` | `DN` (RFC 2253 subject, Strimzi default) or `CN`. |
+| `PROXY_TLS_CERT`, `PROXY_TLS_KEY` | — | Server identity as PEM files. |
+| `PROXY_TLS_CA` | — | PEM file with the CAs client certificates must chain to; may hold several. |
+| `PROXY_TLS_KEYSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | Server identity as a PKCS12 or JKS store, instead of the PEM pair. |
+| `PROXY_TLS_TRUSTSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | Client CAs as a PKCS12 or JKS store, instead of `PROXY_TLS_CA`. |
+| `PROXY_MTLS_PRINCIPAL` | `DN` | `DN` (RFC 2253 subject, Kafka's default principal) or `CN`. |
 | `PROXY_KAFKA_BOOTSTRAP` | — | Enables the Kafka ACL source. Without it certificate identities get only what `principals` in `policy.yaml` grants. |
 | `PROXY_KAFKA_SECURITY_PROTOCOL` | `SSL` | `SSL` or `PLAINTEXT`. |
-| `PROXY_KAFKA_SSL_KEYSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | Proxy's Kafka client identity. PEM: `PROXY_KAFKA_SSL_CERT` + `_KEY`. |
-| `PROXY_KAFKA_SSL_TRUSTSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | Kafka cluster CA. PEM: `PROXY_KAFKA_SSL_CA`. |
+| `PROXY_KAFKA_SSL_CERT`, `PROXY_KAFKA_SSL_KEY` | — | Proxy's Kafka client identity as PEM files (PKCS#8 key). |
+| `PROXY_KAFKA_SSL_CA` | — | PEM file with the CAs the Kafka listener's certificate chains to; may hold several. |
+| `PROXY_KAFKA_SSL_KEYSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | Kafka client identity as a PKCS12 or JKS store, instead of the PEM pair. |
+| `PROXY_KAFKA_SSL_TRUSTSTORE`, `_PASSWORD`, `_TYPE` | — / `PKCS12` | Kafka CAs as a PKCS12 or JKS store, instead of `PROXY_KAFKA_SSL_CA`. |
 | `PROXY_KAFKA_ACL_REFRESH_SECONDS` | `30` | ACL snapshot refresh interval. |
 | `PROXY_ARTIFACT_SUFFIXES` | `-value,-key` | Suffixes stripped from an artifact id to find its topic. |
 | `POLICY_RELOAD_SECONDS` | `5` | How often `policy.yaml` is checked for changed content (minimum 1). |

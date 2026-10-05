@@ -39,26 +39,19 @@ spec:
             - { name: QUARKUS_OIDC_TENANT_ENABLED, value: "false" }
             - { name: PROXY_TLS_ENABLED, value: "true" }
             - { name: PROXY_TLS_PORT, value: "8443" }
-            - { name: PROXY_TLS_KEYSTORE, value: /tls/server/server.p12 }
-            - name: PROXY_TLS_KEYSTORE_PASSWORD
-              valueFrom: { secretKeyRef: { name: apicurio-proxy-server-tls, key: password } }
-            - { name: PROXY_TLS_TRUSTSTORE, value: /tls/clients-ca/ca.p12 }
-            - name: PROXY_TLS_TRUSTSTORE_PASSWORD
-              valueFrom: { secretKeyRef: { name: my-cluster-clients-ca-cert, key: ca.password } }
+            - { name: PROXY_TLS_CERT, value: /tls/server/tls.crt }
+            - { name: PROXY_TLS_KEY,  value: /tls/server/tls.key }
+            - { name: PROXY_TLS_CA,   value: /tls/trust/ca-bundle.crt }   # CAs client certificates must chain to
             - { name: PROXY_MTLS_PRINCIPAL, value: DN }
             - { name: PROXY_KAFKA_BOOTSTRAP, value: my-cluster-kafka-bootstrap:9093 }
-            - { name: PROXY_KAFKA_SSL_KEYSTORE, value: /tls/kafka-user/user.p12 }
-            - name: PROXY_KAFKA_SSL_KEYSTORE_PASSWORD
-              valueFrom: { secretKeyRef: { name: apicurio-proxy-kafka, key: user.password } }
-            - { name: PROXY_KAFKA_SSL_TRUSTSTORE, value: /tls/cluster-ca/ca.p12 }
-            - name: PROXY_KAFKA_SSL_TRUSTSTORE_PASSWORD
-              valueFrom: { secretKeyRef: { name: my-cluster-cluster-ca-cert, key: ca.password } }
+            - { name: PROXY_KAFKA_SSL_CERT, value: /tls/kafka/tls.crt }
+            - { name: PROXY_KAFKA_SSL_KEY,  value: /tls/kafka/tls.key }
+            - { name: PROXY_KAFKA_SSL_CA,   value: /tls/trust/ca-bundle.crt }
           volumeMounts:
-            - { name: server-tls,  mountPath: /tls/server,     readOnly: true }
-            - { name: clients-ca,  mountPath: /tls/clients-ca, readOnly: true }
-            - { name: kafka-user,  mountPath: /tls/kafka-user, readOnly: true }
-            - { name: cluster-ca,  mountPath: /tls/cluster-ca, readOnly: true }
-            - { name: policy,      mountPath: /opt/rbac,       readOnly: true }
+            - { name: server-tls,   mountPath: /tls/server, readOnly: true }
+            - { name: kafka-tls,    mountPath: /tls/kafka,  readOnly: true }
+            - { name: trust-bundle, mountPath: /tls/trust,  readOnly: true }
+            - { name: policy,       mountPath: /opt/rbac,   readOnly: true }
           readinessProbe:
             httpGet: { path: /q/health/ready, port: 8443, scheme: HTTPS }
             initialDelaySeconds: 5
@@ -69,11 +62,10 @@ spec:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { memory: 512Mi }
       volumes:
-        - { name: server-tls, secret: { secretName: apicurio-proxy-server-tls } }
-        - { name: clients-ca, secret: { secretName: my-cluster-clients-ca-cert } }
-        - { name: kafka-user, secret: { secretName: apicurio-proxy-kafka } }
-        - { name: cluster-ca, secret: { secretName: my-cluster-cluster-ca-cert } }
-        - { name: policy,     configMap: { name: apicurio-proxy-policy } }
+        - { name: server-tls,   secret: { secretName: apicurio-proxy-server-tls } }
+        - { name: kafka-tls,    secret: { secretName: apicurio-proxy-kafka } }
+        - { name: trust-bundle, secret: { secretName: tls-trust-bundle } }
+        - { name: policy,       configMap: { name: apicurio-proxy-policy } }
 ---
 apiVersion: v1
 kind: Service

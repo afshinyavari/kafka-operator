@@ -1,5 +1,7 @@
 # The proxy's own Kafka identity: it reads ACLs with describeAcls, which needs Describe on Cluster.
-# Strimzi creates the Secret "apicurio-proxy-kafka" with user.p12 / user.password (and PEM user.crt / user.key).
+# tls-external: Strimzi issues no certificate and creates no Secret, it only manages the ACLs of
+# principal "User:CN=apicurio-proxy-kafka". The certificate comes from cert-manager
+# (certificates.yaml) and its subject must be exactly CN=<this name>.
 apiVersion: kafka.strimzi.io/v1beta2
 kind: KafkaUser
 metadata:
@@ -9,7 +11,7 @@ metadata:
     strimzi.io/cluster: my-cluster
 spec:
   authentication:
-    type: tls
+    type: tls-external
   authorization:
     type: simple
     acls:
