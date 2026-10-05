@@ -191,12 +191,33 @@ spec:
         - protocol: TCP
           port: 8443
 ---
-# Roles for certificates that need more than their Kafka ACLs give (see README, "Policy file").
-# `rules: []` means: Kafka ACLs only.
+# The proxy's policy.yaml, rendered from .Values.proxy.rbac (same shape as the file itself; see
+# README, "Policy file"). It gives certificates more than their Kafka ACLs do. Without any values
+# it renders `rules: []`: Kafka ACLs only. The running proxy picks up a change without a restart.
+#
+#   proxy:
+#     rbac:
+#       principals:                      # certificate principal -> roles
+#         "CN=ci-pipeline": [schema-admin]
+#       rules:                           # roles -> artifacts and actions (READ | WRITE | DELETE)
+#         - roles: [schema-admin]
+#           resources:
+#             - artifact: "*"
+#               actions: [READ, WRITE, DELETE]
+{{- $rbac := .Values.proxy.rbac | default dict }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
   name: {{ .Values.name }}-proxy-policy
 data:
   policy.yaml: |
+    {{- with $rbac.principals }}
+    principals:
+      {{- toYaml . | nindent 6 }}
+    {{- end }}
+    {{- with $rbac.rules }}
+    rules:
+      {{- toYaml . | nindent 6 }}
+    {{- else }}
     rules: []
+    {{- end }}
